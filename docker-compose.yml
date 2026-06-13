@@ -1,0 +1,20 @@
+services:
+  boss-agent:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: boss-agent
+    restart: unless-stopped
+    network_mode: host
+    env_file:
+      - .env
+    volumes:
+      - ${HOME}/.boss-agent:/root/.boss-agent
+    command:
+      - boss-mcp
+      - --transport
+      - http
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8765"

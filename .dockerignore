@@ -1,0 +1,14 @@
+.git
+.gitignore
+.pytest_cache
+.ruff_cache
+.mypy_cache
+.venv
+.venv*
+.pydeps
+.pydeps_latest
+__pycache__
+*.pyc
+dist
+build
+.boss-agent-data
