@@ -39,6 +39,17 @@ def build_repo_local_server_config() -> dict[str, object]:
 	}
 
 
+def build_boss_mcp_server_config() -> dict[str, object]:
+	"""Prefer an already-running HTTP MCP server, else launch the repo-local server."""
+	http_url = os.environ.get("BOSS_MCP_HTTP_URL")
+	if http_url:
+		return {
+			"transport": "http",
+			"url": http_url,
+		}
+	return build_repo_local_server_config()
+
+
 def build_chat_model_kwargs() -> dict[str, object]:
 	"""Resolve OpenAI-compatible model settings from env."""
 	model_name = os.environ.get("BOSS_LANGCHAIN_MODEL")

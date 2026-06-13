@@ -5,9 +5,10 @@ Run from the repo root:
     pip install -e ".[langchain]"
     export BOSS_LANGCHAIN_API_KEY=...
     export BOSS_LANGCHAIN_MODEL=gpt-5
+    export BOSS_MCP_HTTP_URL=http://127.0.0.1:8766/mcp
     python examples/langgraph_mcp_agent.py "先执行 boss status，再同步最近消息并生成回复草稿"
 
-By default this example launches the repo-local MCP server via:
+If BOSS_MCP_HTTP_URL is unset, this example launches the repo-local MCP server via:
     python -m boss_agent_cli.mcp_server
 """
 
@@ -27,8 +28,8 @@ from typing_extensions import TypedDict
 
 from _mcp_agent_common import (
 	DEFAULT_SYSTEM_PROMPT,
+	build_boss_mcp_server_config,
 	build_chat_model_kwargs,
-	build_repo_local_server_config,
 	coerce_message_text,
 	extract_last_ai_text,
 )
@@ -54,7 +55,7 @@ def _normalize_messages(messages: list[Any]) -> list[dict[str, str]]:
 
 
 async def build_graph():
-	client = MultiServerMCPClient({"boss": build_repo_local_server_config()})
+	client = MultiServerMCPClient({"boss": build_boss_mcp_server_config()})
 	tools = await client.get_tools()
 	agent = create_agent(
 		ChatOpenAI(**build_chat_model_kwargs()),

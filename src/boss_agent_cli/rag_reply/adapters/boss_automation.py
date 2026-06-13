@@ -321,6 +321,8 @@ class BossAutomationAdapter:
 
 		body = raw_message.get("body") if isinstance(raw_message.get("body"), dict) else {}
 		message_text = str(raw_message.get("text") or body.get("text") or body.get("content") or "")
+		if not message_text.strip():
+			return None
 		raw_id = raw_message.get("id") or raw_message.get("msgId") or raw_message.get("messageId")
 		message_id_suffix = self._message_identity_suffix(raw_message, fallback_index=index)
 		return MessageRecord(

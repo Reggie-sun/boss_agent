@@ -9,6 +9,7 @@ INTENTS = {
 	"project_question",
 	"resume_question",
 	"salary_or_offer",
+	"resume_share_request",
 	"availability_or_schedule",
 	"personal_status",
 	"interview_time",
@@ -21,6 +22,7 @@ INTENTS = {
 
 SENSITIVE_INTENTS = {
 	"salary_or_offer",
+	"resume_share_request",
 	"availability_or_schedule",
 	"personal_status",
 	"interview_time",
@@ -31,6 +33,7 @@ SENSITIVE_INTENTS = {
 
 SENSITIVE_RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
 	("salary_or_offer", (r"薪资", r"工资", r"薪酬", r"offer", r"待遇")),
+	("resume_share_request", (r"发.*简历", r"简历.*发", r"附件简历", r"一份简历", r"简历过来", r"把简历.*发")),
 	("contact_exchange", (r"微信", r"\bvx\b", r"联系方式", r"手机号", r"电话", r"邮箱", r"加我")),
 	("interview_time", (r"面试", r"几点", r"哪天", r"约.*面", r"时间面")),
 	("availability_or_schedule", (r"方便", r"有空", r"可约", r"什么时候方便", r"时间安排")),

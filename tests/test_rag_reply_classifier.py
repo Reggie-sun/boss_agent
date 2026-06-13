@@ -7,6 +7,7 @@ from boss_agent_cli.rag_reply.classifier import classify_message
 	("message_text", "expected_intent"),
 	[
 		("期望薪资多少？", "salary_or_offer"),
+		("方便发一份简历过来吗？", "resume_share_request"),
 		("什么时候方便面试？", "interview_time"),
 		("现在是在职吗？", "personal_status"),
 		("方便加微信吗？", "contact_exchange"),
@@ -25,4 +26,3 @@ def test_project_question_uses_non_sensitive_path():
 	result = classify_message("你这个RAG项目具体做了什么？")
 	assert result.intent == "project_question"
 	assert result.classifier_source == "heuristic"
-

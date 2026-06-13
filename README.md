@@ -673,7 +673,7 @@ V1 边界是 `Boss read-only automation + RAG draft reply + human approval send 
 
 - `approve != send`。V1 不实现真实 `send-message` 作为默认路径。
 - 所有草稿都不是最终回复；敏感消息仍需人工确认。
-- `salary_or_offer`、`availability_or_schedule`、`personal_status`、`interview_time`、`resignation_status`、`contact_exchange`、`unsafe_or_unclear` 都会被策略层打上高风险标签。
+- `salary_or_offer`、`resume_share_request`、`availability_or_schedule`、`personal_status`、`interview_time`、`resignation_status`、`contact_exchange`、`unsafe_or_unclear` 都会被策略层打上高风险标签。
 - 如果 Enterprise RAG 调用失败，workflow 会 fail closed：保存 `rag_failed` 审计记录，但不会打开任何发送路径。
 
 ---

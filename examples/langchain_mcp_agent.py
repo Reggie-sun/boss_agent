@@ -5,9 +5,10 @@ Run from the repo root:
     pip install -e ".[langchain]"
     export BOSS_LANGCHAIN_API_KEY=...
     export BOSS_LANGCHAIN_MODEL=gpt-5
+    export BOSS_MCP_HTTP_URL=http://127.0.0.1:8766/mcp
     python examples/langchain_mcp_agent.py "先同步消息，再为最近一条对话生成回复草稿"
 
-By default this example launches the repo-local MCP server via:
+If BOSS_MCP_HTTP_URL is unset, this example launches the repo-local MCP server via:
     python -m boss_agent_cli.mcp_server
 """
 
@@ -22,14 +23,14 @@ from langchain_openai import ChatOpenAI
 
 from _mcp_agent_common import (
 	DEFAULT_SYSTEM_PROMPT,
+	build_boss_mcp_server_config,
 	build_chat_model_kwargs,
-	build_repo_local_server_config,
 	extract_last_ai_text,
 )
 
 
 async def main(user_prompt: str) -> None:
-	client = MultiServerMCPClient({"boss": build_repo_local_server_config()})
+	client = MultiServerMCPClient({"boss": build_boss_mcp_server_config()})
 	tools = await client.get_tools()
 	agent = create_agent(
 		ChatOpenAI(**build_chat_model_kwargs()),

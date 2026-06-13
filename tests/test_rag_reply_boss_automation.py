@@ -320,9 +320,10 @@ def test_sync_messages_uses_content_fingerprint_when_timestamp_collides(tmp_path
 
 	result = adapter.sync_messages()
 
-	assert result.count == 3
-	assert len(result.message_ids) == 3
-	assert len(set(result.message_ids)) == 3
+	assert result.count == 1
+	assert len(result.message_ids) == 1
+	assert len(set(result.message_ids)) == 1
 	messages = store.list_messages("boss_conv_sec_dup")
-	assert len(messages) == 3
-	assert len({message.message_id for message in messages}) == 3
+	assert len(messages) == 1
+	assert len({message.message_id for message in messages}) == 1
+	assert messages[0].message_text == "你好，我们正在诚聘大模型应用开发，有兴趣聊聊吗"

@@ -88,6 +88,33 @@ def test_draft_command_persists_closed_record_when_rag_fails(tmp_path):
 	assert store.list_audit_logs()
 
 
+def test_resume_share_request_generates_local_approval_draft(tmp_path):
+	store = RagReplyStore(tmp_path / "boss-rag.sqlite3")
+	store.initialize()
+	store.save_conversation(ConversationRecord(conversation_id="conv_001", source="manual_import"))
+	store.save_message(
+		MessageRecord(
+			message_id="msg_001",
+			conversation_id="conv_001",
+			message_text="方便发一份简历过来吗？",
+			direction="inbound",
+		)
+	)
+	rag_adapter = _FakeRagAdapter(_FakeRagResult(ok=True, answer="unused", citations=[]))
+	service = BossRagReplyService(
+		store=store,
+		rag_adapter=rag_adapter,
+	)
+
+	draft = service.create_draft_for_message("msg_001")
+
+	assert draft.intent == "resume_share_request"
+	assert "官方页面发送简历" in draft.draft_text
+	assert draft.send_allowed is False
+	assert draft.approval_required is True
+	assert rag_adapter.calls == []
+
+
 def test_approve_command_persists_event_without_send(tmp_path):
 	store = RagReplyStore(tmp_path / "boss-rag.sqlite3")
 	store.initialize()

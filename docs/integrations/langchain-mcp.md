@@ -27,6 +27,7 @@
 pip install -e ".[langchain]"
 export BOSS_LANGCHAIN_API_KEY=...
 export BOSS_LANGCHAIN_MODEL=gpt-5
+export BOSS_MCP_HTTP_URL=http://127.0.0.1:8766/mcp
 ```
 
 如果你接的是 OpenAI-compatible 服务，也可以额外设置：
@@ -47,7 +48,15 @@ LangGraph 版本：
 python examples/langgraph_mcp_agent.py "先执行 boss status，再同步最近消息并生成回复草稿"
 ```
 
-示例脚本默认使用 repo-local MCP server：
+如果你已经单独启动了 HTTP MCP server，示例会优先直连 `BOSS_MCP_HTTP_URL`。
+
+当前这台机器上已经验证通过的地址是：
+
+```text
+http://127.0.0.1:8766/mcp
+```
+
+如果 `BOSS_MCP_HTTP_URL` 没有设置，示例脚本才会退回到 repo-local MCP server：
 
 ```text
 python -m boss_agent_cli.mcp_server

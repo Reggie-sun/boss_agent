@@ -193,6 +193,8 @@ class BossRagReplyService:
 			return "我想进一步了解这个岗位的核心职责、团队协作方式，以及前 3 个月的重点目标。"
 		if intent == "smalltalk":
 			return "您好，已收到您的消息，感谢联系。"
+		if intent == "resume_share_request":
+			return "可以的，我稍后会通过 BOSS 直聘官方页面发送简历；如果您希望我补充特定项目经历或作品，也欢迎告诉我。"
 		if intent in {"contact_exchange", "salary_or_offer", "availability_or_schedule", "interview_time", "resignation_status", "personal_status", "unsafe_or_unclear"}:
 			return ""
 		return message.message_text
