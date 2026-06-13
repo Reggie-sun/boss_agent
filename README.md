@@ -619,7 +619,6 @@ boss config reset           # 恢复默认
   "export_dir": null,
   "platform": "zhipin",
   "role": "candidate",
-  "low_risk_mode": true,
   "boss_rag_db_path": null,
   "boss_rag_rag_base_url": null,
   "boss_rag_rag_timeout_seconds": 20,
@@ -643,7 +642,6 @@ boss config reset           # 恢复默认
 | `export_dir` | 导出目录 |
 | `platform` | 默认平台，V1 Boss RAG 只在 `zhipin` 读路径上验证 |
 | `role` | 角色模式，默认 `candidate` |
-| `low_risk_mode` | 默认低风险模式；不会因为 Boss RAG 而自动放开敏感命令 |
 | `boss_rag_db_path` | Boss RAG 本地 SQLite 路径 |
 | `boss_rag_rag_base_url` | Enterprise RAG HTTP 服务基地址 |
 | `boss_rag_rag_timeout_seconds` | RAG 请求超时秒数 |

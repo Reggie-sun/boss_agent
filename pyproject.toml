@@ -57,6 +57,12 @@ bridge = [
 mcp = [
 	"mcp>=1.0.0",
 ]
+langchain = [
+	"langchain>=1.0.0",
+	"langchain-openai>=1.0.0",
+	"langchain-mcp-adapters>=0.1.0",
+	"langgraph>=1.0.0",
+]
 
 [project.scripts]
 boss = "boss_agent_cli.main:cli"

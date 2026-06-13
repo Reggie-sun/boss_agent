@@ -47,6 +47,8 @@ def test_agent_host_examples_cover_core_agent_loop():
 		if host_name == "LangChain MCP":
 			assert "boss_rag_draft" in text
 			assert "MultiServerMCPClient" in text
+			assert "langgraph_mcp_agent.py" in text
+			assert "StateGraph" in text
 
 
 def test_readme_and_quickstart_link_to_host_examples():
