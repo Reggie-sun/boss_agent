@@ -17,9 +17,11 @@ from __future__ import annotations
 import asyncio
 import os
 import sys
+from pathlib import Path
 from typing import Any
 
 from langchain.agents import create_agent
+from langchain_core.messages import AIMessage, HumanMessage
 from langchain_mcp_adapters.client import MultiServerMCPClient
 from langchain_openai import ChatOpenAI
 from langgraph.checkpoint.memory import InMemorySaver
@@ -33,6 +35,12 @@ from _mcp_agent_common import (
 	coerce_message_text,
 	extract_last_ai_text,
 )
+from boss_agent_cli.rag_reply.langchain_memory import (
+	LANGCHAIN_MEMORY_AVAILABLE,
+	RagConversationHistory,
+	build_agent_state_messages,
+)
+from boss_agent_cli.rag_reply.store import RagReplyStore
 
 
 class GraphState(TypedDict):
@@ -52,6 +60,15 @@ def _normalize_messages(messages: list[Any]) -> list[dict[str, str]]:
 		role = {"human": "user", "ai": "assistant", "system": "system"}[msg_type]
 		normalized.append({"role": role, "content": content})
 	return normalized
+
+
+def _resolve_memory_store() -> RagReplyStore:
+	data_dir = Path(os.environ.get("BOSS_AGENT_DATA_DIR", "~/.boss-agent")).expanduser()
+	db_override = os.environ.get("BOSS_RAG_DB_PATH", "").strip()
+	db_path = Path(db_override).expanduser() if db_override else data_dir / "boss-rag.sqlite3"
+	store = RagReplyStore(db_path)
+	store.initialize()
+	return store
 
 
 async def build_graph():
@@ -79,15 +96,30 @@ async def build_graph():
 
 async def main(user_prompt: str) -> None:
 	thread_id = os.environ.get("BOSS_LANGGRAPH_THREAD_ID", "boss-agent-demo")
+	conversation_id = os.environ.get("BOSS_AGENT_CONVERSATION_ID", thread_id)
 	graph = await build_graph()
+	store = _resolve_memory_store()
+	history_messages = build_agent_state_messages(
+		store=store,
+		conversation_id=conversation_id,
+	)
+	input_messages = [*history_messages, {"role": "user", "content": user_prompt}]
 	result = await graph.ainvoke(
 		{
-			"messages": [{"role": "user", "content": user_prompt}],
+			"messages": input_messages,
 			"final_text": "",
 		},
 		config={"configurable": {"thread_id": thread_id}},
 	)
 	final_text = result.get("final_text", "")
+	if LANGCHAIN_MEMORY_AVAILABLE and final_text:
+		history = RagConversationHistory(store=store, conversation_id=conversation_id)
+		history.add_messages(
+			[
+				HumanMessage(content=user_prompt),
+				AIMessage(content=final_text),
+			]
+		)
 	if final_text:
 		print(final_text)
 
