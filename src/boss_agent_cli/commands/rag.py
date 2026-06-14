@@ -6,7 +6,7 @@ from pathlib import Path
 
 import click
 
-from boss_agent_cli.ai.config import AIConfigStore
+from boss_agent_cli.ai.config import AIConfigStore, PROVIDER_BASE_URLS
 from boss_agent_cli.ai.service import AIService
 from boss_agent_cli.auth.manager import AuthManager
 from boss_agent_cli.commands._platform import get_platform_instance
@@ -38,7 +38,17 @@ def _build_ai_fallback_adapter(ctx: click.Context) -> AIFallbackAdapter | None:
 	data_dir = Path(ctx.obj["data_dir"])
 	store = AIConfigStore(data_dir)
 	if not store.is_configured():
-		return None
+		config = ctx.obj.get("config", {}) if ctx and ctx.obj else {}
+		rag_api_key = config.get("boss_rag_rag_api_key")
+		if not rag_api_key:
+			return None
+		return AIFallbackAdapter(
+			ai_service=AIService(
+				base_url=str(PROVIDER_BASE_URLS["deepseek"]),
+				api_key=str(rag_api_key),
+				model="deepseek-chat",
+			)
+		)
 	api_key = store.get_api_key()
 	base_url = store.get_base_url()
 	if not api_key or not base_url:

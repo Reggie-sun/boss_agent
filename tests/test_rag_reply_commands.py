@@ -185,3 +185,48 @@ def test_rag_build_service_passes_rag_auth_config(monkeypatch, tmp_path: Path):
 		"fallback_model": "gpt-4o-mini",
 		"fallback_base_url": "https://api.openai.com/v1",
 	}
+
+
+def test_rag_build_service_reuses_rag_key_for_default_deepseek_fallback(monkeypatch, tmp_path: Path):
+	captured = {}
+
+	class _FakeRagHttpAdapter:
+		def __init__(self, *, base_url, timeout_seconds, api_key=None, auth_mode="none"):
+			captured["base_url"] = base_url
+			captured["timeout_seconds"] = timeout_seconds
+			captured["api_key"] = api_key
+			captured["auth_mode"] = auth_mode
+
+	class _FakeFallbackAdapter:
+		def __init__(self, *, ai_service):
+			captured["fallback_model"] = ai_service.model
+			captured["fallback_base_url"] = ai_service.base_url
+			captured["fallback_api_key"] = ai_service.api_key
+
+	monkeypatch.setattr(rag_commands, "RagHttpAdapter", _FakeRagHttpAdapter)
+	monkeypatch.setattr(rag_commands, "AIFallbackAdapter", _FakeFallbackAdapter)
+	monkeypatch.setattr(rag_commands, "_resolve_store", lambda ctx: "store")
+	ctx = SimpleNamespace(
+		obj={
+			"data_dir": tmp_path,
+			"config": {
+				"boss_rag_rag_base_url": "http://127.0.0.1:8020",
+				"boss_rag_rag_timeout_seconds": 11,
+				"boss_rag_rag_api_key": "shared-rag-key-abc123",
+				"boss_rag_rag_auth_mode": "x_api_key",
+			},
+		}
+	)
+
+	service = rag_commands._build_service(ctx)
+
+	assert service is not None
+	assert captured == {
+		"base_url": "http://127.0.0.1:8020",
+		"timeout_seconds": 11,
+		"api_key": "shared-rag-key-abc123",
+		"auth_mode": "x_api_key",
+		"fallback_model": "deepseek-chat",
+		"fallback_base_url": "https://api.deepseek.com/v1",
+		"fallback_api_key": "shared-rag-key-abc123",
+	}
