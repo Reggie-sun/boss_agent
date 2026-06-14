@@ -124,7 +124,7 @@ class TestBossPlatformDelegation:
 	def test_apply_delegates(self) -> None:
 		self.mock_client.apply.return_value = {"code": 0}
 		self.plat.apply("sec_abc", "job_123", lid="lid_x")
-		self.mock_client.apply.assert_called_once_with("sec_abc", "job_123", "lid_x")
+		self.mock_client.apply.assert_called_once_with("sec_abc", "job_123", "lid_x", message="")
 
 	def test_friend_list_delegates(self) -> None:
 		self.mock_client.friend_list.return_value = {"code": 0}

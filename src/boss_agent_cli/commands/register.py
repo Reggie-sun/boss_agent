@@ -31,6 +31,7 @@ from boss_agent_cli.commands import (
 	resume_cmd,
 	schema,
 	search,
+	chat_reply,
 	shortlist,
 	show,
 	stats,
@@ -77,6 +78,7 @@ def register_candidate_commands(cli: click.Group) -> None:
 	cli.add_command(pipeline.follow_up_cmd, "follow-up")
 	cli.add_command(apply.apply_cmd, "apply")
 	cli.add_command(shortlist.shortlist_group, "shortlist")
+	cli.add_command(chat_reply.chat_reply_cmd, "chat-reply")
 	cli.add_command(preset.preset_group, "preset")
 	cli.add_command(digest.digest_cmd, "digest")
 	cli.add_command(config_cmd.config_group, "config")

@@ -197,7 +197,7 @@ class Platform(ABC):
 		"""打招呼。平台不支持时抛 NotImplementedError。"""
 		raise NotImplementedError(f"{self.name} platform does not implement greet")
 
-	def apply(self, security_id: str, job_id: str, lid: str = "") -> dict[str, Any]:
+	def apply(self, security_id: str, job_id: str, lid: str = "", message: str = "") -> dict[str, Any]:
 		"""发起投递。平台不支持时抛 NotImplementedError。"""
 		raise NotImplementedError(f"{self.name} platform does not implement apply")
 

@@ -110,7 +110,7 @@ class QianchengPlatform(Platform):
 	def greet(self, security_id: str, job_id: str, message: str = "") -> dict[str, Any]:
 		return self._not_supported("greet")
 
-	def apply(self, security_id: str, job_id: str, lid: str = "") -> dict[str, Any]:
+	def apply(self, security_id: str, job_id: str, lid: str = "", message: str = "") -> dict[str, Any]:
 		return self._not_supported("apply")
 
 	def friend_list(self, page: int = 1) -> dict[str, Any]:

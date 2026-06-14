@@ -317,6 +317,7 @@ def shortlist_remove_cmd(ctx: click.Context, security_id: str, job_id: str) -> N
 )
 @click.option("--note", default="", help="附加备注，会拼接进手动沟通草稿")
 @click.option("--open", "should_open", is_flag=True, help="准备完成后尝试直接打开平台官网入口")
+@click.option("--auto-apply", is_flag=True, help="全自动投递：直接发起立即沟通并附带简历，无需手动操作")
 @click.pass_context
 def shortlist_prepare_cmd(
 	ctx: click.Context,
@@ -326,6 +327,7 @@ def shortlist_prepare_cmd(
 	tone: str,
 	note: str,
 	should_open: bool,
+	auto_apply: bool,
 ) -> None:
 	with CacheStore(ctx.obj["data_dir"] / "cache" / "boss_agent.db") as cache:
 		item = cache.get_shortlist_item(security_id, job_id)
@@ -357,8 +359,75 @@ def shortlist_prepare_cmd(
 	if resume_name:
 		mark_applied_cmd = f"{mark_applied_cmd} --resume {resume_name}"
 	draft_message = _build_draft_message(item, resume_snapshot, tone=tone, note=note)
+
+	# ── 全自动投递路径 ────────────────────────────────────────
+	if auto_apply:
+		if applied:
+			handle_error_output(
+				ctx,
+				"shortlist",
+				code="ALREADY_APPLIED",
+				message="已对该职位发起过投递/立即沟通",
+				hints={"next_actions": [boss_command_for_ctx(ctx, "me --section deliver")]},
+			)
+			return
+
+		from boss_agent_cli.auth.manager import AuthManager
+		from boss_agent_cli.commands._platform import get_platform_instance
+
+		auth = AuthManager(
+			ctx.obj["data_dir"],
+			logger=ctx.obj.get("logger"),
+			platform=ctx.obj.get("platform", "zhipin"),
+		)
+		with get_platform_instance(ctx, auth) as platform:
+			resp = platform.apply(security_id, job_id, lid="", message=draft_message)
+			if not platform.is_success(resp):
+				error_code, _ = platform.parse_error(resp)
+				handle_error_output(
+					ctx,
+					"shortlist",
+					code=error_code if error_code != "UNKNOWN" else "NETWORK_ERROR",
+					message=resp.get("message") or "自动投递失败",
+					recoverable=True,
+					recovery_action="重试或使用 boss shortlist prepare（不加 --auto-apply）手动投递",
+				)
+				return
+			cache.record_apply(security_id, job_id, resume_name=resume_name)
+			if resume_name:
+				cache.update_job_link_status(resume_name, security_id, job_id, "auto_applied", "")
+
+		# 尝试打开官网入口
+		open_result = _open_external_url(str(manual_entry["official_entry_url"])) if should_open else None
+
+		auto_data: dict[str, object] = {
+			"action": "prepare",
+			"status": "auto_applied",
+			"security_id": security_id,
+			"job_id": job_id,
+			"job": item,
+			"resume": resume_snapshot,
+			"draft_message": draft_message,
+			"open_result": open_result,
+			"message": "全自动投递已提交，平台已自动附带在线简历。",
+		}
+		next_actions = [
+			boss_command_for_ctx(ctx, "me --section deliver"),
+			boss_command_for_ctx(ctx, "chat"),
+		]
+		if resume_name:
+			next_actions.insert(0, boss_command_for_ctx(ctx, f"resume applications {resume_name}"))
+		handle_output(
+			ctx,
+			"shortlist",
+			auto_data,
+			hints={"next_actions": next_actions},
+		)
+		return
+
+	# ── 手动投递准备路径（原有逻辑）────────────────────────────
 	open_result = _open_external_url(str(manual_entry["official_entry_url"])) if should_open else None
-	data = {
+	data: dict[str, object] = {
 		"action": "prepare",
 		"status": "already_applied" if applied else "prepared",
 		"security_id": security_id,

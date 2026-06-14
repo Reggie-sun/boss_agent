@@ -166,18 +166,20 @@ class BrowserSession:
 			contexts = self._browser.contexts
 
 			if contexts:
-				# 复用用户现有 context（保留登录态，避免额外浏览器状态）
+				# 复用用户现有 context，同时注入保存的 BOSS cookies
 				self._context = contexts[0]
 				self._own_context = False  # 非我们创建，close 时不关闭
 			else:
-				# 没有已存在 context，创建新的并注入 cookies
+				# 没有已存在 context，创建新的
 				self._context = self._browser.new_context()
-				if self._cookies:
-					self._context.add_cookies([
-						{"name": name, "value": value, "domain": ".zhipin.com", "path": "/"}
-						for name, value in self._cookies.items()
-					])
 				self._own_context = True
+
+			# 始终注入保存的 BOSS cookies，确保 CDP 页面有登录态
+			if self._cookies:
+				self._context.add_cookies([
+					{"name": name, "value": value, "domain": ".zhipin.com", "path": "/"}
+					for name, value in self._cookies.items()
+				])
 
 			self._page = self._context.new_page()
 			# CDP 模式下用较长超时 + commit 级等待（避免 networkidle 卡住）

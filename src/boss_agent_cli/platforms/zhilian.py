@@ -60,8 +60,8 @@ class ZhilianPlatform(Platform):
 	def greet(self, security_id: str, job_id: str, message: str = "") -> dict[str, Any]:
 		return self._client.greet(security_id, job_id, message)
 
-	def apply(self, security_id: str, job_id: str, lid: str = "") -> dict[str, Any]:
-		return self._client.apply(security_id, job_id, lid)
+	def apply(self, security_id: str, job_id: str, lid: str = "", message: str = "") -> dict[str, Any]:
+		return self._client.apply(security_id, job_id, lid, message=message)
 
 	def interview_data(self) -> dict[str, Any]:
 		"""智联面试邀请列表。透传 client 包络，由命令层 unwrap_data 解包。"""

@@ -656,6 +656,16 @@ SCHEMA_DATA = {
 				},
 			},
 		},
+		"chat-reply": {
+			"description": "通过 CDP 自动回复聊天消息。支持发送文字消息和在线简历。依赖 CDP Chrome 模式。",
+			"args": [
+				{"name": "security_id", "required": True, "description": "联系人的 security_id（从 chat 命令获取）"},
+				{"name": "message", "required": True, "description": "回复的消息内容"},
+			],
+			"options": {
+				"--send-resume": {"type": "boolean", "default": False, "description": "同时发送在线简历"},
+			},
+		},
 		"chatmsg": {
 			"description": "受限能力：查看与指定好友的聊天消息历史。默认低风险模式会阻断；--raw 仅在合规放行后输出保真结构化消息字段。",
 			"args": [
@@ -741,13 +751,17 @@ SCHEMA_DATA = {
 			},
 		},
 		"apply": {
-			"description": "受限能力：发起投递/立即沟通动作。默认低风险模式会阻断，建议回到平台官网由用户手动完成。",
+			"description": "全自动投递：发起立即沟通并自动附带在线简历。boss_apply_auto_enabled=true（默认）时即使 low_risk_mode=true 也会放行。",
 			"args": [
 				{"name": "security_id", "required": True, "description": "安全 ID"},
 				{"name": "job_id", "required": True, "description": "加密职位 ID"},
 			],
 			"options": {
 				"--lid": {"type": "string", "default": "", "description": "列表项 ID（可选）"},
+				"--resume": {"type": "string", "default": "", "description": "关联的本地简历名称（自动附带投递）"},
+				"--message": {"type": "string", "default": "", "description": "自定义打招呼消息（不填则根据简历自动生成）"},
+				"--title": {"type": "string", "default": "", "description": "职位名称（用于自动生成消息）"},
+				"--company": {"type": "string", "default": "", "description": "公司名称（用于自动生成消息）"},
 			},
 		},
 		"shortlist": {
@@ -758,7 +772,7 @@ SCHEMA_DATA = {
 				"add": "加入候选池",
 				"list": "查看候选池列表",
 				"remove": "移除候选池项",
-				"prepare": "生成手动投递准备包（官方入口、沟通草稿、本地简历关联）",
+				"prepare": "生成投递准备包（官方入口、沟通草稿、本地简历关联）；加 --auto-apply 则全自动投递",
 				"open": "尝试直接打开平台官网入口，方便用户手动完成最后一步",
 				"mark-applied": "在官方页面手动完成后回写本地投递状态",
 			},

@@ -18,6 +18,18 @@ class CacheStore:
 		self._conn = sqlite3.connect(str(db_path))
 		self._conn.execute("PRAGMA journal_mode=WAL")
 		self._init_tables()
+		self._migrate()
+
+	def _migrate(self) -> None:
+		"""增量迁移：为已有数据库补充新列（忽略已存在的列）。"""
+		migrations = [
+			"ALTER TABLE apply_records ADD COLUMN resume_name TEXT NOT NULL DEFAULT ''",
+		]
+		for sql in migrations:
+			try:
+				self._conn.execute(sql)
+			except sqlite3.OperationalError:
+				pass  # 列已存在，跳过
 
 	def _init_tables(self) -> None:
 		self._conn.executescript("""
@@ -49,6 +61,7 @@ class CacheStore:
 				security_id TEXT NOT NULL,
 				job_id TEXT NOT NULL,
 				applied_at REAL NOT NULL,
+				resume_name TEXT NOT NULL DEFAULT '',
 				PRIMARY KEY (security_id, job_id)
 			);
 			CREATE TABLE IF NOT EXISTS shortlist_records (
@@ -252,10 +265,10 @@ class CacheStore:
 		).fetchone()
 		return row is not None
 
-	def record_apply(self, security_id: str, job_id: str) -> None:
+	def record_apply(self, security_id: str, job_id: str, resume_name: str = "") -> None:
 		self._conn.execute(
-			"INSERT OR REPLACE INTO apply_records (security_id, job_id, applied_at) VALUES (?, ?, ?)",
-			(security_id, job_id, time.time()),
+			"INSERT OR REPLACE INTO apply_records (security_id, job_id, applied_at, resume_name) VALUES (?, ?, ?, ?)",
+			(security_id, job_id, time.time(), resume_name),
 		)
 		self._conn.commit()
 

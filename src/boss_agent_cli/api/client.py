@@ -219,14 +219,16 @@ class BossClient:
 		}
 		return self._browser_request("POST", endpoints.GREET_URL, data=data)
 
-	def apply(self, security_id: str, job_id: str, lid: str = "") -> dict[str, Any]:
-		"""Current minimal apply path - reuses the immediate-chat browser endpoint."""
-		data = {
+	def apply(self, security_id: str, job_id: str, lid: str = "", message: str = "") -> dict[str, Any]:
+		"""全自动投递：发送立即沟通请求，平台自动附带在线简历。"""
+		data: dict[str, Any] = {
 			"securityId": security_id,
 			"jobId": job_id,
 		}
 		if lid:
 			data["lid"] = lid
+		if message:
+			data["greeting"] = message
 		return self._browser_request("POST", endpoints.GREET_URL, data=data)
 
 	def job_card(self, security_id: str, lid: str = "") -> dict[str, Any]:
@@ -288,6 +290,114 @@ class BossClient:
 		"""请求交换联系方式（1=手机, 2=微信）。"""
 		data = {"type": exchange_type, "securityId": security_id, "uniqueId": uid, "name": name}
 		return self._browser_request("POST", endpoints.EXCHANGE_REQUEST_URL, data=data)
+
+	_SEND_MSG_SCRIPT = '''(async () => {{
+		const sid = "{security_id}";
+		const content = "{content}";
+		try {{
+			const ig = window.iGeekRoot || {{}};
+			const cs = window.chatStore;
+			const cw = window.ChatWebsocket;
+			let friendId = null;
+			const friends = cs.friends || {{}};
+			for (const [k, v] of Object.entries(friends)) {{
+				if (typeof v === "string" && v.includes(sid)) {{ friendId = v; break; }}
+			}}
+			if (!friendId) friendId = sid;
+			if (!cw.client || !cw.client.isConnected()) {{
+				await new Promise((resolve) => {{
+					cw.init();
+					const check = setInterval(() => {{
+						if (cw.client && cw.client.isConnected()) {{ clearInterval(check); resolve(); }}
+					}}, 500);
+					setTimeout(() => {{ clearInterval(check); resolve(); }}, 10000);
+				}});
+			}}
+			if (ig.router) {{
+				ig.router.push({{ path: "/web/geek/chat", query: {{ userId: friendId }} }});
+				await new Promise(r => setTimeout(r, 2000));
+			}}
+			const textarea = document.querySelector("textarea");
+			if (textarea) {{
+				textarea.value = content;
+				textarea.dispatchEvent(new Event("input", {{ bubbles: true }}));
+				const sendBtn = [...document.querySelectorAll("button")].find(b => b.textContent.includes("发送"));
+				if (sendBtn) {{ sendBtn.click(); return {{ ok: true, method: "dom_click" }}; }}
+			}}
+			return {{ ok: false, error: "no textarea found" }};
+		}} catch(e) {{ return {{ ok: false, error: e.message }}; }}
+	}})()'''
+
+	_SEND_RESUME_SCRIPT = '''(async () => {{
+		const sid = "{security_id}";
+		try {{
+			const ig = window.iGeekRoot;
+			if (!ig || !ig.ChatDialog) return {{ ok: false, error: "no iGeekRoot" }};
+			const cs = window.chatStore;
+			let fd = null;
+			const friends = cs.friends || {{}};
+			for (const [k, v] of Object.entries(friends)) {{
+				if (typeof v === "string" && v.includes(sid)) {{
+					const info = cs.getFriendInfoById(v);
+					if (info) {{ fd = info; break; }}
+				}}
+			}}
+			if (!fd) fd = cs.getFriendInfoById(Object.values(friends)[0]);
+			if (!fd) return {{ ok: false, error: "friend not found" }};
+			ig.ChatDialog.openSendOnlineResume({{
+				securityId: fd.securityId || fd.encryptBossId || sid,
+				mid: fd.mid || "",
+				friendSource: fd.friendSource || 1,
+			}});
+			await new Promise(r => setTimeout(r, 2000));
+			const confirmBtns = [...document.querySelectorAll("button")]
+				.filter(b => b.textContent.includes("发送") || b.textContent.includes("确认") || b.textContent.includes("投递"));
+			if (confirmBtns.length > 0) {{ confirmBtns[0].click(); }}
+			return {{ ok: true, method: "openSendOnlineResume" }};
+		}} catch(e) {{ return {{ ok: false, error: e.message }}; }}
+	}})()'''
+
+	def _navigate_to_chat(self) -> None:
+		"""确保 CDP 页面在候选人聊天页。"""
+		browser = self._get_browser()
+		browser._ensure_started()
+		chat_url = "https://www.zhipin.com/web/geek/chat"
+		try:
+			current = browser._page.url if browser._page else ""
+			if "/web/geek/chat" not in current:
+				browser._page.goto(chat_url, wait_until="domcontentloaded", timeout=15000)
+		except Exception:
+			try:
+				browser._page.goto(chat_url, wait_until="commit", timeout=10000)
+			except Exception:
+				pass
+
+	def send_chat_message(self, security_id: str, content: str) -> dict[str, Any]:
+		"""通过 CDP 在候选人聊天页发送文字消息。"""
+		self._navigate_to_chat()
+		browser = self._get_browser()
+		escaped = content.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n")
+		script = self._SEND_MSG_SCRIPT.format(security_id=security_id, content=escaped)
+		try:
+			result = browser._page.evaluate(script)
+			if isinstance(result, dict) and result.get("ok"):
+				return {"code": 0, "message": "消息已发送", "method": result.get("method", "cdp")}
+			return {"code": -1, "message": str(result.get("error", "发送失败")), "detail": result}
+		except Exception as exc:
+			return {"code": -1, "message": f"发送失败: {exc}"}
+
+	def send_resume(self, security_id: str) -> dict[str, Any]:
+		"""通过 CDP 自动发送在线简历给指定招聘者。"""
+		self._navigate_to_chat()
+		browser = self._get_browser()
+		script = self._SEND_RESUME_SCRIPT.format(security_id=security_id)
+		try:
+			result = browser._page.evaluate(script)
+			if isinstance(result, dict) and result.get("ok"):
+				return {"code": 0, "message": "简历已发送", "method": result.get("method", "cdp")}
+			return {"code": -1, "message": str(result.get("error", "发送失败")), "detail": result}
+		except Exception as exc:
+			return {"code": -1, "message": f"发送简历失败: {exc}"}
 
 	def resume_status(self) -> dict[str, Any]:
 		"""查询简历完整度和在线状态。"""

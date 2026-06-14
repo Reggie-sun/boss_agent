@@ -189,6 +189,102 @@ function createRagBridgePlugin() {
       return true;
     }
 
+    // ── Boss Apply API ────────────────────────────────────────────
+    if (req.method === "POST" && req.url === "/api/boss/apply") {
+      res.setHeader("Content-Type", "application/json; charset=utf-8");
+      try {
+        const rawBody = await readBody(req);
+        const body = rawBody ? JSON.parse(rawBody) : {};
+        const securityId = String(body.security_id || "").trim();
+        const jobId = String(body.job_id || "").trim();
+        const resumeName = String(body.resume_name || "").trim();
+        const title = String(body.title || "").trim();
+        const company = String(body.company || "").trim();
+        const message = String(body.message || "").trim();
+        const lid = String(body.lid || "").trim();
+
+        if (!securityId || !jobId) {
+          res.statusCode = 400;
+          res.end(JSON.stringify({ ok: false, errorMessage: "security_id 和 job_id 不能为空。" }));
+          return true;
+        }
+
+        const args = ["apply", securityId, jobId];
+        if (lid) args.push("--lid", lid);
+        if (resumeName) args.push("--resume", resumeName);
+        if (title) args.push("--title", title);
+        if (company) args.push("--company", company);
+        if (message) args.push("--message", message);
+
+        const payload = runBossJsonCommand(bridgeConfig, args);
+        res.end(JSON.stringify({
+          ok: true,
+          data: payload.data,
+          hints: payload.hints,
+        }));
+      } catch (error) {
+        const p = error?.commandPayload;
+        res.statusCode = p?.error?.recoverable ? 400 : 500;
+        res.end(JSON.stringify({
+          ok: false,
+          errorMessage: error instanceof Error ? error.message : "投递失败",
+          error: p?.error || null,
+        }));
+      }
+      return true;
+    }
+
+    // ── Boss Search API ───────────────────────────────────────────
+    if (req.method === "POST" && req.url === "/api/boss/search") {
+      res.setHeader("Content-Type", "application/json; charset=utf-8");
+      try {
+        const rawBody = await readBody(req);
+        const body = rawBody ? JSON.parse(rawBody) : {};
+        const query = String(body.query || "").trim();
+        const city = String(body.city || "北京").trim();
+
+        if (!query) {
+          res.statusCode = 400;
+          res.end(JSON.stringify({ ok: false, errorMessage: "query 不能为空。" }));
+          return true;
+        }
+
+        const args = ["search", query];
+        if (city) args.push("--city", city);
+
+        const payload = runBossJsonCommand(bridgeConfig, args);
+        res.end(JSON.stringify({
+          ok: true,
+          data: payload.data,
+        }));
+      } catch (error) {
+        const p = error?.commandPayload;
+        res.statusCode = 500;
+        res.end(JSON.stringify({
+          ok: false,
+          errorMessage: error instanceof Error ? error.message : "搜索失败",
+          error: p?.error || null,
+        }));
+      }
+      return true;
+    }
+
+    // ── Boss Resume List API ──────────────────────────────────────
+    if (req.method === "GET" && req.url === "/api/boss/resumes") {
+      res.setHeader("Content-Type", "application/json; charset=utf-8");
+      try {
+        const payload = runBossJsonCommand(bridgeConfig, ["resume", "list"]);
+        res.end(JSON.stringify({ ok: true, data: payload.data }));
+      } catch (error) {
+        res.statusCode = 500;
+        res.end(JSON.stringify({
+          ok: false,
+          errorMessage: error instanceof Error ? error.message : "读取简历列表失败",
+        }));
+      }
+      return true;
+    }
+
     if (req.method !== "POST" || req.url !== "/api/rag/ask") return false;
 
     res.setHeader("Content-Type", "application/json; charset=utf-8");

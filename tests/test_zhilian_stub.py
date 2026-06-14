@@ -142,7 +142,7 @@ class TestZhilianDelegation:
 	def test_apply_delegates(self) -> None:
 		self.mock_client.apply.return_value = {"code": 200, "data": {}}
 		self.plat.apply("sid", "jid", "lid-1")
-		self.mock_client.apply.assert_called_once_with("sid", "jid", "lid-1")
+		self.mock_client.apply.assert_called_once_with("sid", "jid", "lid-1", message="")
 
 	def test_platform_can_enter_with_context(self) -> None:
 		mock_client = MagicMock()

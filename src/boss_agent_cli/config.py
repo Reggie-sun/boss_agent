@@ -11,7 +11,7 @@ DEFAULTS: dict[str, Any] = {
 	"batch_greet_max": 10,
 	"log_level": "error",
 	"login_timeout": 120,
-	"cdp_url": None,
+	"cdp_url": "http://localhost:9222",
 	"export_dir": None,
 	"resume_default_template": "default",
 	"resume_export_format": "pdf",
@@ -25,6 +25,7 @@ DEFAULTS: dict[str, Any] = {
 	"boss_rag_rag_auth_mode": "none",
 	"boss_rag_allow_message_read": False,
 	"boss_rag_send_enabled": False,
+	"boss_apply_auto_enabled": True,
 }
 
 ENV_ALIASES: dict[str, tuple[str, ...]] = {
@@ -34,6 +35,7 @@ ENV_ALIASES: dict[str, tuple[str, ...]] = {
 	"boss_rag_rag_auth_mode": ("BOSS_RAG_RAG_AUTH_MODE",),
 	"boss_rag_allow_message_read": ("BOSS_RAG_ALLOW_MESSAGE_READ",),
 	"boss_rag_send_enabled": ("BOSS_RAG_SEND_ENABLED",),
+	"boss_apply_auto_enabled": ("BOSS_APPLY_AUTO_ENABLED",),
 }
 
 

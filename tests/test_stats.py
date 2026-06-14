@@ -35,8 +35,8 @@ def _seed_cache(
 		)
 	for i in range(applied):
 		conn.execute(
-			"INSERT OR REPLACE INTO apply_records VALUES (?, ?, ?)",
-			(f"sid-{i}", f"jid-{i}", now),
+			"INSERT OR REPLACE INTO apply_records (security_id, job_id, applied_at, resume_name) VALUES (?, ?, ?, ?)",
+			(f"sid-{i}", f"jid-{i}", now, ""),
 		)
 	for i in range(shortlist):
 		conn.execute(

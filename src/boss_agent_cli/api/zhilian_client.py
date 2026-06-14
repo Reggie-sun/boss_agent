@@ -243,13 +243,15 @@ class ZhilianClient:
 			headers={"csrf-token": self.get_csrf_token()},
 		)
 
-	def apply(self, security_id: str, job_id: str, lid: str = "") -> dict[str, Any]:
+	def apply(self, security_id: str, job_id: str, lid: str = "", message: str = "") -> dict[str, Any]:
 		payload: dict[str, Any] = {
 			"securityId": security_id,
 			"jobId": job_id,
 		}
 		if lid:
 			payload["lid"] = lid
+		if message:
+			payload["greeting"] = message
 		return self._request(
 			"POST",
 			APPLY_URL,

@@ -7,9 +7,11 @@ import {
   FileText,
   Lightning,
   MagnifyingGlass,
+  PaperPlaneTilt,
   PlayCircle,
   Quotes,
   Sparkle,
+  User,
   WarningCircle,
 } from "@phosphor-icons/react";
 import "./styles.css";
@@ -132,6 +134,23 @@ export function App() {
   });
   const [sessionId] = useState(() => loadOrCreateSessionId());
 
+  // ── Boss Apply 状态 ──────────────────────────────────────────
+  const [applyMode, setApplyMode] = useState(false);
+  const [applyForm, setApplyForm] = useState({
+    security_id: "",
+    job_id: "",
+    resume_name: "default",
+    title: "",
+    company: "",
+    message: "",
+  });
+  const [applyResult, setApplyResult] = useState(null);
+  const [applyLoading, setApplyLoading] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [searchCity, setSearchCity] = useState("北京");
+  const [searchResults, setSearchResults] = useState([]);
+  const [searchLoading, setSearchLoading] = useState(false);
+
   const reasoningItems = useMemo(
     () => normalizeReasoningSummary(result.reasoningSummary),
     [result.reasoningSummary],
@@ -184,6 +203,59 @@ export function App() {
       cancelled = true;
     };
   }, [sessionId]);
+
+  // ── Boss Apply 处理函数 ──────────────────────────────────────
+  async function handleSearch() {
+    const q = searchQuery.trim();
+    if (!q || searchLoading) return;
+    setSearchLoading(true);
+    setSearchResults([]);
+    try {
+      const resp = await fetch("/api/boss/search", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ query: q, city: searchCity }),
+      });
+      const payload = await resp.json();
+      if (payload.ok && Array.isArray(payload.data)) {
+        setSearchResults(payload.data);
+      }
+    } catch (e) {
+      console.error("搜索失败", e);
+    } finally {
+      setSearchLoading(false);
+    }
+  }
+
+  function pickJob(job) {
+    setApplyForm((f) => ({
+      ...f,
+      security_id: job.security_id || "",
+      job_id: job.encrypt_job_id || job.job_id || "",
+      title: job.title || job.job_name || "",
+      company: job.company || job.brand_name || "",
+    }));
+    setApplyMode(true);
+  }
+
+  async function handleApply() {
+    if (!applyForm.security_id || !applyForm.job_id || applyLoading) return;
+    setApplyLoading(true);
+    setApplyResult(null);
+    try {
+      const resp = await fetch("/api/boss/apply", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(applyForm),
+      });
+      const payload = await resp.json();
+      setApplyResult(payload);
+    } catch (e) {
+      setApplyResult({ ok: false, errorMessage: String(e) });
+    } finally {
+      setApplyLoading(false);
+    }
+  }
 
   async function handleAsk() {
     const trimmed = question.trim();
@@ -474,6 +546,178 @@ export function App() {
             )}
           </div>
         </section>
+
+{/* ── BOSS 直聘全自动投递 ──────────────────────────────── */}
+      <section className="apply-panel apply-panel--inline">
+        <div className="apply-panel__header" onClick={() => setApplyMode((m) => !m)}>
+          <div className="apply-panel__title-row">
+            <PaperPlaneTilt size={22} weight="bold" />
+            <h2>BOSS 直聘 · 全自动投递</h2>
+          </div>
+          <span className="apply-panel__toggle">{applyMode ? "收起 ▲" : "展开 ▼"}</span>
+        </div>
+
+        {applyMode && (
+          <div className="apply-panel__body">
+            {/* 搜索职位 */}
+            <div className="apply-search">
+              <div className="apply-search__inputs">
+                <input
+                  className="apply-input"
+                  placeholder="搜索职位关键词，如：AI大模型 RAG"
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  onKeyDown={(e) => e.key === "Enter" && handleSearch()}
+                />
+                <input
+                  className="apply-input apply-input--city"
+                  placeholder="城市"
+                  value={searchCity}
+                  onChange={(e) => setSearchCity(e.target.value)}
+                />
+                <button
+                  className="apply-btn apply-btn--search"
+                  onClick={handleSearch}
+                  disabled={searchLoading || !searchQuery.trim()}
+                >
+                  {searchLoading ? "搜索中..." : "搜职位"}
+                </button>
+              </div>
+              {searchResults.length > 0 && (
+                <div className="apply-job-list">
+                  {searchResults.slice(0, 8).map((job, i) => (
+                    <button
+                      key={job.security_id || i}
+                      className="apply-job-item"
+                      onClick={() => pickJob(job)}
+                    >
+                      <div className="apply-job-item__main">
+                        <strong>{job.title || job.job_name || "未知职位"}</strong>
+                        <span>{job.company || job.brand_name || "未知公司"}</span>
+                      </div>
+                      <span className="apply-job-item__meta">
+                        {job.city || ""} {job.salary || ""}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {/* 投递表单 */}
+            <div className="apply-form">
+              <div className="apply-form__row">
+                <div className="apply-field">
+                  <label>Security ID</label>
+                  <input
+                    className="apply-input"
+                    placeholder="security_id"
+                    value={applyForm.security_id}
+                    onChange={(e) =>
+                      setApplyForm((f) => ({ ...f, security_id: e.target.value }))
+                    }
+                  />
+                </div>
+                <div className="apply-field">
+                  <label>Job ID</label>
+                  <input
+                    className="apply-input"
+                    placeholder="job_id"
+                    value={applyForm.job_id}
+                    onChange={(e) =>
+                      setApplyForm((f) => ({ ...f, job_id: e.target.value }))
+                    }
+                  />
+                </div>
+              </div>
+              <div className="apply-form__row">
+                <div className="apply-field">
+                  <label>职位名称</label>
+                  <input
+                    className="apply-input"
+                    placeholder="如：AI大模型应用开发"
+                    value={applyForm.title}
+                    onChange={(e) =>
+                      setApplyForm((f) => ({ ...f, title: e.target.value }))
+                    }
+                  />
+                </div>
+                <div className="apply-field">
+                  <label>公司名称</label>
+                  <input
+                    className="apply-input"
+                    placeholder="如：迪原创新"
+                    value={applyForm.company}
+                    onChange={(e) =>
+                      setApplyForm((f) => ({ ...f, company: e.target.value }))
+                    }
+                  />
+                </div>
+              </div>
+              <div className="apply-form__row">
+                <div className="apply-field">
+                  <label>简历名称</label>
+                  <input
+                    className="apply-input"
+                    placeholder="default"
+                    value={applyForm.resume_name}
+                    onChange={(e) =>
+                      setApplyForm((f) => ({ ...f, resume_name: e.target.value }))
+                    }
+                  />
+                </div>
+                <div className="apply-field">
+                  <label>自定义消息（可选）</label>
+                  <input
+                    className="apply-input"
+                    placeholder="留空自动生成打招呼文案"
+                    value={applyForm.message}
+                    onChange={(e) =>
+                      setApplyForm((f) => ({ ...f, message: e.target.value }))
+                    }
+                  />
+                </div>
+              </div>
+
+              <button
+                className="apply-btn apply-btn--send"
+                onClick={handleApply}
+                disabled={
+                  applyLoading ||
+                  !applyForm.security_id.trim() ||
+                  !applyForm.job_id.trim()
+                }
+              >
+                <PaperPlaneTilt size={18} weight="fill" />
+                {applyLoading ? "投递中..." : "全自动发简历"}
+              </button>
+
+              {applyResult && (
+                <div
+                  className={`apply-result ${
+                    applyResult.ok ? "apply-result--ok" : "apply-result--error"
+                  }`}
+                >
+                  {applyResult.ok ? (
+                    <>
+                      <CheckCircle size={18} weight="fill" />
+                      <span>投递成功！{applyResult.data?.message || ""}</span>
+                    </>
+                  ) : (
+                    <>
+                      <WarningCircle size={18} weight="fill" />
+                      <span>
+                        投递失败：{applyResult.errorMessage || applyResult.error?.message || "未知错误"}
+                      </span>
+                    </>
+                  )}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+      </section>
+
       </section>
 
       <aside className="evidence-pane">
@@ -603,6 +847,7 @@ export function App() {
           </strong>
         </div>
       </footer>
-    </main>
+
+      </main>
   );
 }

@@ -43,9 +43,6 @@
 
 > A local-assist CLI for AI Agents working around [BOSS Zhipin](https://www.zhipin.com/) data already available to the user. Default low-risk mode is read-only first, user-triggered, and does not automate outreach, bulk actions, risk-control bypasses, or candidate personal-data workflows. See [README.en.md](README.en.md) for the English version.
 
-## ⚠️ 合规边界
-
-本项目默认启用低风险辅助模式，目标是收缩为“本地辅助 / 只读优先 / 用户主动触发 / 不规避风控 / 不批量触达 / 不抓取平台数据”的低风险工具。CLI 默认会阻断打招呼、批量打招呼、投递、联系方式交换、招聘者候选人搜索、候选人简历、聊天记录、附件简历请求和消息回复等敏感能力。需要投递、沟通、候选人处理或联系方式交换时，请回到 BOSS 直聘官方页面由用户手动完成。
 
 ---
 

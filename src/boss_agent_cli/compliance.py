@@ -70,6 +70,12 @@ def require_compliance_allowed(ctx: click.Context, command: str) -> bool:
 	if reason is None:
 		return True
 
+	# 全自动投递：当 boss_apply_auto_enabled=True 时允许 apply 绕过低风险阻断
+	if command == "apply":
+		config = ctx.obj.get("config", {}) if ctx and ctx.obj else {}
+		if config.get("boss_apply_auto_enabled", False):
+			return True
+
 	handle_error_output(
 		ctx,
 		command,
