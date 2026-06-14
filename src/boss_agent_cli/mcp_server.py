@@ -644,6 +644,40 @@ TOOLS = [
 		},
 	),
 	Tool(
+		name="boss_shortlist_prepare",
+		description="为手动投递生成准备包：官方入口、沟通草稿和本地简历关联",
+		inputSchema={
+			"type": "object",
+			"properties": {
+				"security_id": {"type": "string", "description": "职位安全 ID"},
+				"job_id": {"type": "string", "description": "加密职位 ID"},
+				"resume": {"type": "string", "description": "本地简历名称（可选）"},
+				"tone": {
+					"type": "string",
+					"description": "草稿语气",
+					"enum": ["简洁专业", "积极主动", "稳妥确认"],
+					"default": "简洁专业",
+				},
+				"note": {"type": "string", "description": "附加备注，会拼接到草稿文案中"},
+			},
+			"required": ["security_id", "job_id"],
+		},
+	),
+	Tool(
+		name="boss_shortlist_mark_applied",
+		description="在官方页面手动完成后，回写本地投递状态并更新关联简历记录",
+		inputSchema={
+			"type": "object",
+			"properties": {
+				"security_id": {"type": "string", "description": "职位安全 ID"},
+				"job_id": {"type": "string", "description": "加密职位 ID"},
+				"resume": {"type": "string", "description": "需要同步状态的本地简历名称（可选）"},
+				"notes": {"type": "string", "description": "本地备注", "default": "已在官方页面手动投递"},
+			},
+			"required": ["security_id", "job_id"],
+		},
+	),
+	Tool(
 		name="boss_preset_add",
 		description="保存搜索预设",
 		inputSchema={
@@ -1130,6 +1164,24 @@ def _build_args(tool_name: str, arguments: dict) -> list[str]:
 
 	if name == "shortlist_remove":
 		return ["shortlist", "remove", arguments["security_id"], arguments["job_id"]]
+
+	if name == "shortlist_prepare":
+		args = ["shortlist", "prepare", arguments["security_id"], arguments["job_id"]]
+		if arguments.get("resume"):
+			args.extend(["--resume", arguments["resume"]])
+		if arguments.get("tone"):
+			args.extend(["--tone", arguments["tone"]])
+		if arguments.get("note"):
+			args.extend(["--note", arguments["note"]])
+		return args
+
+	if name == "shortlist_mark_applied":
+		args = ["shortlist", "mark-applied", arguments["security_id"], arguments["job_id"]]
+		if arguments.get("resume"):
+			args.extend(["--resume", arguments["resume"]])
+		if arguments.get("notes"):
+			args.extend(["--notes", arguments["notes"]])
+		return args
 
 	if name == "preset_add":
 		args = ["preset", "add", arguments["name"], arguments["query"]]

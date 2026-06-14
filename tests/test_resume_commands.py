@@ -349,7 +349,7 @@ def test_link_resume_to_job(tmp_path):
 		"security_id": "sid-001",
 		"job_id": "jid-001",
 	}
-	assert parsed["hints"]["next_actions"] == ["boss resume applications linktest", "boss apply sid-001 jid-001"]
+	assert parsed["hints"]["next_actions"] == ["boss resume applications linktest", "boss shortlist prepare sid-001 jid-001 --resume linktest"]
 
 
 def test_link_resume_not_found(tmp_path):

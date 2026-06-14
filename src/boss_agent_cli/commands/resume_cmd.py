@@ -344,7 +344,7 @@ def resume_link_cmd(ctx: click.Context, name: str, security_id: str, job_id: str
 	handle_output(
 		ctx, "resume",
 		{"action": "link", "name": name, "security_id": security_id, "job_id": job_id},
-		hints={"next_actions": [f"boss resume applications {name}", f"boss apply {security_id} {job_id}"]},
+		hints={"next_actions": [f"boss resume applications {name}", f"boss shortlist prepare {security_id} {job_id} --resume {name}"]},
 	)
 
 

@@ -300,6 +300,25 @@ class CacheStore:
 			for row in rows
 		]
 
+	def get_shortlist_item(self, security_id: str, job_id: str) -> dict[str, Any] | None:
+		row = self._conn.execute(
+			"SELECT security_id, job_id, title, company, city, salary, source, created_at "
+			"FROM shortlist_records WHERE security_id = ? AND job_id = ?",
+			(security_id, job_id),
+		).fetchone()
+		if row is None:
+			return None
+		return {
+			"security_id": row[0],
+			"job_id": row[1],
+			"title": row[2],
+			"company": row[3],
+			"city": row[4],
+			"salary": row[5],
+			"source": row[6],
+			"created_at": row[7],
+		}
+
 	def remove_shortlist(self, security_id: str, job_id: str) -> bool:
 		cursor = self._conn.execute(
 			"DELETE FROM shortlist_records WHERE security_id = ? AND job_id = ?",

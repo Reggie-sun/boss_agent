@@ -751,9 +751,16 @@ SCHEMA_DATA = {
 			},
 		},
 		"shortlist": {
-			"description": "管理职位候选池（子命令：add/list/remove）",
+			"description": "管理职位候选池（子命令：add/list/remove/prepare/mark-applied），支持手动投递准备与状态回写",
 			"args": [],
 			"options": {},
+			"subcommands": {
+				"add": "加入候选池",
+				"list": "查看候选池列表",
+				"remove": "移除候选池项",
+				"prepare": "生成手动投递准备包（官方入口、沟通草稿、本地简历关联）",
+				"mark-applied": "在官方页面手动完成后回写本地投递状态",
+			},
 		},
 		"digest": {
 			"description": "受限能力：汇总新增职位、待跟进会话和面试项的日报。默认低风险模式会阻断。",
@@ -823,7 +830,7 @@ SCHEMA_DATA = {
 				"import": "导入 JSON 简历（兼容 wzdnzd/zine0 格式）",
 				"clone": "复制简历为新版本",
 				"diff": "对比两份简历差异",
-				"link": "关联简历与职位",
+				"link": "关联简历与职位，为手动投递准备本地材料",
 				"applications": "查看简历关联的所有职位",
 			},
 		},
@@ -940,6 +947,11 @@ SCHEMA_DATA = {
 			"message": "职位不存在或已下架",
 			"recoverable": False,
 			"recovery_action": None,
+		},
+		"SHORTLIST_NOT_FOUND": {
+			"message": "候选池中不存在该职位",
+			"recoverable": True,
+			"recovery_action": "先运行 boss shortlist list 确认，或用 boss shortlist add 补入候选池",
 		},
 		"ALREADY_GREETED": {
 			"message": "已向该招聘者打过招呼",

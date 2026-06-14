@@ -176,6 +176,23 @@ def test_shortlist_is_shortlisted(store):
 	assert store.is_shortlisted("s1", "j1") is True
 
 
+def test_shortlist_get_item(store):
+	"""应能按 security_id/job_id 读取单条候选池记录。"""
+	store.add_shortlist({
+		"security_id": "s1",
+		"job_id": "j1",
+		"title": "前端工程师",
+		"company": "字节",
+		"city": "北京",
+		"salary": "25-40K",
+		"source": "search",
+	})
+	result = store.get_shortlist_item("s1", "j1")
+	assert result is not None
+	assert result["title"] == "前端工程师"
+	assert store.get_shortlist_item("s1", "missing") is None
+
+
 def test_shortlist_remove(store):
 	"""移除候选池项应返回 True，不存在时返回 False。"""
 	store.add_shortlist({"security_id": "s1", "job_id": "j1", "title": "", "company": "", "city": "", "salary": "", "source": ""})
