@@ -17,6 +17,7 @@ from boss_agent_cli.rag_reply.adapters.boss_automation import BossAutomationAdap
 from boss_agent_cli.rag_reply.adapters.manual_import import import_messages
 from boss_agent_cli.rag_reply.adapters.mock_envelope import load_and_ingest_mock_envelope
 from boss_agent_cli.rag_reply.adapters.rag_http import RagHttpAdapter
+from boss_agent_cli.rag_reply.langchain_memory import build_thread_payload
 from boss_agent_cli.rag_reply.review import draft_to_payload
 from boss_agent_cli.rag_reply.service import BossRagReplyService
 from boss_agent_cli.rag_reply.store import RagReplyStore
@@ -301,6 +302,25 @@ def rag_review_cmd(ctx: click.Context, draft_id: str | None) -> None:
 		"rag-review",
 		payload,
 		render=lambda data: click.echo("Draft review ready.", err=True),
+	)
+
+
+@rag_group.command("thread")
+@click.option("--conversation-id", required=True)
+@click.pass_context
+def rag_thread_cmd(ctx: click.Context, conversation_id: str) -> None:
+	store = _resolve_store(ctx)
+	handle_output(
+		ctx,
+		"rag-thread",
+		{
+			"conversation_id": conversation_id,
+			"messages": build_thread_payload(store=store, conversation_id=conversation_id),
+		},
+		render=lambda data: click.echo(
+			f"Loaded {len(data['messages'])} thread message(s) for {data['conversation_id']}.",
+			err=True,
+		),
 	)
 
 

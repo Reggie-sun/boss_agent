@@ -851,7 +851,7 @@ SCHEMA_DATA = {
 			},
 		},
 		"rag": {
-			"description": "Boss RAG 回复工作流（子命令：init/import-messages/ingest-mock/sync-jobs/sync-messages/draft/review/approve/audit）。其中 sync-messages 仍需显式开启 boss_rag_allow_message_read=true。",
+			"description": "Boss RAG 回复工作流（子命令：init/import-messages/ingest-mock/sync-jobs/sync-messages/draft/review/thread/approve/audit）。其中 sync-messages 仍需显式开启 boss_rag_allow_message_read=true。",
 			"args": [],
 			"options": {},
 			"subcommands": {
@@ -862,6 +862,7 @@ SCHEMA_DATA = {
 				"sync-messages": "从 Boss 读取消息到本地 RAG store；默认需显式开启 boss_rag_allow_message_read=true",
 				"draft": "基于本地 store 里的消息生成 RAG 草稿",
 				"review": "查看 RAG 草稿详情",
+				"thread": "查看 conversation 级别的本地多轮 memory / thread 消息",
 				"approve": "批准草稿，可选复制到剪贴板",
 				"audit": "查看 RAG workflow 审计日志",
 			},

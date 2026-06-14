@@ -252,6 +252,20 @@ button {
   cursor: pointer;
 }
 
+.thread-item {
+  display: grid;
+  gap: 6px;
+}
+
+.thread-item--assistant {
+  background: rgba(47, 128, 237, 0.08);
+  border-color: rgba(47, 128, 237, 0.16);
+}
+
+.thread-item--user {
+  background: rgba(255, 255, 255, 0.58);
+}
+
 .history-list li strong {
   display: block;
   font-size: 0.94rem;
@@ -265,6 +279,16 @@ button {
   color: var(--muted);
   font-size: 0.84rem;
   line-height: 1.5;
+}
+
+.history-list li em {
+  display: block;
+  margin-top: 8px;
+  color: var(--accent);
+  font-size: 0.78rem;
+  font-style: normal;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
 }
 
 .progress-track {

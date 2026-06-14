@@ -8,7 +8,7 @@ import boss_agent_cli.commands.rag as rag_commands
 from boss_agent_cli.ai.config import AIConfigStore
 from boss_agent_cli.main import cli
 from boss_agent_cli.rag_reply.adapters.boss_automation import SyncJobsResult, SyncMessagesResult
-from boss_agent_cli.rag_reply.models import DraftRecord
+from boss_agent_cli.rag_reply.models import DraftRecord, MessageRecord
 from boss_agent_cli.rag_reply.store import RagReplyStore
 
 
@@ -65,6 +65,50 @@ def test_rag_review_and_approve_round_trip(tmp_path: Path, monkeypatch):
 	assert approve_payload["ok"] is True
 	assert approve_payload["data"]["draft"]["send_allowed"] is False
 	assert approve_payload["data"]["approval_event"]["copied_to_clipboard"] is True
+
+
+def test_rag_thread_returns_conversation_memory(tmp_path: Path):
+	store = RagReplyStore(tmp_path / "boss-rag.sqlite3")
+	store.initialize()
+	store.save_draft(
+		DraftRecord.new(
+			conversation_id="conv_001",
+			source_message_id="msg_001",
+			draft_text="这是候选草稿",
+			intent="project_question",
+		)
+	)
+	store.save_message(
+		MessageRecord(
+			message_id="msg_001",
+			conversation_id="conv_001",
+			message_text="你这个RAG项目具体做了什么？",
+			direction="inbound",
+		)
+	)
+	store.save_message(
+		MessageRecord(
+			message_id="draftmsg_msg_001",
+			conversation_id="conv_001",
+			message_text="这是候选草稿",
+			direction="outbound",
+			message_type="draft",
+			source="rag_draft_memory",
+		)
+	)
+	runner = CliRunner()
+
+	result = runner.invoke(
+		cli,
+		["--json", "--data-dir", str(tmp_path), "rag", "thread", "--conversation-id", "conv_001"],
+	)
+
+	assert result.exit_code == 0
+	parsed = json.loads(result.output)
+	assert parsed["ok"] is True
+	assert parsed["command"] == "rag-thread"
+	assert len(parsed["data"]["messages"]) == 2
+	assert parsed["data"]["messages"][1]["role"] == "assistant"
 
 
 class _FakeBossAdapter:

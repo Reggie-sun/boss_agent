@@ -56,6 +56,25 @@ function readBody(req) {
 
 function createRagBridgePlugin() {
   const ragConfig = loadRagConfig();
+  const sessionThreads = new Map();
+
+  function getThread(sessionId) {
+    const existing = sessionThreads.get(sessionId);
+    if (existing) return existing;
+    const created = [];
+    sessionThreads.set(sessionId, created);
+    return created;
+  }
+
+  function serializeThread(sessionId) {
+    const messages = getThread(sessionId).slice(-24);
+    return {
+      sessionId,
+      turnCount: messages.filter((item) => item.role === "user").length,
+      messageCount: messages.length,
+      messages,
+    };
+  }
 
   async function handler(req, res) {
     if (!req.url) return false;
@@ -74,6 +93,24 @@ function createRagBridgePlugin() {
           errorMessage: ragConfig.baseUrl
             ? ""
             : "未找到 BOSS_RAG_RAG_BASE_URL，无法把前端请求转发给 Enterprise RAG。",
+        }),
+      );
+      return true;
+    }
+
+    if (req.method === "GET" && req.url.startsWith("/api/rag/thread")) {
+      const requestUrl = new URL(req.url, "http://127.0.0.1");
+      const sessionId = String(requestUrl.searchParams.get("sessionId") || "").trim();
+      res.setHeader("Content-Type", "application/json; charset=utf-8");
+      if (!sessionId) {
+        res.statusCode = 400;
+        res.end(JSON.stringify({ ok: false, errorMessage: "sessionId 不能为空。" }));
+        return true;
+      }
+      res.end(
+        JSON.stringify({
+          ok: true,
+          thread: serializeThread(sessionId),
         }),
       );
       return true;
@@ -101,12 +138,21 @@ function createRagBridgePlugin() {
       const question = String(parsed.question || "").trim();
       const sessionId = String(parsed.sessionId || "").trim() || `session-${Date.now()}`;
       const mode = String(parsed.mode || "accurate");
+      const thread = getThread(sessionId);
 
       if (!question) {
         res.statusCode = 400;
         res.end(JSON.stringify({ ok: false, errorMessage: "question 不能为空。" }));
         return true;
       }
+
+      thread.push({
+        id: `user-${Date.now()}`,
+        role: "user",
+        content: question,
+        source: "frontend_prompt",
+        createdAt: new Date().toISOString(),
+      });
 
       const upstream = await fetch(`${ragConfig.baseUrl}/api/v1/chat/ask`, {
         method: "POST",
@@ -131,6 +177,16 @@ function createRagBridgePlugin() {
 
       if (!upstream.ok) {
         res.statusCode = upstream.status;
+        thread.push({
+          id: `error-${Date.now()}`,
+          role: "assistant",
+          content:
+            payload.error?.message ||
+            payload.message ||
+            `上游 RAG 返回 HTTP ${upstream.status}`,
+          source: "rag_error",
+          createdAt: new Date().toISOString(),
+        });
         res.end(
           JSON.stringify({
             ok: false,
@@ -138,10 +194,19 @@ function createRagBridgePlugin() {
               payload.error?.message ||
               payload.message ||
               `上游 RAG 返回 HTTP ${upstream.status}`,
+            thread: serializeThread(sessionId),
           }),
         );
         return true;
       }
+
+      thread.push({
+        id: `assistant-${Date.now()}`,
+        role: "assistant",
+        content: String(payload.answer || ""),
+        source: "enterprise_rag",
+        createdAt: new Date().toISOString(),
+      });
 
       res.end(
         JSON.stringify({
@@ -154,6 +219,7 @@ function createRagBridgePlugin() {
               : null,
           auditStatus: "answered",
           rawResponse: payload,
+          thread: serializeThread(sessionId),
         }),
       );
       return true;

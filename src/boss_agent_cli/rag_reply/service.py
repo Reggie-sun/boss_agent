@@ -8,6 +8,7 @@ from typing import Protocol
 
 from boss_agent_cli.rag_reply.classifier import ClassificationResult, classify_message
 from boss_agent_cli.rag_reply.clipboard import copy_text
+from boss_agent_cli.rag_reply.langchain_memory import build_history_context, format_history_context
 from boss_agent_cli.rag_reply.models import (
 	ApprovalEventRecord,
 	AuditLogRecord,
@@ -79,6 +80,7 @@ class BossRagReplyService:
 		decision = build_approval_decision(classification.intent, classification.risk_labels)
 		draft = self._build_draft(message, classification, decision)
 		self.store.save_draft(draft)
+		self._save_assistant_memory_message(draft)
 		self.store.append_audit_log(
 			AuditLogRecord.new(
 				event_type=draft.audit_status,
@@ -146,10 +148,18 @@ class BossRagReplyService:
 	) -> DraftRecord:
 		job_summary = self._resolve_job_summary(message)
 		rag_session_id = self._build_rag_session_id(message)
+		history_context = format_history_context(
+			build_history_context(
+				store=self.store,
+				conversation_id=message.conversation_id,
+				current_message_id=message.message_id,
+			)
+		)
 		rag_question = build_rag_question(
 			message.message_text,
 			job_summary,
 			build_answer_objective(classification.intent),
+			history_context,
 		)
 		rag_result = self.rag_adapter.answer(
 			rag_question=rag_question,
@@ -190,7 +200,7 @@ class BossRagReplyService:
 				audit_status="rag_failed",
 				rag_session_id=rag_session_id,
 			)
-		return DraftRecord.new(
+		draft = DraftRecord.new(
 			conversation_id=message.conversation_id,
 			source_message_id=message.message_id,
 			draft_text=rag_result.answer,
@@ -206,6 +216,7 @@ class BossRagReplyService:
 			audit_status="draft_created",
 			rag_session_id=rag_session_id,
 		)
+		return draft
 
 	def _build_fallback_draft(
 		self,
@@ -227,7 +238,7 @@ class BossRagReplyService:
 		)
 		if not fallback_result.ok:
 			return None
-		return DraftRecord.new(
+		draft = DraftRecord.new(
 			conversation_id=message.conversation_id,
 			source_message_id=message.message_id,
 			draft_text=fallback_result.answer,
@@ -245,6 +256,7 @@ class BossRagReplyService:
 			audit_status="draft_created",
 			rag_session_id=rag_session_id,
 		)
+		return draft
 
 	def _resolve_job_summary(self, message: MessageRecord) -> str | None:
 		if not message.job_id:
@@ -256,8 +268,31 @@ class BossRagReplyService:
 	def _build_rag_session_id(message: MessageRecord) -> str:
 		"""Keep remote session ids compact to avoid upstream protocol issues."""
 		conversation_key = hashlib.sha1(message.conversation_id.encode("utf-8")).hexdigest()[:12]
-		message_key = hashlib.sha1(message.message_id.encode("utf-8")).hexdigest()[:12]
-		return f"boss-rag-{conversation_key}-{message_key}"
+		return f"boss-rag-{conversation_key}"
+
+	def _save_assistant_memory_message(self, draft: DraftRecord) -> None:
+		if not draft.draft_text.strip():
+			return
+		source_message = self.store.get_message(draft.source_message_id)
+		self.store.save_message(
+			MessageRecord(
+				message_id=f"draftmsg_{draft.source_message_id}",
+				conversation_id=draft.conversation_id,
+				message_text=draft.draft_text,
+				direction="outbound",
+				message_type="draft",
+				job_id=source_message.job_id if source_message else None,
+				recruiter_id=source_message.recruiter_id if source_message else None,
+				source="rag_draft_memory",
+				raw={
+					"draft_id": draft.draft_id,
+					"audit_status": draft.audit_status,
+					"approval_required": draft.approval_required,
+					"evidence_source": draft.evidence.get("source"),
+				},
+				created_at=draft.updated_at,
+			)
+		)
 
 	@staticmethod
 	def _local_draft_text(message: MessageRecord, intent: str) -> str:

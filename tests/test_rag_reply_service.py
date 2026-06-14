@@ -58,6 +58,24 @@ def test_draft_command_saves_draft_and_audit_log(tmp_path):
 	store.save_conversation(ConversationRecord(conversation_id="conv_001", source="manual_import"))
 	store.save_message(
 		MessageRecord(
+			message_id="msg_000",
+			conversation_id="conv_001",
+			message_text="你好，方便介绍一下项目吗？",
+			direction="inbound",
+		)
+	)
+	store.save_message(
+		MessageRecord(
+			message_id="draftmsg_msg_000",
+			conversation_id="conv_001",
+			message_text="您好，我最近主要在做企业级 RAG 项目。",
+			direction="outbound",
+			message_type="draft",
+			source="rag_draft_memory",
+		)
+	)
+	store.save_message(
+		MessageRecord(
 			message_id="msg_001",
 			conversation_id="conv_001",
 			message_text="你这个RAG项目具体做了什么？",
@@ -75,8 +93,14 @@ def test_draft_command_saves_draft_and_audit_log(tmp_path):
 	assert draft.draft_text == "这是候选草稿"
 	assert draft.audit_status == "draft_created"
 	assert rag_adapter.calls[0]["session_id"].startswith("boss-rag-")
-	assert len(rag_adapter.calls[0]["session_id"]) <= 40
+	assert len(rag_adapter.calls[0]["session_id"]) <= 24
+	assert "Conversation memory:" in rag_adapter.calls[0]["rag_question"]
+	assert "您好，我最近主要在做企业级 RAG 项目。" in rag_adapter.calls[0]["rag_question"]
 	assert store.list_audit_logs()
+	messages = store.list_messages("conv_001")
+	assert messages[-1].direction == "outbound"
+	assert messages[-1].source == "rag_draft_memory"
+	assert messages[-1].message_text == "这是候选草稿"
 
 
 def test_draft_command_persists_closed_record_when_rag_fails(tmp_path):
@@ -155,6 +179,7 @@ def test_draft_command_uses_ai_fallback_when_rag_fails(tmp_path):
 	assert draft.send_allowed is False
 	assert draft.approval_required is True
 	assert fallback_adapter.calls[0]["intent"] == "project_question"
+	assert store.list_messages("conv_001")[-1].source == "rag_draft_memory"
 
 
 def test_resume_share_request_generates_local_approval_draft(tmp_path):

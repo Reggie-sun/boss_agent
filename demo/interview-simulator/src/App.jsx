@@ -33,6 +33,17 @@ const emptyAnswer = {
   askedAt: null,
 };
 
+const sessionStorageKey = "boss-rag-demo-thread-id";
+
+function loadOrCreateSessionId() {
+  const existing = globalThis.localStorage?.getItem(sessionStorageKey);
+  if (existing) return existing;
+  const created =
+    globalThis.crypto?.randomUUID?.() ?? `interview-${Date.now()}`;
+  globalThis.localStorage?.setItem(sessionStorageKey, created);
+  return created;
+}
+
 function titleFromCitation(citation, index) {
   return (
     citation.title ||
@@ -107,6 +118,7 @@ function normalizeReasoningSummary(reasoningSummary) {
 export function App() {
   const [question, setQuestion] = useState(starterPrompts[0]);
   const [history, setHistory] = useState([]);
+  const [thread, setThread] = useState([]);
   const [result, setResult] = useState(emptyAnswer);
   const [isLoading, setIsLoading] = useState(false);
   const [selectedCitationIndex, setSelectedCitationIndex] = useState(0);
@@ -118,9 +130,7 @@ export function App() {
     endpoint: "/api/rag/ask",
     errorMessage: "",
   });
-  const [sessionId] = useState(() =>
-    globalThis.crypto?.randomUUID?.() ?? `interview-${Date.now()}`,
-  );
+  const [sessionId] = useState(() => loadOrCreateSessionId());
 
   const reasoningItems = useMemo(
     () => normalizeReasoningSummary(result.reasoningSummary),
@@ -133,8 +143,12 @@ export function App() {
     let cancelled = false;
     async function loadBridgeState() {
       try {
-        const response = await fetch("/api/rag/health");
+        const [response, threadResponse] = await Promise.all([
+          fetch("/api/rag/health"),
+          fetch(`/api/rag/thread?sessionId=${encodeURIComponent(sessionId)}`),
+        ]);
         const data = await response.json();
+        const threadPayload = await threadResponse.json();
         if (!cancelled) {
           setBridgeState({
             loading: false,
@@ -144,6 +158,13 @@ export function App() {
             endpoint: String(data.endpoint || "/api/rag/ask"),
             errorMessage: data.errorMessage ? String(data.errorMessage) : "",
           });
+          if (threadPayload.ok && threadPayload.thread) {
+            setThread(
+              Array.isArray(threadPayload.thread.messages)
+                ? threadPayload.thread.messages
+                : [],
+            );
+          }
         }
       } catch (error) {
         if (!cancelled) {
@@ -162,7 +183,7 @@ export function App() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [sessionId]);
 
   async function handleAsk() {
     const trimmed = question.trim();
@@ -195,6 +216,9 @@ export function App() {
       });
       const payload = await response.json();
       if (!response.ok || !payload.ok) {
+        if (payload.thread?.messages) {
+          setThread(payload.thread.messages);
+        }
         throw new Error(payload.errorMessage || "RAG 请求失败，请检查本地服务状态。");
       }
 
@@ -218,6 +242,9 @@ export function App() {
 
       setResult(nextResult);
       setSelectedCitationIndex(0);
+      if (payload.thread?.messages) {
+        setThread(payload.thread.messages);
+      }
       setHistory((current) => [
         {
           id: `${Date.now()}`,
@@ -284,6 +311,7 @@ export function App() {
           </div>
           <h2>本地 RAG 代理</h2>
           <p>会话 ID：{sessionId.slice(0, 12)}...</p>
+          <p>多轮记忆：{thread.length ? `${Math.ceil(thread.length / 2)} 轮` : "尚未建立"}</p>
           <p>鉴权模式：{bridgeState.authMode}</p>
           <p>调用入口：{bridgeState.endpoint}</p>
         </section>
@@ -310,11 +338,27 @@ export function App() {
 
         <section className="category-card">
           <div className="card-title-row">
-            <h3>最近提问</h3>
-            <span>{history.length} 次</span>
+            <h3>多轮对话</h3>
+            <span>{thread.length} 条</span>
           </div>
           <ul className="history-list">
-            {history.length ? (
+            {thread.length ? (
+              thread.map((item) => (
+                <li key={item.id}>
+                  <button
+                    type="button"
+                    className={`thread-item thread-item--${item.role}`}
+                    onClick={() => {
+                      if (item.role === "user") setQuestion(item.content);
+                    }}
+                  >
+                    <strong>{item.role === "assistant" ? "Agent / Memory" : "你"}</strong>
+                    <span>{item.content}</span>
+                    <em>{item.source}</em>
+                  </button>
+                </li>
+              ))
+            ) : history.length ? (
               history.map((item) => (
                 <li key={item.id}>
                   <button type="button" onClick={() => setQuestion(item.question)}>
@@ -484,7 +528,7 @@ export function App() {
           <ol className="agent-meta-list">
             <li>
               <span className="outline-index">1</span>
-              <span>输入问题写入本地代理</span>
+              <span>输入问题写入当前 thread</span>
             </li>
             <li className={bridgeState.ready ? "is-current" : ""}>
               <span className="outline-index">2</span>
@@ -492,7 +536,7 @@ export function App() {
             </li>
             <li className={result.ok ? "is-current" : ""}>
               <span className="outline-index">3</span>
-              <span>返回 answer / citations / reasoning</span>
+              <span>返回 answer / citations / reasoning，并同步多轮 memory</span>
             </li>
           </ol>
 

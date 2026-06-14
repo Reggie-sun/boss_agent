@@ -12,13 +12,19 @@ def build_answer_objective(intent: str) -> str:
 	return "Draft a concise recruiter-facing answer."
 
 
-def build_rag_question(hr_question: str, job_summary: str | None, objective: str) -> str:
+def build_rag_question(
+	hr_question: str,
+	job_summary: str | None,
+	objective: str,
+	history_context: str | None = None,
+) -> str:
 	"""Build the RAG question without leaking full Boss platform context."""
 	parts = [
 		f"HR question: {hr_question.strip()}",
 		f"Answer objective: {objective.strip()}",
 	]
+	if history_context:
+		parts.append(history_context.strip())
 	if job_summary:
 		parts.append(f"Short job summary: {job_summary.strip()}")
 	return "\n".join(parts)
-
