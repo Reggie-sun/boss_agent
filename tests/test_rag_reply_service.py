@@ -94,8 +94,8 @@ def test_draft_command_saves_draft_and_audit_log(tmp_path):
 	assert draft.audit_status == "draft_created"
 	assert rag_adapter.calls[0]["session_id"].startswith("boss-rag-")
 	assert len(rag_adapter.calls[0]["session_id"]) <= 24
-	assert "Conversation memory:" in rag_adapter.calls[0]["rag_question"]
-	assert "您好，我最近主要在做企业级 RAG 项目。" in rag_adapter.calls[0]["rag_question"]
+	assert "Conversation memory:" not in rag_adapter.calls[0]["rag_question"]
+	assert "您好，我最近主要在做企业级 RAG 项目。" not in rag_adapter.calls[0]["rag_question"]
 	assert store.list_audit_logs()
 	messages = store.list_messages("conv_001")
 	assert messages[-1].direction == "outbound"

@@ -8,7 +8,6 @@ from typing import Protocol
 
 from boss_agent_cli.rag_reply.classifier import ClassificationResult, classify_message
 from boss_agent_cli.rag_reply.clipboard import copy_text
-from boss_agent_cli.rag_reply.langchain_memory import build_history_context, format_history_context
 from boss_agent_cli.rag_reply.models import (
 	ApprovalEventRecord,
 	AuditLogRecord,
@@ -148,18 +147,10 @@ class BossRagReplyService:
 	) -> DraftRecord:
 		job_summary = self._resolve_job_summary(message)
 		rag_session_id = self._build_rag_session_id(message)
-		history_context = format_history_context(
-			build_history_context(
-				store=self.store,
-				conversation_id=message.conversation_id,
-				current_message_id=message.message_id,
-			)
-		)
 		rag_question = build_rag_question(
 			message.message_text,
 			job_summary,
 			build_answer_objective(classification.intent),
-			history_context,
 		)
 		rag_result = self.rag_adapter.answer(
 			rag_question=rag_question,
