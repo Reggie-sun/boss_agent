@@ -1,422 +1,433 @@
 import { useEffect, useMemo, useState } from "react";
 import {
+  ArrowClockwise,
   ArrowRight,
-  BookOpenText,
   CheckCircle,
   Clock,
-  FileDoc,
-  Lightbulb,
-  LockKey,
-  Microphone,
-  Notebook,
+  FileText,
+  Lightning,
+  MagnifyingGlass,
+  PlayCircle,
+  Quotes,
   Sparkle,
-  Target,
+  WarningCircle,
 } from "@phosphor-icons/react";
 import "./styles.css";
 
-const interviewDeck = [
-  {
-    id: "intro",
-    short: "自我介绍",
-    category: "基础信息",
-    state: "done",
-    duration: "4 分钟",
-    prompt:
-      "请用两分钟介绍一下你自己，重点讲清楚你为什么从通用后端/AI 工程走到企业级 RAG 方向，以及你最近一份工作的核心成果是什么。",
-    followups: ["如何概括你的技术定位？", "为什么会选择 RAG 这个细分方向？"],
-    answer:
-      "我目前的定位更偏 AI 应用工程师，工作重点是把检索、模型、后端服务和业务工作流做成可落地系统。最近一份工作里，我负责的是企业级 RAG 知识库与智能问答平台，核心关注点不是只把模型接起来，而是把文档入库、OCR、切块、检索、重排、引用和权限整成一条稳定链路。",
-    sources: [
-      {
-        id: "intro-resume",
-        type: "verified",
-        title: "个人简历 - AI 应用工程师",
-        note: "简历 · 已验证",
-        updatedAt: "更新于 2026-06-01",
-        excerpt: "求职方向为 AI 应用工程师，当前主项目为企业级 RAG 知识库与智能问答平台。",
-      },
-    ],
-    outline: ["背景概括", "当前角色", "RAG 方向动机", "最近项目成果"],
-  },
-  {
-    id: "system-design",
-    short: "系统设计",
-    category: "系统设计",
-    state: "active",
-    duration: "8 分钟",
-    prompt:
-      "请设计一个支持每秒百万级请求的短链接服务，需要考虑高可用、低延迟、可扩展性和安全性。请说明整体架构、关键组件的设计思路以及如何应对高并发场景。",
-    followups: [
-      "如何生成和存储短链键？",
-      "如何保证系统的高可用和容灾？",
-      "如何统计点击数据并保证准确性？",
-    ],
-    answer:
-      "整体架构采用分层设计，核心目标是高可用、低延迟与可扩展。\n\n1. 架构概览\n- 接入层：通过 DNS + Anycast 将流量就近接入，使用负载均衡（如 Nginx/Envoy）分发请求。\n- 服务层：短链接服务无状态，水平扩展，核心链路为“短链生成 / 查询重定向”。\n- 存储层：短链元数据存储在分布式 KV（如 Redis Cluster / TiKV），点击统计使用流式计数 + 离线聚合。\n- 数据层：冷数据归档到对象存储（如 S3/OSS），报表通过离线计算系统生成。\n- 可观测性：全链路监控、限流降级、灰度发布。\n\n2. 关键组件设计\n- 短链生成：采用 Base62 编码的 Snowflake ID，支持自定义短链；冲突通过重试解决。\n- 缓存策略：热点短链缓存到 Redis，设置合理 TTL；布隆过滤器拦截非法请求。\n- 重定向服务：读路径优先走缓存，缓存 miss 再查持久层，结果异步回填。",
-    sources: [
-      {
-        id: "source-shortlink",
-        type: "verified",
-        title: "短链服务项目（ShortLinker）",
-        note: "代码仓库 · 已验证",
-        updatedAt: "更新于 2024-03-12",
-        excerpt: "具备短链生成、重定向、缓存回填和数据归档设计经验，可复用到系统设计回答。",
-      },
-      {
-        id: "source-resume-backend",
-        type: "verified",
-        title: "个人简历 - 高级后端工程师",
-        note: "简历 · 已验证",
-        updatedAt: "更新于 2024-06-01",
-        excerpt: "有分布式系统、接口服务和性能优化相关经历，可支撑高并发题目的答题结构。",
-      },
-      {
-        id: "source-concurrency",
-        type: "inference",
-        title: "对百万级 QPS 的性能优化经验",
-        note: "合理推断",
-        updatedAt: "基于项目与经历推断",
-        excerpt: "可以谈高并发设计原则，但不要编造成真实线上指标，应明确为架构层面的设计回答。",
-      },
-      {
-        id: "source-architecture",
-        type: "verified",
-        title: "分布式系统容灾方案实践",
-        note: "技术文档 · 已验证",
-        updatedAt: "更新于 2024-02-18",
-        excerpt: "可作为高可用、监控、限流和灰度发布部分的答题骨架。",
-      },
-    ],
-    outline: ["架构概览", "关键组件设计", "高并发应对策略", "高可用与容灾", "安全性设计", "监控与运维", "总结"],
-  },
-  {
-    id: "algorithms",
-    short: "算法与数据结构",
-    category: "算法与数据结构",
-    state: "queued",
-    duration: "6 分钟",
-    prompt: "如何设计一个支持 Top K 热门查询的实时统计系统？",
-    followups: ["如何做分桶与滑窗？", "海量数据下如何控制内存？"],
-    answer: "",
-    sources: [],
-    outline: ["数据流入口", "窗口聚合", "堆与近似算法", "扩展性"],
-  },
-  {
-    id: "engineering",
-    short: "工程实践",
-    category: "工程实践",
-    state: "queued",
-    duration: "5 分钟",
-    prompt: "你如何保证一个 AI 功能上线后可观测、可回滚、可评估？",
-    followups: ["灰度怎么做？", "回归如何建？"],
-    answer: "",
-    sources: [],
-    outline: ["发布门禁", "观测指标", "回滚预案", "离线评估"],
-  },
-  {
-    id: "business",
-    short: "业务理解",
-    category: "业务理解",
-    state: "queued",
-    duration: "5 分钟",
-    prompt: "如果业务方只关心回答速度，你会如何解释检索质量的重要性？",
-    followups: ["如何平衡速度与正确性？"],
-    answer: "",
-    sources: [],
-    outline: ["用户目标", "质量风险", "速度折中", "实验验证"],
-  },
-  {
-    id: "behavioral",
-    short: "行为面试",
-    category: "行为面试",
-    state: "queued",
-    duration: "4 分钟",
-    prompt: "讲一个你独立定位复杂问题并推动闭环的案例。",
-    followups: ["最难的部分是什么？", "你如何与其他人协同？"],
-    answer: "",
-    sources: [],
-    outline: ["情境", "任务", "行动", "结果"],
-  },
+const starterPrompts = [
+  "请介绍一下企业级 RAG 项目的核心架构，以及你在里面负责的部分。",
+  "如果面试官追问多轮问答和记忆管理，你会怎么解释具体实现？",
+  "请说明这个项目里引用溯源为什么重要，具体是怎么落地的？",
+  "如果被问到评测指标为什么有不同口径，你会怎么回答？",
+  "请用 STAR 结构讲一个你在企业级 RAG 项目里解决复杂问题的例子。",
 ];
 
-const sourceTabs = [
-  { id: "all", label: "全部", count: 7 },
-  { id: "verified", label: "已验证", count: 5 },
-  { id: "inference", label: "推断", count: 2 },
-];
-
-const categorySummary = [
-  { label: "系统设计", value: 2 },
-  { label: "算法与数据结构", value: 1 },
-  { label: "工程实践", value: 1 },
-  { label: "业务理解", value: 0 },
-  { label: "行为面试", value: 0 },
-];
-
-const hintByCategory = {
-  基础信息: "用“当前角色 → 代表性项目 → 为什么匹配岗位”的三段式组织。",
-  系统设计: "先给分层架构，再补关键组件、瓶颈点和故障预案，避免一上来深挖单点实现。",
-  工程实践: "优先说发布门禁、可观测性和评估回路，形成上线闭环。",
-  default: "先给结论，再给证据，最后补限制与边界。",
+const emptyAnswer = {
+  ok: false,
+  answer: "",
+  citations: [],
+  reasoningSummary: null,
+  auditStatus: "idle",
+  errorMessage: "",
+  latencyMs: null,
+  askedAt: null,
 };
 
-function getSourceStatusLabel(type) {
-  if (type === "verified") return "已验证";
-  if (type === "inference") return "合理推断";
-  return "全部来源";
+function titleFromCitation(citation, index) {
+  return (
+    citation.title ||
+    citation.document_name ||
+    citation.document_title ||
+    citation.file_name ||
+    citation.source ||
+    citation.library_path ||
+    citation.path ||
+    citation.chunk_id ||
+    `引用 ${index + 1}`
+  );
+}
+
+function detailFromCitation(citation) {
+  const items = [];
+  if (citation.department_name) items.push(String(citation.department_name));
+  if (citation.library_path) items.push(String(citation.library_path));
+  if (citation.section_label) items.push(String(citation.section_label));
+  if (citation.page_no !== undefined && citation.page_no !== null) {
+    items.push(`p.${citation.page_no}`);
+  }
+  if (citation.score !== undefined && citation.score !== null) {
+    items.push(`score ${Number(citation.score).toFixed(3)}`);
+  }
+  return items.join(" · ");
+}
+
+function excerptFromCitation(citation) {
+  return (
+    citation.snippet ||
+    citation.quote ||
+    citation.text ||
+    citation.excerpt ||
+    citation.content ||
+    "当前引用未返回可直接展示的片段。"
+  );
+}
+
+function normalizeReasoningSummary(reasoningSummary) {
+  if (!reasoningSummary || typeof reasoningSummary !== "object") return [];
+
+  function formatReasoningValue(value) {
+    if (Array.isArray(value)) {
+      return value
+        .map((item) => {
+          if (item && typeof item === "object") {
+            return [item.label, item.detail].filter(Boolean).join(" - ");
+          }
+          return String(item);
+        })
+        .join(" / ");
+    }
+
+    if (value && typeof value === "object") {
+      return Object.entries(value)
+        .map(([key, nestedValue]) => `${key}: ${String(nestedValue)}`)
+        .join(" / ");
+    }
+
+    return String(value);
+  }
+
+  return Object.entries(reasoningSummary)
+    .filter(([, value]) => value !== null && value !== undefined && value !== "")
+    .map(([key, value]) => ({
+      key,
+      value: formatReasoningValue(value),
+    }));
 }
 
 export function App() {
-  const [questions, setQuestions] = useState(interviewDeck);
-  const [activeQuestionId, setActiveQuestionId] = useState("system-design");
-  const [activeSourceTab, setActiveSourceTab] = useState("all");
-  const [selectedSourceId, setSelectedSourceId] = useState("source-shortlink");
-  const [statusText, setStatusText] = useState("自动保存于 14:30:25");
-  const [isRecording, setIsRecording] = useState(false);
-  const [isPendingNext, setIsPendingNext] = useState(false);
-
-  const activeQuestion = useMemo(
-    () => questions.find((question) => question.id === activeQuestionId) ?? questions[0],
-    [activeQuestionId, questions],
+  const [question, setQuestion] = useState(starterPrompts[0]);
+  const [history, setHistory] = useState([]);
+  const [result, setResult] = useState(emptyAnswer);
+  const [isLoading, setIsLoading] = useState(false);
+  const [selectedCitationIndex, setSelectedCitationIndex] = useState(0);
+  const [bridgeState, setBridgeState] = useState({
+    loading: true,
+    configured: false,
+    ready: false,
+    authMode: "unknown",
+    endpoint: "/api/rag/ask",
+    errorMessage: "",
+  });
+  const [sessionId] = useState(() =>
+    globalThis.crypto?.randomUUID?.() ?? `interview-${Date.now()}`,
   );
 
-  const filteredSources = useMemo(() => {
-    if (activeSourceTab === "all") return activeQuestion.sources;
-    return activeQuestion.sources.filter((source) => source.type === activeSourceTab);
-  }, [activeQuestion.sources, activeSourceTab]);
-
-  const selectedSource =
-    filteredSources.find((source) => source.id === selectedSourceId) ?? filteredSources[0] ?? null;
-
-  const answerValue = activeQuestion.answer;
-  const answerLength = answerValue.replace(/\s/g, "").length;
-  const progressValue = Math.round(((questions.findIndex((item) => item.id === activeQuestion.id) + 1) / questions.length) * 100);
-  const completedCount = questions.filter((question) => question.state === "done").length;
+  const reasoningItems = useMemo(
+    () => normalizeReasoningSummary(result.reasoningSummary),
+    [result.reasoningSummary],
+  );
+  const selectedCitation = result.citations[selectedCitationIndex] ?? null;
+  const questionLength = question.replace(/\s/g, "").length;
 
   useEffect(() => {
-    if (!activeQuestion.sources.length) return;
-    const candidate =
-      activeQuestion.sources.find((source) => source.id === selectedSourceId) ??
-      activeQuestion.sources[0];
-    setSelectedSourceId(candidate.id);
-  }, [activeQuestion, selectedSourceId]);
+    let cancelled = false;
+    async function loadBridgeState() {
+      try {
+        const response = await fetch("/api/rag/health");
+        const data = await response.json();
+        if (!cancelled) {
+          setBridgeState({
+            loading: false,
+            configured: Boolean(data.configured),
+            ready: Boolean(data.ready),
+            authMode: String(data.authMode || "unknown"),
+            endpoint: String(data.endpoint || "/api/rag/ask"),
+            errorMessage: data.errorMessage ? String(data.errorMessage) : "",
+          });
+        }
+      } catch (error) {
+        if (!cancelled) {
+          setBridgeState({
+            loading: false,
+            configured: false,
+            ready: false,
+            authMode: "unknown",
+            endpoint: "/api/rag/ask",
+            errorMessage: error instanceof Error ? error.message : "无法读取本地代理状态。",
+          });
+        }
+      }
+    }
+    loadBridgeState();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
-  useEffect(() => {
-    if (!answerValue) return;
-    const timer = window.setTimeout(() => {
-      const stamp = new Date().toLocaleTimeString("zh-CN", {
+  async function handleAsk() {
+    const trimmed = question.trim();
+    if (!trimmed || isLoading) return;
+
+    setIsLoading(true);
+    setResult({
+      ...emptyAnswer,
+      auditStatus: "requesting",
+      askedAt: new Date().toLocaleTimeString("zh-CN", {
         hour: "2-digit",
         minute: "2-digit",
         second: "2-digit",
+      }),
+    });
+
+    const start = performance.now();
+
+    try {
+      const response = await fetch("/api/rag/ask", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          question: trimmed,
+          sessionId,
+          mode: "accurate",
+        }),
       });
-      setStatusText(`自动保存于 ${stamp}`);
-    }, 600);
-    return () => window.clearTimeout(timer);
-  }, [answerValue]);
+      const payload = await response.json();
+      if (!response.ok || !payload.ok) {
+        throw new Error(payload.errorMessage || "RAG 请求失败，请检查本地服务状态。");
+      }
 
-  function updateAnswer(nextAnswer) {
-    setQuestions((currentQuestions) =>
-      currentQuestions.map((question) =>
-        question.id === activeQuestion.id ? { ...question, answer: nextAnswer } : question,
-      ),
-    );
-    setStatusText("正在保存草稿...");
-  }
+      const nextResult = {
+        ok: true,
+        answer: String(payload.answer || ""),
+        citations: Array.isArray(payload.citations) ? payload.citations : [],
+        reasoningSummary:
+          payload.reasoningSummary && typeof payload.reasoningSummary === "object"
+            ? payload.reasoningSummary
+            : null,
+        auditStatus: String(payload.auditStatus || "answered"),
+        errorMessage: "",
+        latencyMs: Math.round(performance.now() - start),
+        askedAt: new Date().toLocaleTimeString("zh-CN", {
+          hour: "2-digit",
+          minute: "2-digit",
+          second: "2-digit",
+        }),
+      };
 
-  function handleHintInsert() {
-    const hint = hintByCategory[activeQuestion.category] ?? hintByCategory.default;
-    const nextAnswer = answerValue
-      ? `${answerValue}\n\n提示补充：${hint}`
-      : `建议回答结构：${hint}`;
-    updateAnswer(nextAnswer);
-  }
-
-  function handleQuestionSelect(questionId) {
-    setActiveQuestionId(questionId);
-    setIsPendingNext(false);
-  }
-
-  function handleSubmit() {
-    setQuestions((currentQuestions) =>
-      currentQuestions.map((question) => {
-        if (question.id === activeQuestion.id) {
-          return { ...question, state: "done" };
-        }
-        return question;
-      }),
-    );
-    setStatusText("回答已提交，可进入评估。");
-    setIsPendingNext(true);
-  }
-
-  function handleNextQuestion() {
-    const currentIndex = questions.findIndex((question) => question.id === activeQuestion.id);
-    const nextQuestion = questions[currentIndex + 1];
-    if (!nextQuestion) return;
-
-    setQuestions((currentQuestions) =>
-      currentQuestions.map((question, index) => {
-        if (question.id === activeQuestion.id) {
-          return { ...question, state: "done" };
-        }
-        if (index === currentIndex + 1) {
-          return { ...question, state: "active" };
-        }
-        return question;
-      }),
-    );
-    setActiveQuestionId(nextQuestion.id);
-    setIsPendingNext(false);
-    setStatusText("已切换到下一题，请继续作答。");
+      setResult(nextResult);
+      setSelectedCitationIndex(0);
+      setHistory((current) => [
+        {
+          id: `${Date.now()}`,
+          question: trimmed,
+          askedAt: nextResult.askedAt,
+          latencyMs: nextResult.latencyMs,
+          status: "answered",
+        },
+        ...current,
+      ]);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "RAG 请求失败。";
+      setResult({
+        ...emptyAnswer,
+        auditStatus: "rag_failed",
+        errorMessage: message,
+        latencyMs: Math.round(performance.now() - start),
+        askedAt: new Date().toLocaleTimeString("zh-CN", {
+          hour: "2-digit",
+          minute: "2-digit",
+          second: "2-digit",
+        }),
+      });
+      setHistory((current) => [
+        {
+          id: `${Date.now()}`,
+          question: trimmed,
+          askedAt: new Date().toLocaleTimeString("zh-CN", {
+            hour: "2-digit",
+            minute: "2-digit",
+          }),
+          latencyMs: Math.round(performance.now() - start),
+          status: "failed",
+        },
+        ...current,
+      ]);
+    } finally {
+      setIsLoading(false);
+    }
   }
 
   return (
-    <main className="app-shell">
+    <main className="app-shell app-shell--rag">
       <aside className="session-pane">
         <div className="brand-block">
           <div className="brand-mark">
-            <Target size={20} weight="bold" />
+            <Sparkle size={20} weight="bold" />
           </div>
           <div>
-            <h1>AI 面试模拟器</h1>
-            <p>企业级 RAG 面试准备</p>
+            <h1>AI 面试问答台</h1>
+            <p>Agent 代调用 Enterprise RAG</p>
           </div>
         </div>
 
         <section className="session-card">
           <div className="session-card__header">
-            <span>面试会话</span>
-            <span className="live-dot">
+            <span>调用状态</span>
+            <span
+              className={`live-dot ${bridgeState.ready ? "is-success" : "is-muted"}`}
+            >
               <span className="live-dot__point" />
-              进行中
+              {bridgeState.loading ? "检查中" : bridgeState.ready ? "已连接" : "待配置"}
             </span>
           </div>
-          <h2>高级后端工程师</h2>
-          <p>企业：字节跳动</p>
-          <p>岗位 ID：Backend-2024-07-058</p>
+          <h2>本地 RAG 代理</h2>
+          <p>会话 ID：{sessionId.slice(0, 12)}...</p>
+          <p>鉴权模式：{bridgeState.authMode}</p>
+          <p>调用入口：{bridgeState.endpoint}</p>
         </section>
 
         <section className="progress-card">
           <div className="card-title-row">
-            <h3>进度 {questions.findIndex((item) => item.id === activeQuestion.id) + 1} / {questions.length}</h3>
-            <span>{progressValue}%</span>
+            <h3>示例问题</h3>
+            <span>{starterPrompts.length} 条</span>
           </div>
-          <div className="progress-track" aria-hidden="true">
-            <div className="progress-track__bar" style={{ width: `${progressValue}%` }} />
+          <div className="prompt-list">
+            {starterPrompts.map((item, index) => (
+              <button
+                key={item}
+                type="button"
+                className={`prompt-chip ${question === item ? "is-active" : ""}`}
+                onClick={() => setQuestion(item)}
+              >
+                <span className="prompt-chip__index">{index + 1}</span>
+                <span>{item}</span>
+              </button>
+            ))}
           </div>
-
-          <ol className="round-list">
-            {questions.map((question, index) => {
-              const isActive = question.id === activeQuestion.id;
-              return (
-                <li key={question.id}>
-                  <button
-                    type="button"
-                    className={`round-item ${isActive ? "is-active" : ""}`}
-                    onClick={() => handleQuestionSelect(question.id)}
-                  >
-                    <span className={`round-item__index round-item__index--${question.state}`}>
-                      {question.state === "done" ? <CheckCircle size={18} weight="fill" /> : index + 1}
-                    </span>
-                    <span className="round-item__content">
-                      <strong>{question.short}</strong>
-                      <em>{isActive ? "当前问题" : question.state === "done" ? "已完成" : "待回答"}</em>
-                    </span>
-                  </button>
-                </li>
-              );
-            })}
-          </ol>
         </section>
 
         <section className="category-card">
-          <h3>问题分类</h3>
-          <ul>
-            {categorySummary.map((item) => (
-              <li key={item.label}>
-                <span>{item.label}</span>
-                <strong>{item.value}</strong>
-              </li>
-            ))}
+          <div className="card-title-row">
+            <h3>最近提问</h3>
+            <span>{history.length} 次</span>
+          </div>
+          <ul className="history-list">
+            {history.length ? (
+              history.map((item) => (
+                <li key={item.id}>
+                  <button type="button" onClick={() => setQuestion(item.question)}>
+                    <strong>{item.question}</strong>
+                    <span>
+                      {item.status === "answered" ? "已回答" : "失败"} · {item.askedAt}
+                      {item.latencyMs ? ` · ${item.latencyMs}ms` : ""}
+                    </span>
+                  </button>
+                </li>
+              ))
+            ) : (
+              <li className="history-list__empty">还没有提问记录，先输入一个问题试试。</li>
+            )}
           </ul>
-        </section>
-
-        <section className="hint-card">
-          <div className="hint-card__icon">
-            <Lightbulb size={18} weight="fill" />
-          </div>
-          <div>
-            <h3>提示</h3>
-            <p>结合你的经验与证据操作答，引用来源可提升回答可信度。</p>
-          </div>
         </section>
       </aside>
 
       <section className="workspace">
         <header className="workspace-header">
           <div>
-            <span className="eyebrow">{activeQuestion.category}</span>
-            <h2>面试官提问</h2>
+            <span className="eyebrow">RAG 问题输入</span>
+            <h2>让 Agent 调用知识库回答</h2>
           </div>
           <div className="meta-pill">
             <Clock size={18} />
-            建议时长：{activeQuestion.duration}
+            适合 HR / 技术 / 项目 / 行为面试追问
           </div>
         </header>
 
-        <article className="question-panel">
-          <p className="question-panel__prompt">{activeQuestion.prompt}</p>
-          <div className="question-panel__followups">
-            <h3>追问方向（可能）</h3>
-            <ul>
-              {activeQuestion.followups.map((followup) => (
-                <li key={followup}>{followup}</li>
-              ))}
-            </ul>
+        <section className="question-panel question-panel--input">
+          <div className="input-headline">
+            <h3>你的问题</h3>
+            <span>{questionLength} 字</span>
           </div>
-        </article>
+          <textarea
+            className="prompt-editor"
+            value={question}
+            onChange={(event) => setQuestion(event.target.value)}
+            placeholder="例如：请介绍一下企业级 RAG 项目的核心架构，以及你负责的模块。"
+          />
+          <div className="input-actions">
+            <button
+              type="button"
+              className="inline-action"
+              onClick={() => setQuestion("")}
+            >
+              <ArrowClockwise size={16} />
+              清空
+            </button>
+            <button
+              type="button"
+              className="inline-action inline-action--primary"
+              onClick={handleAsk}
+              disabled={isLoading || !question.trim()}
+            >
+              {isLoading ? <Lightning size={16} weight="fill" /> : <PlayCircle size={16} weight="fill" />}
+              {isLoading ? "Agent 回答中..." : "让 Agent 回答"}
+            </button>
+          </div>
+        </section>
 
         <section className="answer-region">
           <div className="answer-region__header">
             <div>
-              <h3>你的回答</h3>
+              <h3>RAG 回答结果</h3>
               <p>
-                <span className="answer-region__verified-dot" />
-                已连接证据库（简历 / 项目 / 技术文档）
+                <span className={`answer-region__verified-dot ${result.ok ? "is-success" : ""}`} />
+                {result.ok
+                  ? `已收到 grounded answer${result.latencyMs ? ` · ${result.latencyMs}ms` : ""}`
+                  : isLoading
+                    ? "正在等待 Enterprise RAG 返回"
+                    : "等待你发起问题"}
               </p>
             </div>
             <div className="answer-region__status">
-              <span>{statusText}</span>
-              <CheckCircle size={18} weight="fill" />
+              {result.errorMessage ? <WarningCircle size={18} weight="fill" /> : <CheckCircle size={18} weight="fill" />}
+              <span>{result.askedAt || "尚未提问"}</span>
             </div>
           </div>
 
-          <div className="editor-shell">
-            <textarea
-              aria-label="回答编辑器"
-              className="editor-shell__textarea"
-              value={answerValue}
-              onChange={(event) => updateAnswer(event.target.value)}
-              placeholder="在这里组织你的回答..."
-            />
-            <div className="editor-toolbar">
-              <div className="editor-toolbar__group">
-                <button type="button">B</button>
-                <button type="button">I</button>
-                <button type="button">H</button>
-                <button type="button">•</button>
-                <button type="button">1.</button>
+          <div className="editor-shell editor-shell--answer">
+            {isLoading ? (
+              <div className="answer-state answer-state--loading">
+                <div className="answer-loader" />
+                <div>
+                  <strong>Agent 正在整理回答</strong>
+                  <p>这一步会由本地代理向 `/api/v1/chat/ask` 发起请求，并回收 answer / citations。</p>
+                </div>
               </div>
-              <div className="editor-toolbar__group">
-                <button type="button">
-                  <BookOpenText size={16} />
-                </button>
-                <button type="button">
-                  <Notebook size={16} />
-                </button>
-                <span>已输入 {answerLength} 字</span>
+            ) : result.errorMessage ? (
+              <div className="answer-state answer-state--error">
+                <WarningCircle size={22} weight="fill" />
+                <div>
+                  <strong>调用失败</strong>
+                  <p>{result.errorMessage}</p>
+                </div>
               </div>
-            </div>
+            ) : result.answer ? (
+              <article className="answer-markdown">
+                {result.answer.split(/\n{2,}/).map((paragraph, index) => (
+                  <p key={`${index}-${paragraph.slice(0, 18)}`}>{paragraph}</p>
+                ))}
+              </article>
+            ) : (
+              <div className="answer-state">
+                <MagnifyingGlass size={22} />
+                <div>
+                  <strong>还没有回答结果</strong>
+                  <p>先输入一个问题，然后点击“让 Agent 回答”。</p>
+                </div>
+              </div>
+            )}
           </div>
         </section>
       </section>
@@ -424,119 +435,128 @@ export function App() {
       <aside className="evidence-pane">
         <section className="evidence-card">
           <div className="card-title-row">
-            <h3>证据来源</h3>
-            <span className="help-dot">i</span>
+            <h3>引用证据</h3>
+            <span>{result.citations.length} 条</span>
           </div>
-
-          <div className="source-tabs" role="tablist" aria-label="证据筛选">
-            {sourceTabs.map((tab) => (
-              <button
-                key={tab.id}
-                type="button"
-                className={`source-tab ${activeSourceTab === tab.id ? "is-active" : ""}`}
-                onClick={() => setActiveSourceTab(tab.id)}
-              >
-                {tab.label} {tab.count}
-              </button>
-            ))}
-          </div>
-
           <div className="source-list">
-            {filteredSources.map((source) => (
-              <button
-                key={source.id}
-                type="button"
-                className={`source-item ${selectedSourceId === source.id ? "is-selected" : ""} ${source.type === "inference" ? "is-warning" : ""}`}
-                onClick={() => setSelectedSourceId(source.id)}
-              >
-                <div className="source-item__icon">
-                  {source.type === "verified" ? <FileDoc size={18} /> : <Sparkle size={18} />}
-                </div>
-                <div className="source-item__body">
-                  <strong>{source.title}</strong>
-                  <span className={`source-badge source-badge--${source.type}`}>{source.note}</span>
-                  <em>{source.updatedAt}</em>
-                </div>
-                {selectedSourceId === source.id ? <CheckCircle size={18} weight="fill" /> : null}
-              </button>
-            ))}
+            {result.citations.length ? (
+              result.citations.map((citation, index) => (
+                <button
+                  key={`${titleFromCitation(citation, index)}-${index}`}
+                  type="button"
+                  className={`source-item ${selectedCitationIndex === index ? "is-selected" : ""}`}
+                  onClick={() => setSelectedCitationIndex(index)}
+                >
+                  <div className="source-item__icon">
+                    <FileText size={18} />
+                  </div>
+                  <div className="source-item__body">
+                    <strong>{titleFromCitation(citation, index)}</strong>
+                    <span className="source-badge source-badge--verified">
+                      引用 {index + 1}
+                    </span>
+                    <em>{detailFromCitation(citation) || "可展开查看片段"}</em>
+                  </div>
+                </button>
+              ))
+            ) : (
+              <div className="empty-card-copy">
+                当前回答还没有可展示的 citations。真实 RAG 返回后，会在这里展示证据列表。
+              </div>
+            )}
           </div>
 
-          <button type="button" className="ghost-link">
-            查看全部来源（7）
-            <ArrowRight size={16} />
-          </button>
+          {selectedCitation ? (
+            <div className="source-summary">
+              <div className="source-summary__header">
+                <Quotes size={16} />
+                <span>{titleFromCitation(selectedCitation, selectedCitationIndex)}</span>
+              </div>
+              <p>{excerptFromCitation(selectedCitation)}</p>
+            </div>
+          ) : null}
         </section>
 
         <section className="outline-card">
           <div className="card-title-row">
-            <h3>回答大纲（建议）</h3>
+            <h3>Agent 执行信息</h3>
           </div>
-          <ol>
-            {activeQuestion.outline.map((item, index) => (
-              <li key={item} className={index === 1 ? "is-current" : ""}>
-                <span className="outline-index">{index + 1}</span>
-                <span>{item}</span>
-              </li>
-            ))}
+          <ol className="agent-meta-list">
+            <li>
+              <span className="outline-index">1</span>
+              <span>输入问题写入本地代理</span>
+            </li>
+            <li className={bridgeState.ready ? "is-current" : ""}>
+              <span className="outline-index">2</span>
+              <span>转发到 `POST /api/v1/chat/ask`</span>
+            </li>
+            <li className={result.ok ? "is-current" : ""}>
+              <span className="outline-index">3</span>
+              <span>返回 answer / citations / reasoning</span>
+            </li>
           </ol>
-          {selectedSource ? (
-            <div className="source-summary">
-              <div className="source-summary__header">
-                <LockKey size={16} />
-                <span>{getSourceStatusLabel(selectedSource.type)}</span>
-              </div>
-              <p>{selectedSource.excerpt}</p>
+
+          <div className="reasoning-panel">
+            <h4>reasoning_summary</h4>
+            {reasoningItems.length ? (
+              <ul>
+                {reasoningItems.map((item) => (
+                  <li key={item.key}>
+                    <strong>{item.key}</strong>
+                    <span>{item.value}</span>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p>当前响应未返回结构化 reasoning_summary，或尚未发起请求。</p>
+            )}
+          </div>
+
+          {!bridgeState.ready && bridgeState.errorMessage ? (
+            <div className="bridge-warning">
+              <WarningCircle size={18} weight="fill" />
+              <p>{bridgeState.errorMessage}</p>
             </div>
           ) : null}
         </section>
       </aside>
 
       <footer className="action-bar">
-        <button
-          type="button"
-          className={`action-btn action-btn--ghost ${isRecording ? "is-recording" : ""}`}
-          onClick={() => setIsRecording((current) => !current)}
-        >
-          <Microphone size={20} weight={isRecording ? "fill" : "regular"} />
+        <button type="button" className="action-btn action-btn--ghost" onClick={() => setQuestion(starterPrompts[0])}>
+          <Sparkle size={20} />
           <span>
-            {isRecording ? "录音中..." : "开始录音"}
-            <em>语音输入更高效</em>
+            载入示例
+            <em>回到推荐问题</em>
           </span>
         </button>
 
-        <button type="button" className="action-btn action-btn--ghost" onClick={handleHintInsert}>
-          <Lightbulb size={20} />
+        <button type="button" className="action-btn action-btn--ghost" onClick={() => setQuestion("请基于企业级 RAG 面试参考文档，总结我最可信的候选人画像。")}>
+          <Quotes size={20} />
           <span>
-            请求提示
-            <em>可获得思路提示</em>
+            候选人画像
+            <em>快速验证 RAG 风格</em>
           </span>
         </button>
 
-        <button type="button" className="action-btn action-btn--primary" onClick={handleSubmit}>
+        <button type="button" className="action-btn action-btn--primary" onClick={handleAsk} disabled={isLoading || !question.trim()}>
           <ArrowRight size={20} />
           <span>
-            提交回答
-            <em>提交后可查看评估</em>
-          </span>
-        </button>
-
-        <button
-          type="button"
-          className="action-btn action-btn--muted"
-          onClick={handleNextQuestion}
-          disabled={!isPendingNext}
-        >
-          <CheckCircle size={20} />
-          <span>
-            下一题
-            <em>{isPendingNext ? "提交后解锁" : "提交后解锁"}</em>
+            立即提问
+            <em>通过 Agent 调用 RAG</em>
           </span>
         </button>
 
         <div className="countdown-card">
-          <span>准备下一题中...</span>
-          <strong>{isPendingNext ? "预计 3 秒" : `${completedCount} 题已完成`}</strong>
+          <span>{bridgeState.ready ? "代理已就绪" : "等待代理可用"}</span>
+          <strong>
+            {result.ok
+              ? `${result.citations.length} 条引用`
+              : bridgeState.loading
+                ? "检查中"
+                : bridgeState.configured
+                  ? "可发起请求"
+                  : "缺少配置"}
+          </strong>
         </div>
       </footer>
     </main>
