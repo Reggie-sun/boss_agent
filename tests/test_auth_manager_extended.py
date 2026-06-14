@@ -80,6 +80,39 @@ def test_get_token_loads_from_store_and_caches(mock_store_cls, tmp_path):
 @patch("boss_agent_cli.auth.manager.login_via_cdp")
 @patch("boss_agent_cli.auth.manager.probe_cdp")
 @patch("boss_agent_cli.auth.manager.extract_cookies")
+def test_login_reuses_existing_complete_session_before_fallback_chain(
+	mock_extract,
+	mock_probe_cdp,
+	mock_login_via_cdp,
+	mock_qr_login,
+	mock_login_via_browser,
+	mock_store_cls,
+	tmp_path,
+):
+	current = {"cookies": {"wt2": "reuse-me"}, "stoken": "fresh-token", "user_agent": "UA"}
+	store = _make_store(token=current.copy())
+	mock_store_cls.return_value = store
+	mock_extract.side_effect = AssertionError("should not start a fresh login flow")
+
+	manager = AuthManager(tmp_path)
+	with patch.object(manager, "_verify_cookie", return_value=True):
+		result = manager.login(timeout=30)
+
+	assert result["_method"] == "复用本地登录态"
+	assert result["cookies"]["wt2"] == "reuse-me"
+	store.save.assert_not_called()
+	mock_probe_cdp.assert_not_called()
+	mock_login_via_cdp.assert_not_called()
+	mock_qr_login.assert_not_called()
+	mock_login_via_browser.assert_not_called()
+
+
+@patch("boss_agent_cli.auth.manager.TokenStore")
+@patch("boss_agent_cli.auth.manager.login_via_browser")
+@patch("boss_agent_cli.auth.manager.qr_login_httpx")
+@patch("boss_agent_cli.auth.manager.login_via_cdp")
+@patch("boss_agent_cli.auth.manager.probe_cdp")
+@patch("boss_agent_cli.auth.manager.extract_cookies")
 def test_login_falls_back_to_qr_when_cdp_login_raises(
 	mock_extract,
 	mock_probe_cdp,

@@ -51,6 +51,13 @@ class AuthManager:
 		method = "未知"
 		token: dict[str, Any] | None = None
 
+		if not force_cdp:
+			existing = self._store.load()
+			if self._can_reuse_existing_login(existing):
+				self._token = existing
+				self._logger.info("检测到可复用的本地登录态，跳过重新登录")
+				return {**existing, "_method": "复用本地登录态"}
+
 		if force_cdp:
 			# --cdp 强制模式：跳过 Cookie，CDP 不可用直接抛异常
 			self._logger.info("强制 CDP 模式，跳过 Cookie 提取")
@@ -110,6 +117,20 @@ class AuthManager:
 		cookies = token.get("cookies", {})
 		primary_cookie = "wt2" if self._platform == "zhipin" else "zp_token"
 		return bool(cookies.get(primary_cookie))
+
+	def _has_secondary_credential(self, token: dict[str, Any]) -> bool:
+		if self._platform == "zhilian":
+			return bool(token.get("x_zp_client_id") or token.get("client_id"))
+		return bool(token.get("stoken"))
+
+	def _can_reuse_existing_login(self, token: dict[str, Any] | None) -> bool:
+		if not isinstance(token, dict):
+			return False
+		if not self._has_primary_cookie(token):
+			return False
+		if not self._has_secondary_credential(token):
+			return False
+		return self._verify_cookie(token)
 
 	def _verify_cookie(self, token: dict[str, Any]) -> bool:
 		"""验证 Cookie 是否有效。"""
