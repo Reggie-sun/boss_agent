@@ -29,20 +29,7 @@ def chat_reply_cmd(ctx: click.Context, security_id: str, message: str, send_resu
 	with get_platform_instance(ctx, auth) as platform:
 		client = platform._client
 
-		# 先确保在聊天页面
-		browser = client._get_browser()
-		browser._ensure_started()
-
-		# 导航到聊天页
-		from boss_agent_cli.api.browser_client import HOME_URL
-
-		chat_url = "https://www.zhipin.com/web/geek/chat"
-		try:
-			browser._page.goto(chat_url, wait_until="domcontentloaded", timeout=15000)
-		except Exception:
-			pass  # 即使超时也继续
-
-		# 发送消息
+		# 发送消息（内部自动导航到聊天页）
 		resp = client.send_chat_message(security_id, message)
 		messages = []
 

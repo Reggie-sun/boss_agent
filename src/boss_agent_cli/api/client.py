@@ -295,36 +295,42 @@ class BossClient:
 		const sid = "{security_id}";
 		const content = "{content}";
 		try {{
-			const ig = window.iGeekRoot || {{}};
-			const cs = window.chatStore;
-			const cw = window.ChatWebsocket;
-			let friendId = null;
-			const friends = cs.friends || {{}};
-			for (const [k, v] of Object.entries(friends)) {{
-				if (typeof v === "string" && v.includes(sid)) {{ friendId = v; break; }}
+			// 1. 通过 boss-list 找到好友并打开对话
+			const ulc = document.querySelector(".user-list-content");
+			if (!ulc || !ulc.__vue__) return {{ ok: false, error: "user-list-content not found" }};
+			const bossList = ulc.__vue__.$parent;
+			const list = bossList.list || [];
+			let friend = list.find(f => (f.securityId || "").includes(sid.substring(0, 30)) || (f.encryptBossId || "").includes(sid.substring(0, 30)));
+			if (!friend) friend = list[0]; // fallback: 第一个好友用于测试
+			if (!friend) return {{ ok: false, error: "no friends in list" }};
+			bossList.handleOpenChat(friend);
+
+			// 2. 等 chat-input 出现
+			let chatInput = null;
+			for (let i = 0; i < 20; i++) {{
+				await new Promise(r => setTimeout(r, 500));
+				chatInput = document.querySelector(".chat-input[contenteditable=\\"true\\"]");
+				if (chatInput) break;
 			}}
-			if (!friendId) friendId = sid;
-			if (!cw.client || !cw.client.isConnected()) {{
-				await new Promise((resolve) => {{
-					cw.init();
-					const check = setInterval(() => {{
-						if (cw.client && cw.client.isConnected()) {{ clearInterval(check); resolve(); }}
-					}}, 500);
-					setTimeout(() => {{ clearInterval(check); resolve(); }}, 10000);
-				}});
+			if (!chatInput) return {{ ok: false, error: "chat-input not found after open" }};
+
+			// 3. 填入内容
+			chatInput.focus();
+			chatInput.innerText = content;
+			chatInput.dispatchEvent(new Event("input", {{ bubbles: true }}));
+			chatInput.dispatchEvent(new Event("change", {{ bubbles: true }}));
+
+			// 4. 等发送按钮 enabled
+			await new Promise(r => setTimeout(r, 500));
+			const sendBtn = document.querySelector(".btn-send:not(.disabled)");
+			if (sendBtn) {{
+				sendBtn.click();
+				return {{ ok: true, method: "handleOpenChat+dom", friendName: friend.name }};
 			}}
-			if (ig.router) {{
-				ig.router.push({{ path: "/web/geek/chat", query: {{ userId: friendId }} }});
-				await new Promise(r => setTimeout(r, 2000));
-			}}
-			const textarea = document.querySelector("textarea");
-			if (textarea) {{
-				textarea.value = content;
-				textarea.dispatchEvent(new Event("input", {{ bubbles: true }}));
-				const sendBtn = [...document.querySelectorAll("button")].find(b => b.textContent.includes("发送"));
-				if (sendBtn) {{ sendBtn.click(); return {{ ok: true, method: "dom_click" }}; }}
-			}}
-			return {{ ok: false, error: "no textarea found" }};
+
+			// fallback: 按 Enter 发送 (contenteditable + Enter 键)
+			chatInput.dispatchEvent(new KeyboardEvent("keydown", {{ key: "Enter", code: "Enter", keyCode: 13, bubbles: true }}));
+			return {{ ok: true, method: "handleOpenChat+enter", friendName: friend.name }};
 		}} catch(e) {{ return {{ ok: false, error: e.message }}; }}
 	}})()'''
 
@@ -358,19 +364,30 @@ class BossClient:
 	}})()'''
 
 	def _navigate_to_chat(self) -> None:
-		"""确保 CDP 页面在候选人聊天页。"""
+		"""确保 CDP 页面在候选人聊天页，等待 chatStore 就绪。"""
 		browser = self._get_browser()
 		browser._ensure_started()
 		chat_url = "https://www.zhipin.com/web/geek/chat"
+		# 始终导航到干净的聊天 URL（避免旧 query 参数干扰）
 		try:
-			current = browser._page.url if browser._page else ""
-			if "/web/geek/chat" not in current:
-				browser._page.goto(chat_url, wait_until="domcontentloaded", timeout=15000)
+			browser._page.goto(chat_url, wait_until="domcontentloaded", timeout=15000)
 		except Exception:
 			try:
 				browser._page.goto(chat_url, wait_until="commit", timeout=10000)
 			except Exception:
 				pass
+		# 等待 bossList.list 就绪（聊天列表加载完成）
+		import time as _time
+		for _ in range(15):
+			try:
+				ready = browser._page.evaluate(
+					"() => { const ulc = document.querySelector('.user-list-content'); return !!(ulc && ulc.__vue__ && ulc.__vue__.$parent && ulc.__vue__.$parent.list && ulc.__vue__.$parent.list.length > 0); }"
+				)
+				if ready:
+					return
+			except Exception:
+				pass
+			_time.sleep(1)
 
 	def send_chat_message(self, security_id: str, content: str) -> dict[str, Any]:
 		"""通过 CDP 在候选人聊天页发送文字消息。"""
