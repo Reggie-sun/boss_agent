@@ -111,7 +111,7 @@ def test_required_tools_present():
 		"boss_ai_analyze_jd", "boss_ai_optimize", "boss_ai_suggest",
 		"boss_rag_init", "boss_rag_draft", "boss_rag_approve",
 		"boss_watch_list",
-		"boss_preset_list", "boss_shortlist_list", "boss_shortlist_prepare", "boss_shortlist_mark_applied",
+		"boss_preset_list", "boss_shortlist_list", "boss_shortlist_prepare", "boss_shortlist_open", "boss_shortlist_mark_applied",
 		"boss_hr_jobs",
 		"boss_hr_jobs_detail",
 	}
@@ -121,7 +121,7 @@ def test_required_tools_present():
 
 def test_tool_count():
 	"""工具总数应与当前注册一致。"""
-	assert len(TOOLS) == 43
+	assert len(TOOLS) == 44
 
 
 def test_search_tool_requires_query():
@@ -662,7 +662,7 @@ def test_build_args_shortlist_list():
 
 def test_tool_count_after_pr41():
 	"""协议服务工具总数应与当前 MCP 暴露能力完全一致。"""
-	assert len(TOOLS) == 43
+	assert len(TOOLS) == 44
 
 
 def test_build_args_shortlist_add():
@@ -682,13 +682,20 @@ def test_build_args_shortlist_prepare():
 		"resume": "backend",
 		"tone": "积极主动",
 		"note": "可一周内到岗",
+		"open": True,
 	})
 	assert args == [
 		"shortlist", "prepare", "s1", "j1",
 		"--resume", "backend",
 		"--tone", "积极主动",
 		"--note", "可一周内到岗",
+		"--open",
 	]
+
+
+def test_build_args_shortlist_open():
+	args = _build_args("boss_shortlist_open", {"security_id": "s1", "job_id": "j1", "target": "official-entry"})
+	assert args == ["shortlist", "open", "s1", "j1", "--target", "official-entry"]
 
 
 def test_build_args_shortlist_mark_applied():

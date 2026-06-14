@@ -659,6 +659,25 @@ TOOLS = [
 					"default": "简洁专业",
 				},
 				"note": {"type": "string", "description": "附加备注，会拼接到草稿文案中"},
+				"open": {"type": "boolean", "description": "准备完成后直接打开平台官网入口", "default": False},
+			},
+			"required": ["security_id", "job_id"],
+		},
+	),
+	Tool(
+		name="boss_shortlist_open",
+		description="直接打开平台官网入口，方便用户手动核对岗位并完成最后一步",
+		inputSchema={
+			"type": "object",
+			"properties": {
+				"security_id": {"type": "string", "description": "职位安全 ID"},
+				"job_id": {"type": "string", "description": "加密职位 ID"},
+				"target": {
+					"type": "string",
+					"description": "要打开的入口类型",
+					"enum": ["official-entry"],
+					"default": "official-entry",
+				},
 			},
 			"required": ["security_id", "job_id"],
 		},
@@ -1173,6 +1192,14 @@ def _build_args(tool_name: str, arguments: dict) -> list[str]:
 			args.extend(["--tone", arguments["tone"]])
 		if arguments.get("note"):
 			args.extend(["--note", arguments["note"]])
+		if arguments.get("open"):
+			args.append("--open")
+		return args
+
+	if name == "shortlist_open":
+		args = ["shortlist", "open", arguments["security_id"], arguments["job_id"]]
+		if arguments.get("target"):
+			args.extend(["--target", arguments["target"]])
 		return args
 
 	if name == "shortlist_mark_applied":

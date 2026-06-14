@@ -751,7 +751,7 @@ SCHEMA_DATA = {
 			},
 		},
 		"shortlist": {
-			"description": "管理职位候选池（子命令：add/list/remove/prepare/mark-applied），支持手动投递准备与状态回写",
+			"description": "管理职位候选池（子命令：add/list/remove/prepare/open/mark-applied），支持手动投递准备、打开官网入口与状态回写",
 			"args": [],
 			"options": {},
 			"subcommands": {
@@ -759,6 +759,7 @@ SCHEMA_DATA = {
 				"list": "查看候选池列表",
 				"remove": "移除候选池项",
 				"prepare": "生成手动投递准备包（官方入口、沟通草稿、本地简历关联）",
+				"open": "尝试直接打开平台官网入口，方便用户手动完成最后一步",
 				"mark-applied": "在官方页面手动完成后回写本地投递状态",
 			},
 		},

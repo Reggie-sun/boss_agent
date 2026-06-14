@@ -1,3 +1,7 @@
+import shutil
+import subprocess
+import sys
+import webbrowser
 from urllib.parse import quote
 
 import click
@@ -15,6 +19,7 @@ def shortlist_group() -> None:
 
 
 _PREPARE_TONES = ("简洁专业", "积极主动", "稳妥确认")
+_OPEN_TARGETS = ("official-entry",)
 
 
 def _resume_store(ctx: click.Context) -> ResumeStore:
@@ -89,8 +94,94 @@ def _build_manual_entry(ctx: click.Context, item: dict[str, object]) -> dict[str
 			ctx,
 			f"detail {item['security_id']} --job-id {item['job_id']}",
 		),
+		"open_command": boss_command_for_ctx(
+			ctx,
+			f"shortlist open {item['security_id']} {item['job_id']}",
+		),
 		"lookup_keywords": [part for part in (title, company) if part],
 		"lookup_hint": "回到官方页面后，用职位名/公司名检索，并用 security_id/job_id 二次确认是同一岗位。",
+	}
+
+
+def _build_prepare_workspace(
+	ctx: click.Context,
+	item: dict[str, object],
+	*,
+	manual_entry: dict[str, object],
+	resume_snapshot: dict[str, object] | None,
+	linked_resumes: list[dict[str, object]],
+	applied: bool,
+	draft_message: str,
+	mark_applied_cmd: str,
+) -> dict[str, object]:
+	return {
+		"overview": {
+			"title": item.get("title", ""),
+			"company": item.get("company", ""),
+			"city": item.get("city", ""),
+			"salary": item.get("salary", ""),
+			"source": item.get("source", ""),
+			"status": "already_applied" if applied else "prepared",
+		},
+		"materials": {
+			"selected_resume": resume_snapshot,
+			"linked_resumes": linked_resumes,
+			"draft_message": draft_message,
+		},
+		"links": {
+			"official_entry_url": manual_entry["official_entry_url"],
+			"lookup_keywords": manual_entry["lookup_keywords"],
+		},
+		"commands": {
+			"detail": manual_entry["detail_command"],
+			"open": manual_entry["open_command"],
+			"mark_applied": mark_applied_cmd,
+			"resume_applications": (
+				boss_command_for_ctx(ctx, f"resume applications {resume_snapshot['name']}")
+				if resume_snapshot else ""
+			),
+		},
+		"checklist": [
+			"先看 detail，确认职位描述、公司和薪资是否仍匹配。",
+			"打开 official_entry_url 回到平台官网，按关键词定位岗位。",
+			"核对岗位后粘贴 draft_message，并由用户手动提交简历或发起沟通。",
+			f"完成后运行 {mark_applied_cmd} 回写本地状态。",
+		],
+	}
+
+
+def _open_external_url(url: str) -> dict[str, object]:
+	candidates: list[list[str]] = []
+	if sys.platform.startswith("linux") and shutil.which("xdg-open"):
+		candidates.append(["xdg-open", url])
+	elif sys.platform == "darwin" and shutil.which("open"):
+		candidates.append(["open", url])
+	elif sys.platform.startswith("win") and shutil.which("cmd"):
+		candidates.append(["cmd", "/c", "start", "", url])
+
+	for command in candidates:
+		try:
+			subprocess.Popen(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+			return {"opened": True, "method": command[0], "url": url}
+		except OSError as exc:
+			last_error = str(exc)
+			continue
+	else:
+		last_error = ""
+
+	try:
+		opened = webbrowser.open(url, new=2)
+		if opened:
+			return {"opened": True, "method": "webbrowser.open", "url": url}
+		return {"opened": False, "method": "webbrowser.open", "url": url, "error": "默认浏览器未接受打开请求"}
+	except webbrowser.Error as exc:
+		last_error = str(exc) or last_error
+
+	return {
+		"opened": False,
+		"method": "none",
+		"url": url,
+		"error": last_error or "当前环境没有可用的浏览器启动方式",
 	}
 
 
@@ -225,6 +316,7 @@ def shortlist_remove_cmd(ctx: click.Context, security_id: str, job_id: str) -> N
 	help="草稿语气",
 )
 @click.option("--note", default="", help="附加备注，会拼接进手动沟通草稿")
+@click.option("--open", "should_open", is_flag=True, help="准备完成后尝试直接打开平台官网入口")
 @click.pass_context
 def shortlist_prepare_cmd(
 	ctx: click.Context,
@@ -233,6 +325,7 @@ def shortlist_prepare_cmd(
 	resume_name: str,
 	tone: str,
 	note: str,
+	should_open: bool,
 ) -> None:
 	with CacheStore(ctx.obj["data_dir"] / "cache" / "boss_agent.db") as cache:
 		item = cache.get_shortlist_item(security_id, job_id)
@@ -263,6 +356,8 @@ def shortlist_prepare_cmd(
 	mark_applied_cmd = boss_command_for_ctx(ctx, f"shortlist mark-applied {security_id} {job_id}")
 	if resume_name:
 		mark_applied_cmd = f"{mark_applied_cmd} --resume {resume_name}"
+	draft_message = _build_draft_message(item, resume_snapshot, tone=tone, note=note)
+	open_result = _open_external_url(str(manual_entry["official_entry_url"])) if should_open else None
 	data = {
 		"action": "prepare",
 		"status": "already_applied" if applied else "prepared",
@@ -273,16 +368,27 @@ def shortlist_prepare_cmd(
 		"linked_resumes": linked_resumes,
 		"applied": applied,
 		"manual_entry": manual_entry,
-		"draft_message": _build_draft_message(item, resume_snapshot, tone=tone, note=note),
+		"draft_message": draft_message,
+		"open_result": open_result,
+		"workspace": _build_prepare_workspace(
+			ctx,
+			item,
+			manual_entry=manual_entry,
+			resume_snapshot=resume_snapshot,
+			linked_resumes=linked_resumes,
+			applied=applied,
+			draft_message=draft_message,
+			mark_applied_cmd=mark_applied_cmd,
+		),
 		"steps": [
 			manual_entry["detail_command"],
-			"打开 official_entry_url 回到平台官网核对职位",
+			manual_entry["open_command"],
 			"确认岗位后由用户手动提交简历或发起沟通",
 			f"完成后运行 {mark_applied_cmd} 回写本地状态",
 		],
 		"note": note,
 	}
-	next_actions = [str(manual_entry["detail_command"]), mark_applied_cmd]
+	next_actions = [str(manual_entry["detail_command"]), str(manual_entry["open_command"]), mark_applied_cmd]
 	if resume_name:
 		next_actions.append(boss_command_for_ctx(ctx, f"resume applications {resume_name}"))
 	handle_output(
@@ -290,6 +396,49 @@ def shortlist_prepare_cmd(
 		"shortlist",
 		data,
 		hints={"next_actions": next_actions},
+	)
+
+
+@shortlist_group.command("open")
+@click.argument("security_id")
+@click.argument("job_id")
+@click.option(
+	"--target",
+	default="official-entry",
+	type=click.Choice(_OPEN_TARGETS),
+	help="要打开的官方页面类型",
+)
+@click.pass_context
+def shortlist_open_cmd(ctx: click.Context, security_id: str, job_id: str, target: str) -> None:
+	with CacheStore(ctx.obj["data_dir"] / "cache" / "boss_agent.db") as cache:
+		item = cache.get_shortlist_item(security_id, job_id)
+		if item is None:
+			_shortlist_not_found(ctx, security_id, job_id)
+			ctx.exit(1)
+			return
+
+	manual_entry = _build_manual_entry(ctx, item)
+	url = str(manual_entry["official_entry_url"])
+	open_result = _open_external_url(url)
+	data = {
+		"action": "open",
+		"security_id": security_id,
+		"job_id": job_id,
+		"target": target,
+		"job": item,
+		"manual_entry": manual_entry,
+		"open_result": open_result,
+	}
+	handle_output(
+		ctx,
+		"shortlist",
+		data,
+		hints={
+			"next_actions": [
+				str(manual_entry["detail_command"]),
+				boss_command_for_ctx(ctx, f"shortlist prepare {security_id} {job_id}"),
+			]
+		},
 	)
 
 

@@ -1,4 +1,5 @@
 import json
+from unittest.mock import patch
 
 from click.testing import CliRunner
 
@@ -105,8 +106,11 @@ def test_shortlist_prepare_with_resume_and_mark_applied(tmp_path):
 	assert prepare_parsed["data"]["status"] == "prepared"
 	assert prepare_parsed["data"]["resume"]["name"] == "backend"
 	assert "official_entry_url" in prepare_parsed["data"]["manual_entry"]
+	assert prepare_parsed["data"]["workspace"]["overview"]["title"] == "Go 开发"
+	assert prepare_parsed["data"]["workspace"]["commands"]["open"] == "boss shortlist open sec_001 job_001"
 	assert "可一周内到岗" in prepare_parsed["data"]["draft_message"]
-	assert prepare_parsed["hints"]["next_actions"][1] == "boss shortlist mark-applied sec_001 job_001 --resume backend"
+	assert prepare_parsed["hints"]["next_actions"][1] == "boss shortlist open sec_001 job_001"
+	assert prepare_parsed["hints"]["next_actions"][2] == "boss shortlist mark-applied sec_001 job_001 --resume backend"
 
 	mark_result = runner.invoke(
 		cli,
@@ -145,6 +149,61 @@ def test_shortlist_prepare_missing_item_returns_schema_error(tmp_path):
 	assert parsed["error"]["code"] == "SHORTLIST_NOT_FOUND"
 
 
+def test_shortlist_prepare_can_open_official_entry(tmp_path):
+	runner = CliRunner()
+	runner.invoke(
+		cli,
+		[
+			"--data-dir", str(tmp_path),
+			"--json",
+			"shortlist", "add", "sec_001", "job_001",
+			"--title", "Go 开发",
+			"--company", "TestCo",
+		],
+	)
+	with patch("boss_agent_cli.commands.shortlist._open_external_url", return_value={
+		"opened": True,
+		"method": "xdg-open",
+		"url": "https://www.zhipin.com/web/geek/job?query=Go%20%E5%BC%80%E5%8F%91%20TestCo",
+	}):
+		result = runner.invoke(
+			cli,
+			["--data-dir", str(tmp_path), "--json", "shortlist", "prepare", "sec_001", "job_001", "--open"],
+		)
+	assert result.exit_code == 0
+	parsed = json.loads(result.output)
+	assert parsed["data"]["open_result"]["opened"] is True
+	assert parsed["data"]["open_result"]["method"] == "xdg-open"
+
+
+def test_shortlist_open_command_returns_open_result(tmp_path):
+	runner = CliRunner()
+	runner.invoke(
+		cli,
+		[
+			"--data-dir", str(tmp_path),
+			"--json",
+			"shortlist", "add", "sec_001", "job_001",
+			"--title", "Go 开发",
+			"--company", "TestCo",
+		],
+	)
+	with patch("boss_agent_cli.commands.shortlist._open_external_url", return_value={
+		"opened": True,
+		"method": "xdg-open",
+		"url": "https://www.zhipin.com/web/geek/job?query=Go%20%E5%BC%80%E5%8F%91%20TestCo",
+	}):
+		result = runner.invoke(
+			cli,
+			["--data-dir", str(tmp_path), "--json", "shortlist", "open", "sec_001", "job_001"],
+		)
+	assert result.exit_code == 0
+	parsed = json.loads(result.output)
+	assert parsed["data"]["action"] == "open"
+	assert parsed["data"]["open_result"]["opened"] is True
+	assert parsed["hints"]["next_actions"][1] == "boss shortlist prepare sec_001 job_001"
+
+
 def test_shortlist_schema_is_exposed():
 	runner = CliRunner()
 	result = runner.invoke(cli, ["schema"])
@@ -152,3 +211,4 @@ def test_shortlist_schema_is_exposed():
 	parsed = json.loads(result.output)
 	assert "shortlist" in parsed["data"]["commands"]
 	assert parsed["data"]["commands"]["shortlist"]["subcommands"]["prepare"]
+	assert parsed["data"]["commands"]["shortlist"]["subcommands"]["open"]
