@@ -6,10 +6,13 @@ from pathlib import Path
 
 import click
 
+from boss_agent_cli.ai.config import AIConfigStore
+from boss_agent_cli.ai.service import AIService
 from boss_agent_cli.auth.manager import AuthManager
 from boss_agent_cli.commands._platform import get_platform_instance
 from boss_agent_cli.display import handle_error_output, handle_output
 from boss_agent_cli.display import handle_auth_errors
+from boss_agent_cli.rag_reply.adapters.ai_fallback import AIFallbackAdapter
 from boss_agent_cli.rag_reply.adapters.boss_automation import BossAutomationAdapter, BossAutomationError
 from boss_agent_cli.rag_reply.adapters.manual_import import import_messages
 from boss_agent_cli.rag_reply.adapters.mock_envelope import load_and_ingest_mock_envelope
@@ -30,6 +33,28 @@ def _resolve_store(ctx: click.Context) -> RagReplyStore:
 	return store
 
 
+def _build_ai_fallback_adapter(ctx: click.Context) -> AIFallbackAdapter | None:
+	"""Construct the optional local AI fallback adapter."""
+	data_dir = Path(ctx.obj["data_dir"])
+	store = AIConfigStore(data_dir)
+	if not store.is_configured():
+		return None
+	api_key = store.get_api_key()
+	base_url = store.get_base_url()
+	if not api_key or not base_url:
+		return None
+	config = store.load_config()
+	return AIFallbackAdapter(
+		ai_service=AIService(
+			base_url=base_url,
+			api_key=api_key,
+			model=config["ai_model"],
+			temperature=config.get("ai_temperature", 0.7),
+			max_tokens=config.get("ai_max_tokens", 4096),
+		)
+	)
+
+
 def _build_service(ctx: click.Context) -> BossRagReplyService:
 	"""Construct the Boss RAG workflow service."""
 	config = ctx.obj.get("config", {}) if ctx and ctx.obj else {}
@@ -39,7 +64,11 @@ def _build_service(ctx: click.Context) -> BossRagReplyService:
 		api_key=config.get("boss_rag_rag_api_key"),
 		auth_mode=str(config.get("boss_rag_rag_auth_mode", "none")),
 	)
-	return BossRagReplyService(store=_resolve_store(ctx), rag_adapter=rag_adapter)
+	return BossRagReplyService(
+		store=_resolve_store(ctx),
+		rag_adapter=rag_adapter,
+		fallback_adapter=_build_ai_fallback_adapter(ctx),
+	)
 
 
 def _build_boss_adapter(ctx: click.Context) -> BossAutomationAdapter:

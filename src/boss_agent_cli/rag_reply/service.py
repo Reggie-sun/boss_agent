@@ -38,6 +38,18 @@ class RagAdapterProtocol(Protocol):
 		...
 
 
+class FallbackAdapterProtocol(Protocol):
+	def answer(
+		self,
+		*,
+		message_text: str,
+		intent: str,
+		job_summary: str | None,
+		rag_error: str | None,
+	) -> RagAnswerProtocol:
+		...
+
+
 @dataclass(slots=True)
 class ApprovalResult:
 	event: ApprovalEventRecord
@@ -48,9 +60,16 @@ class ApprovalResult:
 class BossRagReplyService:
 	"""Run the local message -> draft -> approval pipeline."""
 
-	def __init__(self, *, store: RagReplyStore, rag_adapter: RagAdapterProtocol) -> None:
+	def __init__(
+		self,
+		*,
+		store: RagReplyStore,
+		rag_adapter: RagAdapterProtocol,
+		fallback_adapter: FallbackAdapterProtocol | None = None,
+	) -> None:
 		self.store = store
 		self.rag_adapter = rag_adapter
+		self.fallback_adapter = fallback_adapter
 
 	def create_draft_for_message(self, message_id: str) -> DraftRecord:
 		message = self.store.get_message(message_id)
@@ -69,6 +88,7 @@ class BossRagReplyService:
 					"message_id": message.message_id,
 					"intent": draft.intent,
 					"risk_labels": draft.risk_labels,
+					"evidence_source": draft.evidence.get("source"),
 				},
 			)
 		)
@@ -124,10 +144,7 @@ class BossRagReplyService:
 		classification: ClassificationResult,
 		decision: ApprovalDecision,
 	) -> DraftRecord:
-		job_summary = None
-		if message.job_id:
-			job = self.store.get_job(message.job_id)
-			job_summary = None if job is None else job.summary
+		job_summary = self._resolve_job_summary(message)
 		rag_session_id = self._build_rag_session_id(message)
 		rag_question = build_rag_question(
 			message.message_text,
@@ -148,6 +165,16 @@ class BossRagReplyService:
 			)
 		)
 		if not rag_result.ok:
+			fallback_draft = self._build_fallback_draft(
+				message=message,
+				classification=classification,
+				decision=decision,
+				job_summary=job_summary,
+				rag_session_id=rag_session_id,
+				rag_error_message=rag_result.error_message,
+			)
+			if fallback_draft is not None:
+				return fallback_draft
 			return DraftRecord.new(
 				conversation_id=message.conversation_id,
 				source_message_id=message.message_id,
@@ -179,6 +206,51 @@ class BossRagReplyService:
 			audit_status="draft_created",
 			rag_session_id=rag_session_id,
 		)
+
+	def _build_fallback_draft(
+		self,
+		*,
+		message: MessageRecord,
+		classification: ClassificationResult,
+		decision: ApprovalDecision,
+		job_summary: str | None,
+		rag_session_id: str,
+		rag_error_message: str | None,
+	) -> DraftRecord | None:
+		if self.fallback_adapter is None:
+			return None
+		fallback_result = self.fallback_adapter.answer(
+			message_text=message.message_text,
+			intent=classification.intent,
+			job_summary=job_summary,
+			rag_error=rag_error_message,
+		)
+		if not fallback_result.ok:
+			return None
+		return DraftRecord.new(
+			conversation_id=message.conversation_id,
+			source_message_id=message.message_id,
+			draft_text=fallback_result.answer,
+			intent=classification.intent,
+			risk_labels=decision.risk_labels,
+			evidence={
+				"source": "ai_fallback",
+				"fallback_from": "enterprise_rag",
+				"rag_error_message": rag_error_message,
+				"reasoning_summary": fallback_result.reasoning_summary,
+				"raw_response": fallback_result.raw_response,
+			},
+			approval_required=True,
+			send_allowed=False,
+			audit_status="draft_created",
+			rag_session_id=rag_session_id,
+		)
+
+	def _resolve_job_summary(self, message: MessageRecord) -> str | None:
+		if not message.job_id:
+			return None
+		job = self.store.get_job(message.job_id)
+		return None if job is None else job.summary
 
 	@staticmethod
 	def _build_rag_session_id(message: MessageRecord) -> str:

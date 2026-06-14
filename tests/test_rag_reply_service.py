@@ -28,6 +28,30 @@ class _FakeRagAdapter:
 		return self.result
 
 
+class _FakeFallbackAdapter:
+	def __init__(self, result: _FakeRagResult) -> None:
+		self.result = result
+		self.calls: list[dict[str, str | None]] = []
+
+	def answer(
+		self,
+		*,
+		message_text: str,
+		intent: str,
+		job_summary: str | None,
+		rag_error: str | None,
+	) -> _FakeRagResult:
+		self.calls.append(
+			{
+				"message_text": message_text,
+				"intent": intent,
+				"job_summary": job_summary,
+				"rag_error": rag_error,
+			}
+		)
+		return self.result
+
+
 def test_draft_command_saves_draft_and_audit_log(tmp_path):
 	store = RagReplyStore(tmp_path / "boss-rag.sqlite3")
 	store.initialize()
@@ -86,6 +110,51 @@ def test_draft_command_persists_closed_record_when_rag_fails(tmp_path):
 	assert draft.send_allowed is False
 	assert draft.approval_required is True
 	assert store.list_audit_logs()
+
+
+def test_draft_command_uses_ai_fallback_when_rag_fails(tmp_path):
+	store = RagReplyStore(tmp_path / "boss-rag.sqlite3")
+	store.initialize()
+	store.save_conversation(ConversationRecord(conversation_id="conv_001", source="manual_import"))
+	store.save_message(
+		MessageRecord(
+			message_id="msg_001",
+			conversation_id="conv_001",
+			message_text="你这个RAG项目具体做了什么？",
+			direction="inbound",
+		)
+	)
+	fallback_adapter = _FakeFallbackAdapter(
+		_FakeRagResult(
+			ok=True,
+			answer="您好，我近期主要在做企业级 RAG 相关项目，覆盖方案设计、实现与落地，如您关注某块我可以进一步展开。",
+			citations=[],
+			raw_response={"strategy": "保守总结"},
+		)
+	)
+	service = BossRagReplyService(
+		store=store,
+		rag_adapter=_FakeRagAdapter(
+			_FakeRagResult(
+				ok=False,
+				answer="",
+				citations=[],
+				error_message="timed out",
+				audit_status="rag_failed",
+			)
+		),
+		fallback_adapter=fallback_adapter,
+	)
+
+	draft = service.create_draft_for_message("msg_001")
+
+	assert draft.audit_status == "draft_created"
+	assert draft.evidence["source"] == "ai_fallback"
+	assert draft.evidence["fallback_from"] == "enterprise_rag"
+	assert draft.evidence["rag_error_message"] == "timed out"
+	assert draft.send_allowed is False
+	assert draft.approval_required is True
+	assert fallback_adapter.calls[0]["intent"] == "project_question"
 
 
 def test_resume_share_request_generates_local_approval_draft(tmp_path):

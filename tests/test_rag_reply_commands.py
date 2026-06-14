@@ -5,6 +5,7 @@ from types import SimpleNamespace
 from click.testing import CliRunner
 
 import boss_agent_cli.commands.rag as rag_commands
+from boss_agent_cli.ai.config import AIConfigStore
 from boss_agent_cli.main import cli
 from boss_agent_cli.rag_reply.adapters.boss_automation import SyncJobsResult, SyncMessagesResult
 from boss_agent_cli.rag_reply.models import DraftRecord
@@ -145,7 +146,22 @@ def test_rag_build_service_passes_rag_auth_config(monkeypatch, tmp_path: Path):
 			captured["api_key"] = api_key
 			captured["auth_mode"] = auth_mode
 
+	class _FakeFallbackAdapter:
+		def __init__(self, *, ai_service):
+			captured["fallback_model"] = ai_service.model
+			captured["fallback_base_url"] = ai_service.base_url
+
 	monkeypatch.setattr(rag_commands, "RagHttpAdapter", _FakeRagHttpAdapter)
+	monkeypatch.setattr(rag_commands, "AIFallbackAdapter", _FakeFallbackAdapter)
+	monkeypatch.setattr(rag_commands, "_resolve_store", lambda ctx: "store")
+	monkeypatch.setenv("BOSS_AGENT_MACHINE_ID", "test-machine")
+	ai_store = AIConfigStore(tmp_path)
+	ai_store.save_config(
+		ai_provider="openai",
+		ai_model="gpt-4o-mini",
+		ai_base_url="https://api.openai.com/v1",
+	)
+	ai_store.save_api_key("test-key")
 	ctx = SimpleNamespace(
 		obj={
 			"data_dir": tmp_path,
@@ -166,4 +182,6 @@ def test_rag_build_service_passes_rag_auth_config(monkeypatch, tmp_path: Path):
 		"timeout_seconds": 11,
 		"api_key": "configured-rag-integration-key-123456",
 		"auth_mode": "x_api_key",
+		"fallback_model": "gpt-4o-mini",
+		"fallback_base_url": "https://api.openai.com/v1",
 	}
