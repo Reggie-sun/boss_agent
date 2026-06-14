@@ -18,6 +18,7 @@ from boss_agent_cli.rag_reply.adapters.manual_import import import_messages
 from boss_agent_cli.rag_reply.adapters.mock_envelope import load_and_ingest_mock_envelope
 from boss_agent_cli.rag_reply.adapters.rag_http import RagHttpAdapter
 from boss_agent_cli.rag_reply.langchain_memory import build_thread_payload
+from boss_agent_cli.rag_reply.models import ConversationRecord, MessageRecord, new_id
 from boss_agent_cli.rag_reply.review import draft_to_payload
 from boss_agent_cli.rag_reply.service import BossRagReplyService
 from boss_agent_cli.rag_reply.store import RagReplyStore
@@ -89,6 +90,66 @@ def _build_boss_adapter(ctx: click.Context) -> BossAutomationAdapter:
 	auth = AuthManager(data_dir, logger=logger, platform=ctx.obj.get("platform", "zhipin"))
 	platform = get_platform_instance(ctx, auth)
 	return BossAutomationAdapter(platform=platform, store=_resolve_store(ctx))
+
+
+def _ensure_conversation(
+	store: RagReplyStore,
+	*,
+	conversation_id: str,
+	job_id: str | None = None,
+	recruiter_id: str | None = None,
+) -> ConversationRecord:
+	"""Create or refresh a frontend-driven conversation record."""
+	existing = store.get_conversation(conversation_id)
+	return ConversationRecord(
+		conversation_id=conversation_id,
+		source="frontend_bridge",
+		job_id=job_id or (existing.job_id if existing else None),
+		recruiter_id=recruiter_id or (existing.recruiter_id if existing else None),
+		channel=existing.channel if existing else "boss",
+		last_message_at=existing.last_message_at if existing else None,
+		state=existing.state if existing else {"origin": "interview-simulator"},
+	)
+
+
+def _persist_frontend_question(
+	store: RagReplyStore,
+	*,
+	conversation_id: str,
+	question: str,
+	job_id: str | None = None,
+	recruiter_id: str | None = None,
+) -> MessageRecord:
+	"""Persist one frontend prompt into the shared Boss RAG store."""
+	conversation = _ensure_conversation(
+		store,
+		conversation_id=conversation_id,
+		job_id=job_id,
+		recruiter_id=recruiter_id,
+	)
+	message = MessageRecord(
+		message_id=new_id("frontmsg"),
+		conversation_id=conversation_id,
+		message_text=question,
+		direction="inbound",
+		job_id=conversation.job_id,
+		recruiter_id=conversation.recruiter_id,
+		source="frontend_prompt",
+		raw={"origin": "interview-simulator"},
+	)
+	store.save_conversation(
+		ConversationRecord(
+			conversation_id=conversation.conversation_id,
+			source=conversation.source,
+			job_id=conversation.job_id,
+			recruiter_id=conversation.recruiter_id,
+			channel=conversation.channel,
+			last_message_at=message.created_at,
+			state=conversation.state,
+		)
+	)
+	store.save_message(message)
+	return message
 
 
 def _require_message_read_enabled(ctx: click.Context) -> bool:
@@ -302,6 +363,53 @@ def rag_review_cmd(ctx: click.Context, draft_id: str | None) -> None:
 		"rag-review",
 		payload,
 		render=lambda data: click.echo("Draft review ready.", err=True),
+	)
+
+
+@rag_group.command("ask")
+@click.option("--conversation-id", required=True)
+@click.option("--question", required=True)
+@click.option("--job-id", default=None)
+@click.option("--recruiter-id", default=None)
+@click.pass_context
+def rag_ask_cmd(
+	ctx: click.Context,
+	conversation_id: str,
+	question: str,
+	job_id: str | None,
+	recruiter_id: str | None,
+) -> None:
+	service = _build_service(ctx)
+	store = service.store
+	message = _persist_frontend_question(
+		store,
+		conversation_id=conversation_id,
+		question=question.strip(),
+		job_id=job_id,
+		recruiter_id=recruiter_id,
+	)
+	draft = service.create_draft_for_message(message.message_id)
+	evidence = draft.evidence if isinstance(draft.evidence, dict) else {}
+	handle_output(
+		ctx,
+		"rag-ask",
+		{
+			"conversation_id": conversation_id,
+			"message_id": message.message_id,
+			"answer": draft.draft_text,
+			"citations": evidence.get("citations") if isinstance(evidence.get("citations"), list) else [],
+			"reasoning_summary": evidence.get("reasoning_summary")
+			if isinstance(evidence.get("reasoning_summary"), dict)
+			else None,
+			"error_message": str(evidence.get("error_message") or evidence.get("rag_error_message") or ""),
+			"audit_status": draft.audit_status,
+			"draft": draft_to_payload(draft),
+			"thread": build_thread_payload(store=store, conversation_id=conversation_id),
+		},
+		render=lambda data: click.echo(
+			f"Created draft for {data['conversation_id']} from {data['message_id']}.",
+			err=True,
+		),
 	)
 
 

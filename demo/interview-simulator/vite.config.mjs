@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { spawnSync } from "node:child_process";
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 
@@ -15,13 +16,16 @@ function parseEnvFile(filePath) {
   return values;
 }
 
-function loadRagConfig() {
+function loadBridgeConfig() {
   const repoRoot = path.resolve(process.cwd(), "..", "..");
   const repoEnv = parseEnvFile(path.join(repoRoot, ".env"));
   const get = (key, fallback = "") =>
     process.env[key] || repoEnv[key] || fallback;
 
   return {
+    repoRoot,
+    dataDir: get("BOSS_RAG_DATA_DIR", "~/.boss-agent"),
+    pythonBin: get("BOSS_RAG_PYTHON_BIN", get("PYTHON", "python")),
     baseUrl: get("BOSS_RAG_RAG_BASE_URL", "").replace(/\/$/, ""),
     authMode: get("BOSS_RAG_RAG_AUTH_MODE", "none").toLowerCase(),
     apiKey:
@@ -30,17 +34,6 @@ function loadRagConfig() {
       get("RAG_AUTH_API_KEY") ||
       "",
   };
-}
-
-function buildHeaders(config) {
-  if (!config.authMode || config.authMode === "none") return {};
-  if (config.authMode === "x_api_key") {
-    return config.apiKey ? { "X-API-Key": config.apiKey } : {};
-  }
-  if (config.authMode === "bearer") {
-    return config.apiKey ? { Authorization: `Bearer ${config.apiKey}` } : {};
-  }
-  return {};
 }
 
 function readBody(req) {
@@ -54,47 +47,109 @@ function readBody(req) {
   });
 }
 
+function normalizeThread(sessionId, messages) {
+  const safeMessages = Array.isArray(messages) ? messages : [];
+  return {
+    sessionId,
+    turnCount: safeMessages.filter((item) => item.role === "user").length,
+    messageCount: safeMessages.length,
+    messages: safeMessages,
+  };
+}
+
+function runBossJsonCommand(config, args) {
+  const child = spawnSync(
+    config.pythonBin,
+    [
+      "-c",
+      "from boss_agent_cli.main import cli; import sys; cli.main(args=sys.argv[1:], standalone_mode=False)",
+      "--json",
+      "--data-dir",
+      config.dataDir,
+      ...args,
+    ],
+    {
+      cwd: config.repoRoot,
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        PYTHONPATH: process.env.PYTHONPATH
+          ? `${config.repoRoot}/src:${process.env.PYTHONPATH}`
+          : `${config.repoRoot}/src`,
+      },
+    },
+  );
+
+  if (child.error) {
+    throw child.error;
+  }
+  if (child.status !== 0 && !child.stdout.trim()) {
+    throw new Error(child.stderr.trim() || `boss command failed with exit code ${child.status}`);
+  }
+
+  let parsed = {};
+  try {
+    parsed = child.stdout.trim() ? JSON.parse(child.stdout) : {};
+  } catch (error) {
+    throw new Error(
+      `无法解析 boss-agent-cli 输出: ${child.stdout.trim() || child.stderr.trim() || String(error)}`,
+    );
+  }
+
+  if (!parsed.ok) {
+    const errorMessage =
+      parsed.error?.message ||
+      parsed.errorMessage ||
+      child.stderr.trim() ||
+      "boss-agent-cli 返回错误。";
+    const commandError = new Error(errorMessage);
+    commandError.commandPayload = parsed;
+    throw commandError;
+  }
+  return parsed;
+}
+
 function createRagBridgePlugin() {
-  const ragConfig = loadRagConfig();
-  const sessionThreads = new Map();
-
-  function getThread(sessionId) {
-    const existing = sessionThreads.get(sessionId);
-    if (existing) return existing;
-    const created = [];
-    sessionThreads.set(sessionId, created);
-    return created;
-  }
-
-  function serializeThread(sessionId) {
-    const messages = getThread(sessionId).slice(-24);
-    return {
-      sessionId,
-      turnCount: messages.filter((item) => item.role === "user").length,
-      messageCount: messages.length,
-      messages,
-    };
-  }
+  const bridgeConfig = loadBridgeConfig();
 
   async function handler(req, res) {
     if (!req.url) return false;
 
     if (req.method === "GET" && req.url === "/api/rag/health") {
-      const ready =
-        Boolean(ragConfig.baseUrl) &&
-        (ragConfig.authMode === "none" || Boolean(buildHeaders(ragConfig)));
       res.setHeader("Content-Type", "application/json; charset=utf-8");
-      res.end(
-        JSON.stringify({
-          configured: Boolean(ragConfig.baseUrl),
-          ready,
-          authMode: ragConfig.authMode || "none",
-          endpoint: "/api/rag/ask",
-          errorMessage: ragConfig.baseUrl
-            ? ""
-            : "未找到 BOSS_RAG_RAG_BASE_URL，无法把前端请求转发给 Enterprise RAG。",
-        }),
-      );
+      try {
+        runBossJsonCommand(bridgeConfig, ["rag", "init"]);
+        const ready =
+          Boolean(bridgeConfig.baseUrl) &&
+          (bridgeConfig.authMode === "none" || Boolean(bridgeConfig.apiKey));
+        res.end(
+          JSON.stringify({
+            configured: Boolean(bridgeConfig.baseUrl),
+            ready,
+            authMode: bridgeConfig.authMode || "none",
+            endpoint: "/api/rag/ask",
+            workflow: "boss-agent-cli",
+            dataDir: bridgeConfig.dataDir,
+            errorMessage: bridgeConfig.baseUrl
+              ? ""
+              : "未找到 BOSS_RAG_RAG_BASE_URL，BOSS_AGENT workflow 无法调用 Enterprise RAG。",
+          }),
+        );
+      } catch (error) {
+        res.statusCode = 500;
+        res.end(
+          JSON.stringify({
+            configured: Boolean(bridgeConfig.baseUrl),
+            ready: false,
+            authMode: bridgeConfig.authMode || "none",
+            endpoint: "/api/rag/ask",
+            workflow: "boss-agent-cli",
+            dataDir: bridgeConfig.dataDir,
+            errorMessage:
+              error instanceof Error ? error.message : "本地 workflow 初始化失败。",
+          }),
+        );
+      }
       return true;
     }
 
@@ -107,12 +162,30 @@ function createRagBridgePlugin() {
         res.end(JSON.stringify({ ok: false, errorMessage: "sessionId 不能为空。" }));
         return true;
       }
-      res.end(
-        JSON.stringify({
-          ok: true,
-          thread: serializeThread(sessionId),
-        }),
-      );
+      try {
+        const payload = runBossJsonCommand(bridgeConfig, [
+          "rag",
+          "thread",
+          "--conversation-id",
+          sessionId,
+        ]);
+        res.end(
+          JSON.stringify({
+            ok: true,
+            thread: normalizeThread(sessionId, payload.data?.messages),
+          }),
+        );
+      } catch (error) {
+        const payload = error?.commandPayload;
+        res.statusCode = payload?.error?.code === "INVALID_PARAM" ? 400 : 500;
+        res.end(
+          JSON.stringify({
+            ok: false,
+            errorMessage:
+              error instanceof Error ? error.message : "读取多轮 memory 失败。",
+          }),
+        );
+      }
       return true;
     }
 
@@ -120,13 +193,13 @@ function createRagBridgePlugin() {
 
     res.setHeader("Content-Type", "application/json; charset=utf-8");
 
-    if (!ragConfig.baseUrl) {
+    if (!bridgeConfig.baseUrl) {
       res.statusCode = 500;
       res.end(
         JSON.stringify({
           ok: false,
           errorMessage:
-            "BOSS_RAG_RAG_BASE_URL 未配置，无法调用 Enterprise RAG。",
+            "BOSS_RAG_RAG_BASE_URL 未配置，无法通过 BOSS_AGENT workflow 调用 Enterprise RAG。",
         }),
       );
       return true;
@@ -137,8 +210,6 @@ function createRagBridgePlugin() {
       const parsed = rawBody ? JSON.parse(rawBody) : {};
       const question = String(parsed.question || "").trim();
       const sessionId = String(parsed.sessionId || "").trim() || `session-${Date.now()}`;
-      const mode = String(parsed.mode || "accurate");
-      const thread = getThread(sessionId);
 
       if (!question) {
         res.statusCode = 400;
@@ -146,90 +217,68 @@ function createRagBridgePlugin() {
         return true;
       }
 
-      thread.push({
-        id: `user-${Date.now()}`,
-        role: "user",
-        content: question,
-        source: "frontend_prompt",
-        createdAt: new Date().toISOString(),
-      });
+      const payload = runBossJsonCommand(bridgeConfig, [
+        "rag",
+        "ask",
+        "--conversation-id",
+        sessionId,
+        "--question",
+        question,
+      ]);
+      const data = payload.data || {};
+      const draft = data.draft || {};
+      const thread = normalizeThread(sessionId, data.thread);
 
-      const upstream = await fetch(`${ragConfig.baseUrl}/api/v1/chat/ask`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          ...buildHeaders(ragConfig),
-        },
-        body: JSON.stringify({
-          question,
-          session_id: sessionId,
-          mode,
-        }),
-      });
-
-      const text = await upstream.text();
-      let payload = {};
-      try {
-        payload = text ? JSON.parse(text) : {};
-      } catch {
-        payload = { answer: text };
-      }
-
-      if (!upstream.ok) {
-        res.statusCode = upstream.status;
-        thread.push({
-          id: `error-${Date.now()}`,
-          role: "assistant",
-          content:
-            payload.error?.message ||
-            payload.message ||
-            `上游 RAG 返回 HTTP ${upstream.status}`,
-          source: "rag_error",
-          createdAt: new Date().toISOString(),
-        });
+      if (data.audit_status === "rag_failed" && !String(data.answer || "").trim()) {
+        res.statusCode = 502;
         res.end(
           JSON.stringify({
             ok: false,
             errorMessage:
-              payload.error?.message ||
-              payload.message ||
-              `上游 RAG 返回 HTTP ${upstream.status}`,
-            thread: serializeThread(sessionId),
+              data.error_message || "BOSS_AGENT workflow 未能生成可用回答。",
+            auditStatus: String(data.audit_status || "rag_failed"),
+            thread,
           }),
         );
         return true;
       }
 
-      thread.push({
-        id: `assistant-${Date.now()}`,
-        role: "assistant",
-        content: String(payload.answer || ""),
-        source: "enterprise_rag",
-        createdAt: new Date().toISOString(),
-      });
-
       res.end(
         JSON.stringify({
           ok: true,
-          answer: String(payload.answer || ""),
-          citations: Array.isArray(payload.citations) ? payload.citations : [],
+          answer: String(data.answer || draft.draft_text || ""),
+          citations: Array.isArray(data.citations) ? data.citations : [],
           reasoningSummary:
-            payload.reasoning_summary && typeof payload.reasoning_summary === "object"
-              ? payload.reasoning_summary
+            data.reasoning_summary && typeof data.reasoning_summary === "object"
+              ? data.reasoning_summary
               : null,
-          auditStatus: "answered",
-          rawResponse: payload,
-          thread: serializeThread(sessionId),
+          auditStatus: String(data.audit_status || draft.audit_status || "answered"),
+          rawResponse: {
+            command: payload.command,
+            conversationId: data.conversation_id,
+            draft,
+            question,
+          },
+          thread,
         }),
       );
       return true;
     } catch (error) {
-      res.statusCode = 500;
+      const payload = error?.commandPayload;
+      const message =
+        error instanceof Error ? error.message : "本地 RAG 代理调用失败。";
+      const status =
+        payload?.error?.code === "INVALID_PARAM"
+          ? 400
+          : payload?.error?.recoverable
+            ? 502
+            : 500;
+      res.statusCode = status;
       res.end(
         JSON.stringify({
           ok: false,
-          errorMessage:
-            error instanceof Error ? error.message : "本地 RAG 代理调用失败。",
+          errorMessage: message,
+          auditStatus: "rag_failed",
         }),
       );
       return true;

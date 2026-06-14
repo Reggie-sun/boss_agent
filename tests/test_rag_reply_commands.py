@@ -8,7 +8,8 @@ import boss_agent_cli.commands.rag as rag_commands
 from boss_agent_cli.ai.config import AIConfigStore
 from boss_agent_cli.main import cli
 from boss_agent_cli.rag_reply.adapters.boss_automation import SyncJobsResult, SyncMessagesResult
-from boss_agent_cli.rag_reply.models import DraftRecord, MessageRecord
+from boss_agent_cli.rag_reply.models import ConversationRecord, DraftRecord, MessageRecord
+from boss_agent_cli.rag_reply.service import BossRagReplyService
 from boss_agent_cli.rag_reply.store import RagReplyStore
 
 
@@ -109,6 +110,74 @@ def test_rag_thread_returns_conversation_memory(tmp_path: Path):
 	assert parsed["command"] == "rag-thread"
 	assert len(parsed["data"]["messages"]) == 2
 	assert parsed["data"]["messages"][1]["role"] == "assistant"
+
+
+def test_rag_ask_persists_frontend_turn_and_returns_thread(monkeypatch, tmp_path: Path):
+	store = RagReplyStore(tmp_path / "boss-rag.sqlite3")
+	store.initialize()
+	store.save_conversation(ConversationRecord(conversation_id="demo-session-001", source="frontend_bridge"))
+	store.save_message(
+		MessageRecord(
+			message_id="msg_prev",
+			conversation_id="demo-session-001",
+			message_text="之前聊过多轮对话能力吗？",
+			direction="inbound",
+			source="frontend_prompt",
+		)
+	)
+	store.save_message(
+		MessageRecord(
+			message_id="draftmsg_msg_prev",
+			conversation_id="demo-session-001",
+			message_text="可以，我会把上下文一起带给 RAG。",
+			direction="outbound",
+			message_type="draft",
+			source="rag_draft_memory",
+		)
+	)
+	service = BossRagReplyService(
+		store=store,
+		rag_adapter=SimpleNamespace(
+			answer=lambda **kwargs: SimpleNamespace(
+				ok=True,
+				answer="这次已经接到同一份持久 memory 了。",
+				citations=[{"id": "c1"}],
+				reasoning_summary={"steps": ["memory", "rag"]},
+				raw_response={"answer": "这次已经接到同一份持久 memory 了。"},
+				error_message=None,
+				audit_status="draft_created",
+				send_allowed=False,
+				approval_required=True,
+			)
+		),
+	)
+	monkeypatch.setattr(rag_commands, "_build_service", lambda ctx: service)
+	runner = CliRunner()
+
+	result = runner.invoke(
+		cli,
+		[
+			"--json",
+			"--data-dir",
+			str(tmp_path),
+			"rag",
+			"ask",
+			"--conversation-id",
+			"demo-session-001",
+			"--question",
+			"你这个RAG项目具体做了什么？",
+		],
+	)
+
+	assert result.exit_code == 0
+	parsed = json.loads(result.output)
+	assert parsed["ok"] is True
+	assert parsed["command"] == "rag-ask"
+	assert parsed["data"]["answer"] == "这次已经接到同一份持久 memory 了。"
+	assert parsed["data"]["thread"][-1]["role"] == "assistant"
+	assert len(parsed["data"]["thread"]) == 4
+	assert store.list_messages("demo-session-001")[-2].source == "frontend_prompt"
+	assert store.list_messages("demo-session-001")[-1].source == "rag_draft_memory"
 
 
 class _FakeBossAdapter:
