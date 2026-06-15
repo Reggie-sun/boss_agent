@@ -117,6 +117,7 @@ function createRagBridgePlugin() {
     const isAgentHealth = req.url === "/api/agent/health" || req.url === "/api/rag/health";
     const isAgentThread = req.url.startsWith("/api/agent/thread") || req.url.startsWith("/api/rag/thread");
     const isAgentAsk = req.url === "/api/agent/ask" || req.url === "/api/rag/ask";
+    const isAgentSend = req.url === "/api/agent/send" || req.url === "/api/rag/send";
 
     if (req.method === "GET" && isAgentHealth) {
       res.setHeader("Content-Type", "application/json; charset=utf-8");
@@ -130,7 +131,7 @@ function createRagBridgePlugin() {
             configured: Boolean(bridgeConfig.baseUrl),
             ready,
             authMode: bridgeConfig.authMode || "none",
-            endpoint: "/api/agent/ask",
+            endpoint: "/api/agent/ask + /api/agent/send",
             workflow: "boss-agent-cli",
             dataDir: bridgeConfig.dataDir,
             errorMessage: bridgeConfig.baseUrl
@@ -145,7 +146,7 @@ function createRagBridgePlugin() {
             configured: Boolean(bridgeConfig.baseUrl),
             ready: false,
             authMode: bridgeConfig.authMode || "none",
-            endpoint: "/api/agent/ask",
+            endpoint: "/api/agent/ask + /api/agent/send",
             workflow: "boss-agent-cli",
             dataDir: bridgeConfig.dataDir,
             errorMessage:
@@ -186,6 +187,82 @@ function createRagBridgePlugin() {
             ok: false,
             errorMessage:
               error instanceof Error ? error.message : "读取多轮 memory 失败。",
+          }),
+        );
+      }
+      return true;
+    }
+
+    if (req.method === "POST" && isAgentSend) {
+      res.setHeader("Content-Type", "application/json; charset=utf-8");
+      try {
+        const rawBody = await readBody(req);
+        const parsed = rawBody ? JSON.parse(rawBody) : {};
+        const draftId = String(parsed.draftId || "").trim();
+        const securityId = String(parsed.security_id || "").trim();
+        const sendResume = Boolean(parsed.send_resume);
+
+        if (!draftId) {
+          res.statusCode = 400;
+          res.end(JSON.stringify({ ok: false, errorMessage: "draftId 不能为空。" }));
+          return true;
+        }
+
+        const args = ["agent", "send", draftId];
+        if (securityId) args.push("--security-id", securityId);
+        if (sendResume) args.push("--send-resume");
+
+        const payload = runBossJsonCommand(bridgeConfig, args);
+        const data = payload.data || {};
+        const deliveryStatus = !data.message_sent
+          ? "message_failed"
+          : sendResume && !data.resume_sent
+            ? "resume_failed"
+            : "sent";
+
+        res.end(
+          JSON.stringify({
+            ok: true,
+            draftId: String(data.draft?.draft_id || draftId),
+            delivery: {
+              status: deliveryStatus,
+              message_sent: Boolean(data.message_sent),
+              resume_sent: Boolean(data.resume_sent),
+              send_resume: Boolean(data.send_resume),
+              security_id: String(data.security_id || securityId),
+              results: Array.isArray(data.results) ? data.results : [],
+              error_message: String(data.error_message || ""),
+            },
+            rawResponse: {
+              command: payload.command,
+              draft: data.draft || null,
+            },
+          }),
+        );
+      } catch (error) {
+        const payload = error?.commandPayload;
+        const errorMessage =
+          error instanceof Error ? error.message : "发送到 Boss 对话失败。";
+        const normalizedStatus = errorMessage.includes("security_id")
+          ? "missing_security_id"
+          : "message_failed";
+        const status =
+          payload?.error?.code === "INVALID_PARAM"
+            ? 400
+            : payload?.error?.recoverable
+              ? 502
+              : 500;
+        res.statusCode = status;
+        res.end(
+          JSON.stringify({
+            ok: false,
+            errorMessage,
+            delivery: {
+              status: normalizedStatus,
+              message_sent: false,
+              resume_sent: false,
+              error_message: errorMessage,
+            },
           }),
         );
       }
@@ -353,15 +430,18 @@ function createRagBridgePlugin() {
       }
 
       res.end(
-        JSON.stringify({
-          ok: true,
-          answer: String(data.answer || draft.draft_text || ""),
-          citations: Array.isArray(data.citations) ? data.citations : [],
+          JSON.stringify({
+            ok: true,
+            answer: String(data.answer || draft.draft_text || ""),
+            citations: Array.isArray(data.citations) ? data.citations : [],
           reasoningSummary:
             data.reasoning_summary && typeof data.reasoning_summary === "object"
               ? data.reasoning_summary
               : null,
           auditStatus: String(data.audit_status || draft.audit_status || "answered"),
+          draftId: String(draft.draft_id || ""),
+          draftIntent: String(draft.intent || ""),
+          draft,
           rawResponse: {
             command: payload.command,
             conversationId: data.conversation_id,

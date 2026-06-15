@@ -110,7 +110,7 @@ def test_required_tools_present():
 		"boss_ai_interview_prep", "boss_ai_chat_coach",
 		"boss_resume_list", "boss_resume_show",
 		"boss_ai_analyze_jd", "boss_ai_optimize", "boss_ai_suggest",
-		"boss_agent_init", "boss_agent_draft", "boss_agent_approve",
+		"boss_agent_init", "boss_agent_draft", "boss_agent_approve", "boss_agent_send",
 		"boss_watch_list",
 		"boss_preset_list", "boss_shortlist_list", "boss_shortlist_prepare", "boss_shortlist_open", "boss_shortlist_mark_applied",
 		"boss_hr_jobs",
@@ -122,7 +122,7 @@ def test_required_tools_present():
 
 def test_tool_count():
 	"""工具总数应与当前注册一致。"""
-	assert len(TOOLS) == 44
+	assert len(TOOLS) == 45
 
 
 def test_search_tool_requires_query():
@@ -693,6 +693,11 @@ def test_build_args_agent_approve():
 	assert args == ["agent", "approve", "draft-1", "--copy"]
 
 
+def test_build_args_agent_send():
+	args = _build_args("boss_agent_send", {"draft_id": "draft-1", "security_id": "sec-1", "send_resume": True})
+	assert args == ["agent", "send", "draft-1", "--security-id", "sec-1", "--send-resume"]
+
+
 def test_build_args_agent_audit():
 	args = _build_args("boss_agent_audit", {"draft_id": "draft-1"})
 	assert args == ["agent", "audit", "--draft-id", "draft-1"]
@@ -700,6 +705,10 @@ def test_build_args_agent_audit():
 
 def test_build_args_legacy_rag_alias_still_routes_to_agent():
 	assert _build_args("boss_rag_init", {}) == ["agent", "init"]
+
+
+def test_build_args_legacy_rag_send_alias_still_routes_to_agent():
+	assert _build_args("boss_rag_send", {"draft_id": "draft-1"}) == ["agent", "send", "draft-1"]
 
 
 def test_build_args_watch_list():
@@ -720,7 +729,7 @@ def test_build_args_shortlist_list():
 
 def test_tool_count_after_pr41():
 	"""协议服务工具总数应与当前 MCP 暴露能力完全一致。"""
-	assert len(TOOLS) == 44
+	assert len(TOOLS) == 45
 
 
 def test_build_args_shortlist_add():

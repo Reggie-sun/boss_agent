@@ -865,7 +865,7 @@ SCHEMA_DATA = {
 			},
 		},
 		"agent": {
-			"description": "Boss Agent 回复工作流（子命令：init/import-messages/ingest-mock/sync-jobs/sync-messages/draft/review/ask/thread/approve/audit）。其中 sync-messages 仍需显式开启 boss_rag_allow_message_read=true；`rag` 为兼容旧入口。",
+			"description": "Boss Agent 回复工作流（子命令：init/import-messages/ingest-mock/sync-jobs/sync-messages/draft/review/ask/thread/approve/send/audit）。其中 sync-messages 仍需显式开启 boss_rag_allow_message_read=true；`send` 会真实调用 Boss 聊天发送；`rag` 为兼容旧入口。",
 			"args": [],
 			"options": {},
 			"subcommands": {
@@ -879,6 +879,7 @@ SCHEMA_DATA = {
 				"ask": "以前端问题写入本地 store，并返回共享 memory + 草稿答案",
 				"thread": "查看 conversation 级别的本地多轮 memory / thread 消息",
 				"approve": "批准草稿，可选复制到剪贴板",
+				"send": "将 Agent 草稿真实发送到 Boss 聊天，可选同步发送在线简历",
 				"audit": "查看 Agent workflow 审计日志",
 			},
 		},

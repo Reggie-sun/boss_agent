@@ -30,6 +30,8 @@ const emptyAnswer = {
   citations: [],
   reasoningSummary: null,
   delivery: null,
+  draftId: "",
+  draftIntent: "",
   auditStatus: "idle",
   errorMessage: "",
   latencyMs: null,
@@ -151,6 +153,8 @@ export function App() {
   const [searchCity, setSearchCity] = useState("北京");
   const [searchResults, setSearchResults] = useState([]);
   const [searchLoading, setSearchLoading] = useState(false);
+  const [isSendingToBoss, setIsSendingToBoss] = useState(false);
+  const [sendResumeWithDraft, setSendResumeWithDraft] = useState(false);
 
   const reasoningItems = useMemo(
     () => normalizeReasoningSummary(result.reasoningSummary),
@@ -287,7 +291,6 @@ export function App() {
           mode: "accurate",
           job_id: applyForm.job_id.trim(),
           security_id: applyForm.security_id.trim(),
-          auto_send_resume: Boolean(applyForm.security_id.trim()),
         }),
       });
       const payload = await response.json();
@@ -310,6 +313,8 @@ export function App() {
           payload.delivery && typeof payload.delivery === "object"
             ? payload.delivery
             : null,
+        draftId: String(payload.draftId || ""),
+        draftIntent: String(payload.draftIntent || ""),
         auditStatus: String(payload.auditStatus || "answered"),
         errorMessage: "",
         latencyMs: Math.round(performance.now() - start),
@@ -321,6 +326,9 @@ export function App() {
       };
 
       setResult(nextResult);
+      setSendResumeWithDraft(
+        String(payload.draftIntent || "") === "resume_share_request",
+      );
       setSelectedCitationIndex(0);
       if (payload.thread?.messages) {
         setThread(payload.thread.messages);
@@ -363,6 +371,69 @@ export function App() {
       ]);
     } finally {
       setIsLoading(false);
+    }
+  }
+
+  async function handleSendToBoss() {
+    if (!result.draftId || isSendingToBoss) return;
+
+    setIsSendingToBoss(true);
+    try {
+      const response = await fetch("/api/agent/send", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          draftId: result.draftId,
+          sessionId,
+          security_id: applyForm.security_id.trim(),
+          send_resume: sendResumeWithDraft,
+        }),
+      });
+      const payload = await response.json();
+      if (!response.ok || !payload.ok) {
+        const errorMessage = payload.errorMessage || "发送到 Boss 对话失败。";
+        setResult((current) => ({
+          ...current,
+          delivery:
+            payload.delivery && typeof payload.delivery === "object"
+              ? payload.delivery
+              : {
+                  status: errorMessage.includes("security_id")
+                    ? "missing_security_id"
+                    : "message_failed",
+                  message_sent: false,
+                  resume_sent: false,
+                  error_message: errorMessage,
+                },
+        }));
+        return;
+      }
+
+      setResult((current) => ({
+        ...current,
+        delivery:
+          payload.delivery && typeof payload.delivery === "object"
+            ? payload.delivery
+            : current.delivery,
+      }));
+    } catch (error) {
+      const errorMessage =
+        error instanceof Error ? error.message : "发送到 Boss 对话失败。";
+      setResult((current) => ({
+        ...current,
+        delivery: {
+          status: errorMessage.includes("security_id")
+            ? "missing_security_id"
+            : "message_failed",
+          message_sent: false,
+          resume_sent: false,
+          error_message: errorMessage,
+        },
+      }));
+    } finally {
+      setIsSendingToBoss(false);
     }
   }
 
@@ -514,13 +585,21 @@ export function App() {
                     : "等待你发起问题"}
               </p>
               {result.delivery?.status === "sent" ? (
-                <p>已通过当前对话上下文发送在线简历。</p>
+                <p>
+                  {result.delivery.resume_sent
+                    ? "已通过 Boss 真实发送消息，并附带在线简历。"
+                    : "已通过 Boss 真实发送这条 Agent 草稿消息。"}
+                </p>
               ) : result.delivery?.status === "disabled" ? (
                 <p>已识别为发简历请求，但本地未开启自动发送。</p>
               ) : result.delivery?.status === "missing_security_id" ? (
-                <p>已识别为发简历请求，但当前没有可用的 `security_id`。</p>
+                <p>发送到 Boss 失败：当前没有可用的 `security_id`。</p>
               ) : result.delivery?.status === "resume_failed" || result.delivery?.status === "message_failed" ? (
-                <p>已尝试发送简历，但执行失败：{result.delivery.error_message || "未知错误"}。</p>
+                <p>
+                  {result.delivery.status === "resume_failed"
+                    ? `消息已发送，但在线简历发送失败：${result.delivery.error_message || "未知错误"}。`
+                    : `发送到 Boss 失败：${result.delivery.error_message || "未知错误"}。`}
+                </p>
               ) : null}
             </div>
             <div className="answer-region__status">
@@ -562,6 +641,41 @@ export function App() {
               </div>
             )}
           </div>
+
+          {result.answer ? (
+            <div className="answer-actions">
+              <div className="answer-actions__meta">
+                <strong>发送到 Boss</strong>
+                <span>
+                  {result.draftId
+                    ? "这一步会复用 `boss agent send`，由后端通过 CDP 真实发送。"
+                    : "当前回答还没有可发送的 draft_id。"}
+                </span>
+              </div>
+              <div className="answer-actions__controls">
+                <label className="send-toggle">
+                  <input
+                    type="checkbox"
+                    checked={sendResumeWithDraft}
+                    onChange={(event) => setSendResumeWithDraft(event.target.checked)}
+                  />
+                  <span>同时发送在线简历</span>
+                </label>
+                <button
+                  type="button"
+                  className="inline-action inline-action--primary"
+                  onClick={handleSendToBoss}
+                  disabled={
+                    isSendingToBoss ||
+                    !result.draftId
+                  }
+                >
+                  <PaperPlaneTilt size={16} weight="fill" />
+                  {isSendingToBoss ? "发送中..." : "发送到 Boss"}
+                </button>
+              </div>
+            </div>
+          ) : null}
         </section>
 
 {/* ── BOSS 直聘全自动投递 ──────────────────────────────── */}
@@ -799,13 +913,15 @@ export function App() {
               <span className="outline-index">3</span>
               <span>返回 answer / citations / reasoning，并同步多轮 memory</span>
             </li>
-            {result.delivery ? (
-              <li className={result.delivery.status === "sent" ? "is-current" : ""}>
+            {result.draftId ? (
+              <li className={result.delivery?.status === "sent" ? "is-current" : ""}>
                 <span className="outline-index">4</span>
                 <span>
-                  {result.delivery.status === "sent"
-                    ? "已调用 BOSS 对话发送消息并附带在线简历"
-                    : "已评估是否需要自动发送在线简历"}
+                  {result.delivery?.status === "sent"
+                    ? result.delivery?.resume_sent
+                      ? "已调用 Boss 对话真实发送消息，并附带在线简历"
+                      : "已调用 Boss 对话真实发送 Agent 草稿"
+                    : "草稿已生成，可继续调用 `/api/agent/send` 真实发送"}
                 </span>
               </li>
             ) : null}

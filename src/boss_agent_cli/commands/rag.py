@@ -9,8 +9,7 @@ import click
 
 from boss_agent_cli.ai.config import AIConfigStore, PROVIDER_BASE_URLS
 from boss_agent_cli.ai.service import AIService
-from boss_agent_cli.auth.manager import AuthManager
-from boss_agent_cli.commands._platform import get_platform_instance
+from boss_agent_cli.commands.chat_reply import execute_chat_reply
 from boss_agent_cli.display import handle_error_output, handle_output
 from boss_agent_cli.display import handle_auth_errors
 from boss_agent_cli.rag_reply.adapters.agent_answer import AgentAnswerAdapter
@@ -220,44 +219,31 @@ def _resolve_security_id(
 
 def _send_resume_reply(ctx: click.Context, *, security_id: str, message: str) -> ResumeSendResult:
 	"""Send the chat reply and online resume via the existing CDP chat-reply path."""
-	data_dir = ctx.obj["data_dir"]
-	logger = ctx.obj["logger"]
-	auth = AuthManager(data_dir, logger=logger, platform=ctx.obj.get("platform", "zhipin"))
-	with get_platform_instance(ctx, auth) as platform:
-		client = platform._client
-		message_response = client.send_chat_message(security_id, message)
-		if message_response.get("code") != 0:
-			return ResumeSendResult(
-				attempted=True,
-				status="message_failed",
-				message_sent=False,
-				resume_sent=False,
-				messages=[],
-				error_message=str(message_response.get("message") or "消息发送失败"),
-				security_id=security_id,
-			)
-		resume_response = client.send_resume(security_id)
-		messages = [f"消息已发送: {message[:50]}..."]
-		if resume_response.get("code") == 0:
-			messages.append("在线简历已发送")
-			return ResumeSendResult(
-				attempted=True,
-				status="sent",
-				message_sent=True,
-				resume_sent=True,
-				messages=messages,
-				security_id=security_id,
-			)
-		messages.append(f"简历发送失败: {resume_response.get('message', '未知错误')}")
+	result = execute_chat_reply(
+		ctx,
+		security_id=security_id,
+		message=message,
+		send_resume=True,
+	)
+	if not result.message_sent:
 		return ResumeSendResult(
 			attempted=True,
-			status="resume_failed",
-			message_sent=True,
+			status="message_failed",
+			message_sent=False,
 			resume_sent=False,
-			messages=messages,
-			error_message=str(resume_response.get("message") or "简历发送失败"),
-			security_id=security_id,
+			messages=result.results,
+			error_message=result.error_message,
+			security_id=result.security_id,
 		)
+	return ResumeSendResult(
+		attempted=True,
+		status="sent" if result.resume_sent else "resume_failed",
+		message_sent=True,
+		resume_sent=result.resume_sent,
+		messages=result.results,
+		error_message=result.error_message,
+		security_id=result.security_id,
+	)
 
 
 def _maybe_auto_send_resume(
@@ -643,6 +629,103 @@ def rag_approve_cmd(ctx: click.Context, draft_id: str, copy: bool) -> None:
 			},
 		},
 		render=lambda data: click.echo("Draft approved.", err=True),
+	)
+
+
+@rag_group.command("send")
+@click.argument("draft_id", required=True)
+@click.option("--security-id", default=None)
+@click.option("--send-resume", is_flag=True, default=False)
+@click.pass_context
+def rag_send_cmd(
+	ctx: click.Context,
+	draft_id: str,
+	security_id: str | None,
+	send_resume: bool,
+) -> None:
+	store = _resolve_store(ctx)
+	draft = store.get_draft(draft_id)
+	if draft is None:
+		handle_error_output(
+			ctx,
+			_workflow_command(ctx, "send"),
+			code="DRAFT_NOT_FOUND",
+			message=f"Unknown draft_id={draft_id}",
+			recoverable=False,
+		)
+		return
+	message = str(draft.draft_text or "").strip()
+	if not message:
+		handle_error_output(
+			ctx,
+			_workflow_command(ctx, "send"),
+			code="INVALID_PARAM",
+			message=f"Draft {draft_id} has empty draft_text.",
+			recoverable=False,
+		)
+		return
+	resolved_security_id = _resolve_security_id(
+		store,
+		conversation_id=draft.conversation_id,
+		security_id=security_id,
+	)
+	if not resolved_security_id:
+		handle_error_output(
+			ctx,
+			_workflow_command(ctx, "send"),
+			code="INVALID_PARAM",
+			message="Missing security_id for draft delivery. Pass --security-id or store it in the conversation state first.",
+			recoverable=True,
+			recovery_action="Provide --security-id, or write security_id into the conversation before retrying.",
+		)
+		return
+	result = execute_chat_reply(
+		ctx,
+		security_id=resolved_security_id,
+		message=message,
+		send_resume=send_resume,
+	)
+	store.append_audit_log(
+		AuditLogRecord.new(
+			event_type="draft_send",
+			entity_type="draft",
+			entity_id=draft_id,
+			payload={
+				"conversation_id": draft.conversation_id,
+				"security_id": resolved_security_id,
+				"send_resume": send_resume,
+				"message_sent": result.message_sent,
+				"resume_sent": result.resume_sent,
+				"error_message": result.error_message,
+			},
+		)
+	)
+	if not result.message_sent:
+		handle_error_output(
+			ctx,
+			_workflow_command(ctx, "send"),
+			code="SEND_FAILED",
+			message=f"消息发送失败: {result.error_message or '未知错误'}",
+			recoverable=True,
+			recovery_action="重试或通过 BOSS App 手动发送。",
+		)
+		return
+	handle_output(
+		ctx,
+		_workflow_command(ctx, "send"),
+		{
+			"draft": draft_to_payload(draft),
+			"security_id": resolved_security_id,
+			"message_sent": result.message_sent,
+			"resume_sent": result.resume_sent,
+			"send_resume": send_resume,
+			"results": result.results,
+			"error_message": result.error_message,
+		},
+		render=lambda data: click.echo(
+			f"Sent draft {data['draft']['draft_id']} to {data['security_id']}.",
+			err=True,
+		),
 	)
 
 

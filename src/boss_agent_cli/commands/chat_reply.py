@@ -1,10 +1,85 @@
 """boss chat-reply — 候选人自动回复聊天消息。"""
 
+from dataclasses import dataclass
+
 import click
 
 from boss_agent_cli.auth.manager import AuthManager
 from boss_agent_cli.commands._platform import get_platform_instance
 from boss_agent_cli.display import boss_command_for_ctx, handle_auth_errors, handle_error_output, handle_output
+
+
+@dataclass(slots=True)
+class ChatReplyExecutionResult:
+	security_id: str
+	message: str
+	send_resume: bool
+	message_sent: bool
+	resume_sent: bool
+	results: list[str]
+	error_message: str = ""
+
+
+def execute_chat_reply(
+	ctx: click.Context,
+	*,
+	security_id: str,
+	message: str,
+	send_resume: bool = False,
+) -> ChatReplyExecutionResult:
+	"""Send a chat reply and optionally the online resume through the existing CDP path."""
+	data_dir = ctx.obj["data_dir"]
+	logger = ctx.obj["logger"]
+
+	auth = AuthManager(data_dir, logger=logger, platform=ctx.obj.get("platform", "zhipin"))
+	with get_platform_instance(ctx, auth) as platform:
+		client = platform._client
+		message_response = client.send_chat_message(security_id, message)
+		if message_response.get("code") != 0:
+			return ChatReplyExecutionResult(
+				security_id=security_id,
+				message=message,
+				send_resume=send_resume,
+				message_sent=False,
+				resume_sent=False,
+				results=[],
+				error_message=str(message_response.get("message") or "消息发送失败"),
+			)
+
+		results = [f"消息已发送: {message[:50]}..."]
+		if not send_resume:
+			return ChatReplyExecutionResult(
+				security_id=security_id,
+				message=message,
+				send_resume=send_resume,
+				message_sent=True,
+				resume_sent=False,
+				results=results,
+			)
+
+		resume_response = client.send_resume(security_id)
+		if resume_response.get("code") == 0:
+			results.append("在线简历已发送")
+			return ChatReplyExecutionResult(
+				security_id=security_id,
+				message=message,
+				send_resume=send_resume,
+				message_sent=True,
+				resume_sent=True,
+				results=results,
+			)
+
+		error_message = str(resume_response.get("message") or "简历发送失败")
+		results.append(f"简历发送失败: {error_message}")
+		return ChatReplyExecutionResult(
+			security_id=security_id,
+			message=message,
+			send_resume=send_resume,
+			message_sent=True,
+			resume_sent=False,
+			results=results,
+			error_message=error_message,
+		)
 
 
 @click.command("chat-reply")
@@ -22,36 +97,22 @@ def chat_reply_cmd(ctx: click.Context, security_id: str, message: str, send_resu
 	  boss chat-reply <security_id> "您好，这是我的简历"
 	  boss chat-reply <security_id> "您好" --send-resume
 	"""
-	data_dir = ctx.obj["data_dir"]
-	logger = ctx.obj["logger"]
-
-	auth = AuthManager(data_dir, logger=logger, platform=ctx.obj.get("platform", "zhipin"))
-	with get_platform_instance(ctx, auth) as platform:
-		client = platform._client
-
-		# 发送消息（内部自动导航到聊天页）
-		resp = client.send_chat_message(security_id, message)
-		messages = []
-
-		if resp.get("code") == 0:
-			messages.append(f"消息已发送: {message[:50]}...")
-		else:
-			handle_error_output(
-				ctx,
-				"chat-reply",
-				code="SEND_FAILED",
-				message=f"消息发送失败: {resp.get('message', '未知错误')}",
-				recoverable=True,
-				recovery_action="重试或通过 BOSS App 手动发送",
-			)
-			return
-
-		if send_resume:
-			resp2 = client.send_resume(security_id)
-			if resp2.get("code") == 0:
-				messages.append("在线简历已发送")
-			else:
-				messages.append(f"简历发送失败: {resp2.get('message', '未知错误')}")
+	result = execute_chat_reply(
+		ctx,
+		security_id=security_id,
+		message=message,
+		send_resume=send_resume,
+	)
+	if not result.message_sent:
+		handle_error_output(
+			ctx,
+			"chat-reply",
+			code="SEND_FAILED",
+			message=f"消息发送失败: {result.error_message or '未知错误'}",
+			recoverable=True,
+			recovery_action="重试或通过 BOSS App 手动发送",
+		)
+		return
 
 	handle_output(
 		ctx,
@@ -60,7 +121,9 @@ def chat_reply_cmd(ctx: click.Context, security_id: str, message: str, send_resu
 			"security_id": security_id,
 			"message": message,
 			"send_resume": send_resume,
-			"results": messages,
+			"message_sent": result.message_sent,
+			"resume_sent": result.resume_sent,
+			"results": result.results,
 		},
 		hints={
 			"next_actions": [

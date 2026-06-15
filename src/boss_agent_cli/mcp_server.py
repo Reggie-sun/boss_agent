@@ -588,6 +588,19 @@ TOOLS = [
 		},
 	),
 	Tool(
+		name="boss_agent_send",
+		description="将 Boss Agent 草稿真实发送到 Boss 聊天，可选同步发送在线简历",
+		inputSchema={
+			"type": "object",
+			"properties": {
+				"draft_id": {"type": "string", "description": "草稿 ID"},
+				"security_id": {"type": "string", "description": "可选 security_id；不传则尝试从 conversation state 解析"},
+				"send_resume": {"type": "boolean", "description": "是否同时发送在线简历", "default": False},
+			},
+			"required": ["draft_id"],
+		},
+	),
+	Tool(
 		name="boss_agent_audit",
 		description="查看 Boss Agent workflow 审计日志",
 		inputSchema={
@@ -1163,6 +1176,14 @@ def _build_args(tool_name: str, arguments: dict) -> list[str]:
 		args = ["agent", "approve", arguments["draft_id"]]
 		if arguments.get("copy"):
 			args.append("--copy")
+		return args
+
+	if name in {"agent_send", "rag_send"}:
+		args = ["agent", "send", arguments["draft_id"]]
+		if arguments.get("security_id"):
+			args.extend(["--security-id", arguments["security_id"]])
+		if arguments.get("send_resume"):
+			args.append("--send-resume")
 		return args
 
 	if name in {"agent_audit", "rag_audit"}:

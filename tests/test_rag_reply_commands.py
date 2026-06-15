@@ -5,6 +5,7 @@ from types import SimpleNamespace
 from click.testing import CliRunner
 
 import boss_agent_cli.commands.rag as rag_commands
+from boss_agent_cli.commands.chat_reply import ChatReplyExecutionResult
 from boss_agent_cli.ai.config import AIConfigStore
 from boss_agent_cli.main import cli
 from boss_agent_cli.rag_reply.adapters.boss_automation import SyncJobsResult, SyncMessagesResult
@@ -228,6 +229,106 @@ def test_agent_ask_uses_agent_command_name(monkeypatch, tmp_path: Path):
 	parsed = json.loads(result.output)
 	assert parsed["ok"] is True
 	assert parsed["command"] == "agent-ask"
+
+
+def test_agent_send_uses_agent_command_name(monkeypatch, tmp_path: Path):
+	store = RagReplyStore(tmp_path / "boss-rag.sqlite3")
+	store.initialize()
+	store.save_conversation(
+		ConversationRecord(
+			conversation_id="conv_send_001",
+			source="frontend_bridge",
+			state={"security_id": "sec_001"},
+		)
+	)
+	draft = DraftRecord.new(
+		conversation_id="conv_send_001",
+		source_message_id="msg_send_001",
+		draft_text="您好，这是我整理好的项目经历。",
+		intent="resume_share_request",
+	)
+	store.save_draft(draft)
+	monkeypatch.setattr(
+		rag_commands,
+		"execute_chat_reply",
+		lambda ctx, **kwargs: ChatReplyExecutionResult(
+			security_id=kwargs["security_id"],
+			message=kwargs["message"],
+			send_resume=kwargs["send_resume"],
+			message_sent=True,
+			resume_sent=True,
+			results=["消息已发送", "在线简历已发送"],
+		),
+	)
+	runner = CliRunner()
+
+	result = runner.invoke(
+		cli,
+		[
+			"--json",
+			"--data-dir",
+			str(tmp_path),
+			"agent",
+			"send",
+			draft.draft_id,
+			"--send-resume",
+		],
+	)
+
+	assert result.exit_code == 0
+	parsed = json.loads(result.output)
+	assert parsed["ok"] is True
+	assert parsed["command"] == "agent-send"
+	assert parsed["data"]["security_id"] == "sec_001"
+	assert parsed["data"]["resume_sent"] is True
+	assert parsed["data"]["results"] == ["消息已发送", "在线简历已发送"]
+
+
+def test_rag_send_alias_uses_rag_command_name(monkeypatch, tmp_path: Path):
+	store = RagReplyStore(tmp_path / "boss-rag.sqlite3")
+	store.initialize()
+	store.save_conversation(ConversationRecord(conversation_id="conv_send_002", source="frontend_bridge"))
+	draft = DraftRecord.new(
+		conversation_id="conv_send_002",
+		source_message_id="msg_send_002",
+		draft_text="您好，我可以补充一份简历。",
+		intent="resume_share_request",
+	)
+	store.save_draft(draft)
+	monkeypatch.setattr(
+		rag_commands,
+		"execute_chat_reply",
+		lambda ctx, **kwargs: ChatReplyExecutionResult(
+			security_id=kwargs["security_id"],
+			message=kwargs["message"],
+			send_resume=kwargs["send_resume"],
+			message_sent=True,
+			resume_sent=False,
+			results=["消息已发送"],
+		),
+	)
+	runner = CliRunner()
+
+	result = runner.invoke(
+		cli,
+		[
+			"--json",
+			"--data-dir",
+			str(tmp_path),
+			"rag",
+			"send",
+			draft.draft_id,
+			"--security-id",
+			"sec_002",
+		],
+	)
+
+	assert result.exit_code == 0
+	parsed = json.loads(result.output)
+	assert parsed["ok"] is True
+	assert parsed["command"] == "rag-send"
+	assert parsed["data"]["security_id"] == "sec_002"
+	assert parsed["data"]["resume_sent"] is False
 
 
 def test_rag_ask_auto_sends_resume_when_enabled(monkeypatch, tmp_path: Path):
