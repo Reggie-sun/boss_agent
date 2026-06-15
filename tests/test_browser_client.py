@@ -169,7 +169,7 @@ def test_close_is_idempotent_when_headless_resources_are_partial_and_raise():
 
 def test_try_connect_reuses_existing_context():
 	"""CDP 连接应复用用户现有 context，避免创建额外浏览器状态。"""
-	session = BrowserSession(cookies={}, user_agent="")
+	session = BrowserSession(cookies={"wt2": "stale-cookie"}, user_agent="")
 	session._pw = MagicMock()
 
 	mock_browser = MagicMock()
@@ -188,6 +188,8 @@ def test_try_connect_reuses_existing_context():
 	assert session._context is mock_user_context  # 直接使用用户 context
 	# 验证：没有创建新 context
 	mock_browser.new_context.assert_not_called()
+	# 验证：不会把本地旧 cookie 回灌到用户 context，避免污染真实登录态
+	mock_user_context.add_cookies.assert_not_called()
 	# 验证：page 在用户 context 中创建
 	mock_user_context.new_page.assert_called_once()
 
@@ -264,11 +266,11 @@ def test_ensure_started_falls_back_to_patchright_when_bridge_and_cdp_fail():
 
 	with (
 		patch.object(session, "_try_bridge", return_value=False) as mock_try_bridge,
-		patch("boss_agent_cli.api.browser_client.sync_playwright") as mock_sync_playwright,
+		patch("boss_agent_cli.api.browser_client._sync_playwright") as mock_sync_playwright,
 		patch.object(session, "_try_cdp", return_value=False) as mock_try_cdp,
 		patch.object(session, "_start_headless", side_effect=mark_headless_started) as mock_start_headless,
 	):
-		mock_sync_playwright.return_value.start.return_value = mock_pw
+		mock_sync_playwright.return_value.return_value.start.return_value = mock_pw
 
 		session._ensure_started()
 

@@ -166,7 +166,9 @@ class BrowserSession:
 			contexts = self._browser.contexts
 
 			if contexts:
-				# 复用用户现有 context，同时注入保存的 BOSS cookies
+				# 复用用户现有 context 时，以用户当前浏览器里的登录态为准。
+				# 不要把本地 session.enc 中可能过期的 cookies 回灌进去，
+				# 否则会污染用户正在使用的真实 BOSS 登录态。
 				self._context = contexts[0]
 				self._own_context = False  # 非我们创建，close 时不关闭
 			else:
@@ -174,8 +176,9 @@ class BrowserSession:
 				self._context = self._browser.new_context()
 				self._own_context = True
 
-			# 始终注入保存的 BOSS cookies，确保 CDP 页面有登录态
-			if self._cookies:
+			# 仅在自建 context 时注入保存的 cookies。
+			# 对复用的用户 context，live Chrome 才是真实状态来源。
+			if self._own_context and self._cookies:
 				self._context.add_cookies([
 					{"name": name, "value": value, "domain": ".zhipin.com", "path": "/"}
 					for name, value in self._cookies.items()
