@@ -1,32 +1,39 @@
 # Boss Agent Current Stage
 
-> Last updated: 2026-06-15
+> Last updated: 2026-06-16
 >
 > Scope: 本文档用于说明当前 `BOSS_AGENT` 项目已经推进到什么阶段、哪些链路已经可用、哪些仍然需要真实 Boss 会话验证，以及下一步应该怎么接着做。
 
 ## Executive Summary
 
-当前项目处在 **本地前端模拟器 + Agent workflow 联调完成，准备进入真实 Boss 会话受控验收** 的阶段。
+当前项目处在 **本地前端模拟器 + Agent workflow 联调完成，真实 Boss 发送预检已接入，但候选人聊天页登录前置态仍未通过** 的阶段。
+
+和上一阶段相比，当前结论已经发生了一个关键变化：
+
+- 之前最大的表面报错是 `missing_security_id`。
+- 现在 `security_id` 兜底链路已经接上，前端不再要求手工先点一个目标才能测试。
+- 当前真正挡住真实发送的根因已经收敛为：**当前 9222 CDP profile 访问 `https://www.zhipin.com/web/geek/chat` 时会被重定向到 `https://www.zhipin.com/web/user/`**。
 
 已经完成的核心能力是：
 
 - 本地前端 `demo/interview-simulator` 可以通过 `/api/agent/ask` 调用后端 `boss agent ask`。
 - 后端已经不是直接把前端问题当作普通 RAG 问答，而是进入 `BossRagReplyService`，由 Agent workflow 做意图分类、RAG 调用、本地策略回复、候选人口吻改写和草稿持久化。
 - 常见 HR 问法已经有较稳定的候选人回答，包括项目介绍、自我介绍、代表项目、项目难点、系统设计、岗位匹配、协作方式。
-- “发一下简历”现在会被识别为 `resume_share_request`，前端会带 `auto_send_resume: true`，后端会尝试进入自动发送在线简历流程。
-- “为什么离职？”现在会被识别为 `resignation_status`，并生成保守、非空、适合 Boss 聊天场景的本地回答。
+- “发一下简历”会识别为 `resume_share_request`，前端会带 `auto_send_resume: true`，后端会尝试进入真实发送链路。
+- 前端现在会在提问和发送两个入口里自动补齐可用 `security_id`，不再因为“没有手工选目标”就直接失败。
+- 前端和后端都已经改成：**不是只看 CDP 端口通不通，而是预检 Boss 候选人聊天页是否真的可达**。
 
 还没有完成的关键验收是：
 
 - 尚未在一个真实 Boss 对话 `security_id` 上完成端到端发送验证。
-- 当前前端实测中，“麻烦发一下简历”已经进入自动发送分支，但因为没有可用 `security_id`，返回 `missing_security_id`，所以没有真正发给 Boss 对话。
+- 当前真实阻塞不再是 `missing_security_id`，而是 `chat_login_redirect` / `AUTH_EXPIRED`。
 - 当前实现发送的是 Boss 官方在线简历路径，即 `client.send_resume(security_id)`；它不是本地 PDF 附件上传路径。
 
 ## Stage Definition
 
 当前阶段可以定义为：
 
-**Phase 3: Local Agent Workflow Ready, Live Boss Delivery Pending**
+**Phase 3: Local Agent Workflow Ready, Live Boss Delivery Blocked by Chat-Route Preflight**
 
 这个阶段的含义是：
 
@@ -35,7 +42,11 @@
 - RAG 是 Agent workflow 里的一个工具/上游知识来源，而不是前端直接暴露的最终回答者。
 - 简历请求已经从“生成一句会发简历的回答”推进到“会尝试调用真实发送在线简历工具”。
 - 离职、在职、时间安排等敏感 HR 问题已经有本地安全草稿，不再空响应。
-- 真实 Boss 发送还需要 `security_id`、登录态、CDP 会话和 Boss 页面状态共同满足。
+- 真实 Boss 发送现在需要同时满足：
+  - `security_id` 可解析
+  - `boss status --live` 可通过
+  - CDP Chrome 候选人聊天页可达
+  - Boss 页面不再把 `/web/geek/chat` 重定向回 `/web/user/`
 
 ## Runtime Status
 
@@ -43,11 +54,13 @@
 
 | Surface | Current status | Notes |
 | --- | --- | --- |
-| Frontend simulator | `http://127.0.0.1:5173` | Vite 本地前端，用于模拟 HR 提问和测试发送入口 |
+| Frontend simulator | `http://127.0.0.1:5175` | Vite 本地前端，用于模拟 HR 提问和测试发送入口 |
 | Enterprise RAG API | `http://127.0.0.1:8020` | `.env` 中 `BOSS_RAG_RAG_BASE_URL=http://127.0.0.1:8020` |
 | RAG auth mode | `bearer` | `.env` 中 `BOSS_RAG_RAG_AUTH_MODE=bearer` |
+| CDP Chrome | `http://localhost:9222` | 当前可连接，但 chat page 预检未通过 |
 | Resume send switch | enabled | `.env` 中 `BOSS_RAG_SEND_ENABLED=true` |
-| Boss send target | pending | 需要真实 `security_id` |
+| Boss live auth | failed | `boss status --live -> AUTH_EXPIRED` |
+| Boss chat preflight | failed | `/api/agent/health -> preflightStatus=chat_login_redirect` |
 
 ## Architecture Status
 
@@ -76,12 +89,16 @@ frontend "发送到 Boss" or auto_send_resume
   -> client.send_resume(security_id) when send_resume=true
 ```
 
-这里有一个很重要的边界：
+本阶段最重要的新边界是：
 
 - `/api/agent/ask` 负责生成回答，并且在 `auto_send_resume=true` 且问题是发简历请求时尝试自动发送。
 - `/api/agent/send` 负责把已经生成的 draft 发送到 Boss。
 - 真正发送必须有 `security_id`。
-- 没有 `security_id` 时，系统现在会返回明确状态：`missing_security_id`。
+- 现在“浏览器发送通道可用”不再等价于“Boss 真实发送可用”。
+- 新的 source of truth 是：
+  - `browserChannel.transportAvailable`
+  - `browserChannel.chatPageReachable`
+  - `browserChannel.preflightStatus`
 
 ## Completed Work
 
@@ -112,12 +129,54 @@ frontend "发送到 Boss" or auto_send_resume
 - 前端 `handleAsk` 已经传 `auto_send_resume: true`。
 - 后端 `boss agent ask --auto-send-resume` 会调用 `_maybe_auto_send_resume(...)`。
 - `.env` 中 `BOSS_RAG_SEND_ENABLED=true` 时，发送开关是打开的。
-- 如果缺少 `security_id`，前端会看到明确提示：`发送到 Boss 失败：当前没有可用的 security_id`。
+- `security_id` 现在会在前端通过以下顺序自动解析：
+  - 手工输入值
+  - 当前选中的对话目标
+  - 最近 Boss 目标里的第一个可用 `security_id`
 
 当前状态：
 
 - 自动发送逻辑已经接上。
-- 尚未完成真实 Boss 对话发送，因为本地前端测试时没有可用 `security_id`。
+- `missing_security_id` 已经不是当前主阻塞。
+- 当前真正的阻塞是 chat page 预检失败，导致真实发送在前置检查阶段就被拦下。
+
+### Browser / Delivery Fail-Fast
+
+已完成：
+
+- CDP / Bridge 不可用时，前端不会再假装“发送中...”。
+- `/api/agent/send` 现在会在真正发之前检查浏览器发送通道。
+- `scripts/stack_readiness.py` 已经默认走 `boss status --live`，不再把“本地 session 文件里还有 cookie”误判成 ready。
+- `demo/interview-simulator` 的 health/send 预检已经升级为：
+  - 不是只看 `http://localhost:9222/json/version`
+  - 而是用临时 CDP tab 实际探测 `https://www.zhipin.com/web/geek/chat`
+
+当前 `/api/agent/health` 的关键信号是：
+
+```json
+{
+  "browserChannel": {
+    "available": false,
+    "transportAvailable": true,
+    "chatPageReachable": false,
+    "preflightStatus": "chat_login_redirect",
+    "redirectUrl": "https://www.zhipin.com/web/user/"
+  }
+}
+```
+
+### CDP Session Safety
+
+已完成：
+
+- 复用用户现有 CDP Chrome context 时，不再把本地 `session.enc` 里的旧 Boss cookies 回灌进去。
+- 这修掉了一个真实 bug：之前确实可能用旧 cookie 污染 live Chrome context。
+- `login_via_cdp()` 已补上和 `login_via_browser()` 一样的 `_POST_LOGIN_WAIT`，避免刚检测到 `wt2` 就过早结束登录流程。
+
+这意味着：
+
+- 当前如果又出现 `/web/geek/chat -> /web/user/`，不应该再默认怀疑“是 agent 又把 cookie 清了”。
+- 更应该先看这份 9222 profile 的 Boss 候选人聊天前置态是否真的完成。
 
 ### Resignation Question
 
@@ -127,58 +186,70 @@ frontend "发送到 Boss" or auto_send_resume
 - 之前该意图属于敏感类，本地策略返回空字符串，导致前端看起来“没有响应”。
 - 现在会返回保守的候选人回答，强调寻找更聚焦 AI 应用落地、RAG、Agent 或 LLM 工程化方向的机会。
 
-当前回答风格：
-
-```text
-我目前主要是希望寻找更聚焦 AI 应用落地、RAG、Agent 或 LLM 工程化方向的机会。当前项目让我积累了企业级 RAG 从架构到落地的完整经验，下一步希望进入更成熟的 AI 团队或更有 AI 产品化空间的环境，把这类系统继续做深。
-```
-
 ### Frontend Simulator
 
 已完成：
 
 - 前端 `Agent 问题输入` 能显示 Agent 最终回答。
-- 离职问题前端实测可正常显示回答。
-- 发简历问题前端实测可显示 `missing_security_id`，说明已经进入发送判断而不是静默失败。
+- 发简历问题前端不再因为没先手工选中目标就卡在 `missing_security_id`。
+- 前端会额外显示一行 `Boss 发送预检`，用于提示当前是否真的能进入候选人聊天页发送链路。
 - `发送到 Boss` 按钮仍然复用 `/api/agent/send`，用于手动发送当前 draft。
 
 ## Verification
 
 ### Automated Tests
 
-已跑过的 focused tests：
+本阶段额外验证过的 focused tests：
 
 ```bash
-pytest tests/test_rag_reply_classifier.py tests/test_rag_reply_question_builder.py tests/test_rag_reply_agent_answer.py tests/test_rag_reply_commands.py tests/test_rag_reply_service.py -q
+pytest tests/test_auth_browser.py tests/test_browser_client.py tests/test_api_client_methods.py tests/test_stack_readiness.py
 ```
 
 当前结果：
 
 ```text
-45 passed in 1.69s
+71 passed in 30.33s
 ```
 
-### API Regression
+### Build Regression
 
-已通过本地 `/api/agent/ask` 验证：
+已跑过：
 
-| Question | Expected intent | Observed result |
-| --- | --- | --- |
-| `麻烦发一下简历` | `resume_share_request` | 返回非空回答，并进入 auto-send 分支；因无 `security_id` 返回 `missing_security_id` |
-| `为什么离职？` | `resignation_status` | 返回非空本地安全回答 |
+```bash
+cd demo/interview-simulator
+npm run build
+```
+
+当前结果：
+
+```text
+vite build passed
+```
+
+### Health / Readiness Regression
+
+已通过本地 health/readiness 验证：
+
+```bash
+curl http://127.0.0.1:5175/api/agent/health
+python scripts/stack_readiness.py --pretty
+```
+
+当前结果：
+
+- `api/agent/health`：`browserChannel.preflightStatus=chat_login_redirect`
+- `stack_readiness.py`：`all_ready=false`
+- 失败点明确为：
+  - `boss_auth -> AUTH_EXPIRED`
+  - `browserChannel.available -> false`
 
 ### Browser Regression
 
-已通过前端页面验证：
+已通过 CDP 探针确认：
 
-- `为什么离职？`：页面显示正常回答，耗时约 `284ms`。
-- `麻烦发一下简历`：页面显示回答，并明确提示 `发送到 Boss 失败：当前没有可用的 security_id`。
-
-截图证据：
-
-```text
-.gstack/qa-reports/screenshots/resume-and-resign-fix.png
-```
+- 访问站点首页时，当前 9222 profile 仍然能打开 Boss 普通页面。
+- 访问 `https://www.zhipin.com/web/geek/chat` 时，前端脚本会主动把页面跳转到 `https://www.zhipin.com/web/user/`。
+- 这说明当前问题不是单纯的“CDP 端口未启动”，也不是“没有 `security_id`”，而是 **候选人聊天路由本身的前置态不满足**。
 
 ## Current File Changes
 
@@ -186,14 +257,16 @@ pytest tests/test_rag_reply_classifier.py tests/test_rag_reply_question_builder.
 
 | File | Purpose |
 | --- | --- |
-| `demo/interview-simulator/src/App.jsx` | 前端 `ask` 请求带上 `auto_send_resume: true` |
-| `src/boss_agent_cli/rag_reply/service.py` | 本地策略补齐简历发送、离职、在职、时间安排、面试时间等非空回答 |
-| `tests/test_rag_reply_classifier.py` | 补充离职问题分类测试 |
-| `tests/test_rag_reply_service.py` | 补充简历请求文案和离职本地草稿测试 |
-| `src/boss_agent_cli/rag_reply/adapters/agent_answer.py` | 候选人口吻改写和 HR 模板兜底 |
-| `src/boss_agent_cli/rag_reply/classifier.py` | 扩展真实 HR 问法分类 |
-| `src/boss_agent_cli/rag_reply/question_builder.py` | 改善进入 Enterprise RAG 的候选人面试问法包装 |
-| `src/boss_agent_cli/commands/rag.py` | Agent workflow 构建不再错误复用 RAG key 作为外部 AI key |
+| `demo/interview-simulator/src/App.jsx` | 前端显示 Boss 发送预检状态，并继续保留 `security_id` 自动兜底 |
+| `demo/interview-simulator/vite.config.mjs` | health/send 改成真实 chat page preflight，不再只看 CDP 端口 |
+| `src/boss_agent_cli/api/browser_client.py` | 复用 CDP context 时不再回灌旧 cookie |
+| `src/boss_agent_cli/api/client.py` | 候选人聊天页跳登录时返回明确 `boss_chat_login_required` 语义 |
+| `src/boss_agent_cli/auth/browser.py` | `login_via_cdp()` 增加登录完成后的稳定等待 |
+| `scripts/stack_readiness.py` | 默认走 `boss status --live`，把 live auth 作为 readiness gate |
+| `tests/test_auth_browser.py` | 覆盖 CDP 登录等待与 `_sync_playwright()` 测试桩 |
+| `tests/test_browser_client.py` | 覆盖“复用用户 context 时不回灌旧 cookie”回归 |
+| `tests/test_api_client_methods.py` | 覆盖聊天页被重定向到登录页时的明确错误 |
+| `tests/test_stack_readiness.py` | 覆盖 live readiness 默认行为 |
 
 ## Open Boundaries
 
@@ -204,39 +277,18 @@ pytest tests/test_rag_reply_classifier.py tests/test_rag_reply_question_builder.
 - 使用真实 Boss 会话 `security_id` 发出一条消息。
 - 使用真实 Boss 会话 `security_id` 调用 `client.send_resume(security_id)` 并确认 Boss 页面实际显示在线简历已发出。
 
-下一步验收条件：
+当前真实阻塞条件：
 
 ```text
-输入：真实 security_id + HR 问“麻烦发一下简历”
-预期：delivery.status = sent
-预期：message_sent = true
-预期：resume_sent = true
-预期：Boss 页面能看到消息和在线简历发送状态
+boss status --live -> AUTH_EXPIRED
+/api/agent/health -> browserChannel.preflightStatus = chat_login_redirect
 ```
 
-如果返回：
+因此，当前还不能把失败归因于：
 
-```text
-missing_security_id
-```
-
-说明前端还没有选中或填入真实 Boss 会话目标。
-
-如果返回：
-
-```text
-resume_failed
-```
-
-说明消息可能已发出，但 Boss 在线简历发送接口失败，需要继续看 `client.send_resume(...)` 的响应。
-
-如果返回：
-
-```text
-message_failed
-```
-
-说明第一步聊天消息发送失败，需要检查登录态、CDP 连接、Boss 页面状态或 `security_id` 是否过期。
+- `security_id` 缺失
+- CDP 端口未启动
+- 前端一直假装发送中
 
 ### Online Resume vs Local PDF
 
@@ -271,18 +323,37 @@ client.send_resume(security_id)
 
 ## Next Steps
 
-### Step 1: Provide or Select a Real `security_id`
+### Step 1: Re-verify the Actual 9222 Profile
 
-在前端中通过以下任一方式提供真实目标：
+现在必须确认你登录的是不是当前 agent 真正在用的这份 CDP profile：
 
-- 在 `BOSS 直聘 · 全自动投递` 区域搜索并选择职位，使 `Security ID` 自动填入。
-- 手动填入一个真实 Boss 会话对应的 `security_id`。
+```text
+--user-data-dir=/home/reggie/.cache/boss-agent-cdp-profile
+```
 
-没有 `security_id` 时，发简历请求只能生成草稿，无法真正发出。
+因为当前 demo / CLI / preflight 都是基于这份 profile 读到的状态。
 
-### Step 2: Run Resume Send Smoke
+验收标准不是“首页能打开”或“cookie 里还有 wt2/stoken”，而是：
 
-在前端输入：
+```text
+curl http://127.0.0.1:5175/api/agent/health
+```
+
+返回：
+
+```json
+{
+  "browserChannel": {
+    "available": true,
+    "preflightStatus": "ready",
+    "chatPageReachable": true
+  }
+}
+```
+
+### Step 2: Re-run Resume Send Smoke
+
+一旦 preflight 变成 `ready`，就在前端输入：
 
 ```text
 麻烦发一下简历
@@ -302,22 +373,19 @@ client.send_resume(security_id)
 
 同时在 Boss 页面确认在线简历确实发出。
 
-### Step 3: Run Sensitive HR Smoke
+### Step 3: If Preflight Still Redirects, Continue Chat-Route Root Cause Analysis
 
-继续测试这些 HR 问法：
+如果重新走当前 9222 profile 的登录后，`preflightStatus` 仍然是：
 
 ```text
-为什么离职？
-现在是在职吗？
-什么时候方便面试？
-方便发一份简历过来吗？
+chat_login_redirect
 ```
 
-期望：
+那下一步就不是前端问题，而要继续查：
 
-- 都有非空回答。
-- 只有发简历请求会尝试调用发送在线简历工具。
-- 其它敏感问题只生成草稿，不自动发送。
+- Boss 候选人聊天路由是不是新增了额外前置校验
+- `login_via_cdp()` 当前拿到的 cookie / stoken 是否仍不够
+- 这份 profile 是否还缺少候选人聊天页依赖的本地状态 / 路由状态
 
 ### Step 4: Decide Whether to Support Local PDF Attachment
 
@@ -335,17 +403,21 @@ client.send_resume(security_id)
 
 当前阶段退出条件是：
 
-- 前端选中真实 `security_id` 后，`麻烦发一下简历` 能真实发送 Boss 消息。
-- `delivery.status=sent`。
-- `message_sent=true`。
-- `resume_sent=true`。
-- Boss 页面实际可见在线简历发送成功。
-- `为什么离职？`、`现在是在职吗？`、`什么时候方便面试？` 在前端均能返回非空安全回答。
-- 相关 focused tests 保持通过。
+- `api/agent/health` 返回：
+  - `browserChannel.available=true`
+  - `browserChannel.preflightStatus=ready`
+  - `browserChannel.chatPageReachable=true`
+- `boss status --live` 不再返回 `AUTH_EXPIRED`
+- 前端选中真实 `security_id` 后，`麻烦发一下简历` 能真实发送 Boss 消息
+- `delivery.status=sent`
+- `message_sent=true`
+- `resume_sent=true`
+- Boss 页面实际可见在线简历发送成功
+- `为什么离职？`、`现在是在职吗？`、`什么时候方便面试？` 在前端均能返回非空安全回答
+- 相关 focused tests 保持通过
 
 满足以上条件后，项目可以进入：
 
 **Phase 4: Live Boss Delivery Verified**
 
 也就是从“本地模拟器联调完成”进入“真实 Boss 场景可用”的阶段。
-
