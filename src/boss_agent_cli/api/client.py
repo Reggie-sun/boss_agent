@@ -363,8 +363,8 @@ class BossClient:
 		}} catch(e) {{ return {{ ok: false, error: e.message }}; }}
 	}})()'''
 
-	def _navigate_to_chat(self) -> None:
-		"""确保 CDP 页面在候选人聊天页，等待 chatStore 就绪。"""
+	def _navigate_to_chat(self) -> dict[str, Any]:
+		"""确保 CDP 页面在候选人聊天页，等待聊天列表就绪。"""
 		browser = self._get_browser()
 		browser._ensure_started()
 		chat_url = "https://www.zhipin.com/web/geek/chat"
@@ -384,14 +384,41 @@ class BossClient:
 					"() => { const ulc = document.querySelector('.user-list-content'); return !!(ulc && ulc.__vue__ && ulc.__vue__.$parent && ulc.__vue__.$parent.list && ulc.__vue__.$parent.list.length > 0); }"
 				)
 				if ready:
-					return
+					return {"ok": True, "url": browser._page.url}
 			except Exception:
 				pass
 			_time.sleep(1)
+		page_url = ""
+		page_title = ""
+		try:
+			page_url = str(browser._page.url or "")
+		except Exception:
+			page_url = ""
+		try:
+			page_title = str(browser._page.title() or "")
+		except Exception:
+			page_title = ""
+		if "/web/user" in page_url or "登录" in page_title or "注册登录" in page_title:
+			return {
+				"ok": False,
+				"error": "boss_chat_login_required",
+				"message": "Boss CDP 登录态已失效，聊天页被重定向到登录页。请先执行 boss login --cdp，或在当前 CDP Chrome 内重新登录 BOSS。",
+				"url": page_url,
+				"title": page_title,
+			}
+		return {
+			"ok": False,
+			"error": "boss_chat_page_not_ready",
+			"message": "Boss 聊天页未就绪，当前无法发送消息。请确认聊天列表已加载，或刷新 CDP 登录态后重试。",
+			"url": page_url,
+			"title": page_title,
+		}
 
 	def send_chat_message(self, security_id: str, content: str) -> dict[str, Any]:
 		"""通过 CDP 在候选人聊天页发送文字消息。"""
-		self._navigate_to_chat()
+		navigation = self._navigate_to_chat()
+		if not navigation.get("ok"):
+			return {"code": -1, "message": str(navigation.get("message") or "聊天页未就绪"), "detail": navigation}
 		browser = self._get_browser()
 		escaped = content.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n")
 		script = self._SEND_MSG_SCRIPT.format(security_id=security_id, content=escaped)
@@ -405,7 +432,9 @@ class BossClient:
 
 	def send_resume(self, security_id: str) -> dict[str, Any]:
 		"""通过 CDP 自动发送在线简历给指定招聘者。"""
-		self._navigate_to_chat()
+		navigation = self._navigate_to_chat()
+		if not navigation.get("ok"):
+			return {"code": -1, "message": str(navigation.get("message") or "聊天页未就绪"), "detail": navigation}
 		browser = self._get_browser()
 		script = self._SEND_RESUME_SCRIPT.format(security_id=security_id)
 		try:

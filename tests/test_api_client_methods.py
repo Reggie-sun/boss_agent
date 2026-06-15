@@ -317,6 +317,40 @@ def test_geek_get_job():
 	assert call.kwargs["params"] == {"securityId": "sid_x"}
 
 
+def test_send_chat_message_reports_login_redirect_before_dom_send():
+	client = BossClient(_StubAuth())
+	fake_page = MagicMock()
+	fake_page.url = "https://www.zhipin.com/web/user/"
+	fake_page.evaluate.return_value = False
+	fake_page.title.return_value = "【BOSS直聘注册登录】boss直聘在线注册登录-BOSS直聘"
+	fake_browser = MagicMock()
+	fake_browser._page = fake_page
+	client._get_browser = MagicMock(return_value=fake_browser)
+
+	result = client.send_chat_message("sid", "hello")
+
+	assert result["code"] == -1
+	assert "登录态已失效" in result["message"]
+	fake_page.evaluate.assert_called()
+
+
+def test_send_resume_reports_login_redirect_before_dom_send():
+	client = BossClient(_StubAuth())
+	fake_page = MagicMock()
+	fake_page.url = "https://www.zhipin.com/web/user/"
+	fake_page.evaluate.return_value = False
+	fake_page.title.return_value = "【BOSS直聘注册登录】boss直聘在线注册登录-BOSS直聘"
+	fake_browser = MagicMock()
+	fake_browser._page = fake_page
+	client._get_browser = MagicMock(return_value=fake_browser)
+
+	result = client.send_resume("sid")
+
+	assert result["code"] == -1
+	assert "登录态已失效" in result["message"]
+	fake_page.evaluate.assert_called()
+
+
 # ── 生命周期 / close 等 ─────────────────────────────────────────────────
 
 

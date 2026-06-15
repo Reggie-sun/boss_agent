@@ -32,6 +32,7 @@ def test_load_config_reads_repo_defaults():
 	assert config.rag_base_url == "http://127.0.0.1:8020"
 	assert config.rag_auth_mode == "bearer"
 	assert config.rag_api_key
+	assert config.status_live is True
 
 
 def test_evaluate_boss_auth_complete_is_ready():
@@ -90,7 +91,7 @@ def test_runner_marks_all_ready_only_when_everything_passes():
 		rag_auth_mode="bearer",
 		rag_api_key="demo",
 		data_dir="~/.boss-agent",
-		status_live=False,
+		status_live=True,
 		timeout_seconds=1.0,
 		wait_seconds=0.0,
 		interval_seconds=0.1,
@@ -131,3 +132,21 @@ def test_runner_marks_all_ready_only_when_everything_passes():
 	report = runner.run_once()
 	assert report["all_ready"] is True
 	assert [item["status"] for item in report["checks"]] == ["pass", "pass", "pass", "pass"]
+
+
+def test_build_default_checks_uses_live_target_when_enabled():
+	module = load_module()
+	config = module.ReadinessConfig(
+		cdp_url="http://localhost:9222",
+		agent_base_url="http://127.0.0.1:5175",
+		rag_base_url="http://127.0.0.1:8020",
+		rag_auth_mode="bearer",
+		rag_api_key="demo",
+		data_dir="~/.boss-agent",
+		status_live=True,
+		timeout_seconds=1.0,
+		wait_seconds=0.0,
+		interval_seconds=0.1,
+	)
+	checks = module.build_default_checks(config)
+	assert checks[1].target == "boss status --live"

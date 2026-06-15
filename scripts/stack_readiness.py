@@ -66,8 +66,8 @@ def build_default_checks(config: ReadinessConfig) -> list[CheckSpec]:
 		),
 		CheckSpec(
 			name="boss_auth",
-			purpose="验证 Boss 本地登录态里 cookies / wt2 / stoken 是否完整",
-			target="boss status",
+			purpose="验证 Boss 登录态是否通过只读在线探测，可真实进入发送链路",
+			target="boss status --live" if config.status_live else "boss status",
 			failure_classification="env_error",
 		),
 		CheckSpec(
@@ -133,7 +133,7 @@ def load_config_from_repo(repo_root: Path) -> ReadinessConfig:
 		rag_auth_mode=_config_value(env_values, "BOSS_RAG_RAG_AUTH_MODE", fallback="none").strip().lower(),
 		rag_api_key=_config_value(env_values, "BOSS_RAG_RAG_API_KEY", "RAG_API_KEY", "RAG_AUTH_API_KEY", fallback="").strip(),
 		data_dir=_config_value(env_values, "BOSS_RAG_DATA_DIR", fallback="~/.boss-agent").strip() or "~/.boss-agent",
-		status_live=False,
+		status_live=True,
 		timeout_seconds=8.0,
 		wait_seconds=0.0,
 		interval_seconds=2.0,
@@ -519,7 +519,8 @@ def _parse_args() -> argparse.Namespace:
 	parser.add_argument("--agent-base-url", default=None, help="默认 http://127.0.0.1:5175")
 	parser.add_argument("--rag-base-url", default=None, help="默认读取 .env 的 BOSS_RAG_RAG_BASE_URL")
 	parser.add_argument("--data-dir", default=None, help="默认读取 .env 的 BOSS_RAG_DATA_DIR 或 ~/.boss-agent")
-	parser.add_argument("--status-live", action="store_true", help="额外执行 boss status --live 做只读在线验证")
+	parser.add_argument("--status-live", dest="status_live", action="store_true", default=None, help="执行 boss status --live 做只读在线验证（默认开启）")
+	parser.add_argument("--status-local-only", dest="status_live", action="store_false", help="只检查本地 session 文件，不做在线只读验证")
 	parser.add_argument("--timeout-seconds", type=float, default=8.0)
 	parser.add_argument("--wait-seconds", type=float, default=0.0, help="大于 0 时轮询直到全绿或超时")
 	parser.add_argument("--interval-seconds", type=float, default=2.0)
@@ -536,7 +537,7 @@ def _resolve_config(args: argparse.Namespace) -> ReadinessConfig:
 		rag_auth_mode=config.rag_auth_mode,
 		rag_api_key=config.rag_api_key,
 		data_dir=args.data_dir or config.data_dir,
-		status_live=args.status_live,
+		status_live=config.status_live if args.status_live is None else args.status_live,
 		timeout_seconds=args.timeout_seconds,
 		wait_seconds=args.wait_seconds,
 		interval_seconds=args.interval_seconds,

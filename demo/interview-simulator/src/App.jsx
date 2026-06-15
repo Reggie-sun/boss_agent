@@ -101,6 +101,25 @@ function targetOptionValue(target) {
   return String(target.conversation_id || target.security_id || "");
 }
 
+function resolveSecurityId({ manualSecurityId = "", selectedChatTarget = null, chatTargets = [] }) {
+  const direct = String(manualSecurityId).trim();
+  if (direct) return direct;
+  if (selectedChatTarget?.security_id) return String(selectedChatTarget.security_id).trim();
+  const fallbackTarget = Array.isArray(chatTargets) ? chatTargets.find((item) => item?.security_id) : null;
+  return fallbackTarget?.security_id ? String(fallbackTarget.security_id).trim() : "";
+}
+
+function shouldSendResumeByDefault({ question = "", draftIntent = "", securityId = "" }) {
+  const normalizedQuestion = String(question).toLowerCase();
+  const normalizedIntent = String(draftIntent);
+  const hasSecurityId = Boolean(String(securityId).trim());
+  if (!hasSecurityId) return false;
+  if (normalizedIntent === "resume_share_request") return true;
+  return ["简历", "resume", "cv"].some((keyword) =>
+    normalizedQuestion.includes(keyword),
+  );
+}
+
 function normalizeReasoningSummary(reasoningSummary) {
   if (!reasoningSummary || typeof reasoningSummary !== "object") return [];
 
@@ -211,13 +230,17 @@ export function App() {
       if (!response.ok || !payload.ok) {
         throw new Error(payload.errorMessage || "读取 Boss 对话目标失败。");
       }
-      setChatTargets(Array.isArray(payload.targets) ? payload.targets : []);
+      const nextTargets = Array.isArray(payload.targets) ? payload.targets : [];
+      setChatTargets(nextTargets);
       setChatTargetsMeta({
         source: String(payload.source || "cache"),
         liveReadEnabled: Boolean(payload.liveReadEnabled),
         refreshed: Boolean(payload.refreshed),
       });
       setChatTargetsError(payload.refreshError ? String(payload.refreshError) : "");
+      if (!selectedTargetValue && !applyForm.security_id.trim() && nextTargets.length) {
+        pickTarget(nextTargets[0]);
+      }
     } catch (error) {
       setChatTargets([]);
       setChatTargetsError(error instanceof Error ? error.message : "读取 Boss 对话目标失败。");
@@ -283,6 +306,15 @@ export function App() {
   async function handleAsk() {
     const trimmed = question.trim();
     if (!trimmed || isLoading) return;
+    const resolvedSecurityId = resolveSecurityId({
+      manualSecurityId: applyForm.security_id,
+      selectedChatTarget,
+      chatTargets,
+    });
+
+    if (resolvedSecurityId && resolvedSecurityId !== applyForm.security_id.trim()) {
+      setApplyForm({ security_id: resolvedSecurityId });
+    }
 
     setIsLoading(true);
     setResult({
@@ -307,7 +339,7 @@ export function App() {
           question: trimmed,
           sessionId,
           mode: "accurate",
-          security_id: applyForm.security_id.trim(),
+          security_id: resolvedSecurityId,
           auto_send_resume: true,
         }),
       });
@@ -345,7 +377,11 @@ export function App() {
 
       setResult(nextResult);
       setSendResumeWithDraft(
-        String(payload.draftIntent || "") === "resume_share_request",
+        shouldSendResumeByDefault({
+          question: trimmed,
+          draftIntent: payload.draftIntent,
+          securityId: resolvedSecurityId,
+        }),
       );
       setSelectedCitationIndex(0);
       if (payload.thread?.messages) {
@@ -394,6 +430,15 @@ export function App() {
 
   async function handleSendToBoss() {
     if (!result.draftId || isSendingToBoss) return;
+    const resolvedSecurityId = resolveSecurityId({
+      manualSecurityId: applyForm.security_id,
+      selectedChatTarget,
+      chatTargets,
+    });
+
+    if (resolvedSecurityId && resolvedSecurityId !== applyForm.security_id.trim()) {
+      setApplyForm({ security_id: resolvedSecurityId });
+    }
 
     let latestBridgeState = bridgeState;
     try {
@@ -435,7 +480,7 @@ export function App() {
         body: JSON.stringify({
           draftId: result.draftId,
           sessionId,
-          security_id: applyForm.security_id.trim(),
+          security_id: resolvedSecurityId,
           send_resume: sendResumeWithDraft,
         }),
       });
@@ -684,6 +729,8 @@ export function App() {
                 <p>
                   {result.delivery.resume_sent
                     ? "已通过 Boss 真实发送消息，并附带在线简历。"
+                    : result.delivery.send_resume
+                      ? "消息已发送，但在线简历没有成功发出。"
                     : "已通过 Boss 真实发送这条 Agent 草稿消息。"}
                 </p>
               ) : result.delivery?.status === "browser_channel_unavailable" ? (
