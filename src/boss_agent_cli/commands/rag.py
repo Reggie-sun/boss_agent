@@ -9,12 +9,18 @@ import click
 
 from boss_agent_cli.ai.config import AIConfigStore, PROVIDER_BASE_URLS
 from boss_agent_cli.ai.service import AIService
+from boss_agent_cli.auth.manager import AuthManager
+from boss_agent_cli.commands._platform import get_platform_instance
 from boss_agent_cli.commands.chat_reply import execute_chat_reply
 from boss_agent_cli.display import handle_error_output, handle_output
 from boss_agent_cli.display import handle_auth_errors
 from boss_agent_cli.rag_reply.adapters.agent_answer import AgentAnswerAdapter
 from boss_agent_cli.rag_reply.adapters.ai_fallback import AIFallbackAdapter
-from boss_agent_cli.rag_reply.adapters.boss_automation import BossAutomationAdapter, BossAutomationError
+from boss_agent_cli.rag_reply.adapters.boss_automation import (
+	BossAutomationAdapter,
+	BossAutomationError,
+	RecentConversationTarget,
+)
 from boss_agent_cli.rag_reply.adapters.manual_import import import_messages
 from boss_agent_cli.rag_reply.adapters.mock_envelope import load_and_ingest_mock_envelope
 from boss_agent_cli.rag_reply.adapters.rag_http import RagHttpAdapter
@@ -328,6 +334,46 @@ def _require_message_read_enabled(ctx: click.Context) -> bool:
 	return False
 
 
+def _serialize_target(target: RecentConversationTarget) -> dict[str, object]:
+	return {
+		"conversation_id": target.conversation_id,
+		"security_id": target.security_id,
+		"job_id": target.job_id,
+		"recruiter_name": target.recruiter_name,
+		"company": target.company,
+		"title": target.title,
+		"last_message": target.last_message,
+		"last_message_at": target.last_message_at,
+		"unread_count": target.unread_count,
+	}
+
+
+def _cached_recent_targets(store: RagReplyStore, *, limit: int) -> list[dict[str, object]]:
+	targets: list[dict[str, object]] = []
+	for conversation in store.list_conversations():
+		state = conversation.state if isinstance(conversation.state, dict) else {}
+		security_id = str(state.get("security_id") or "").strip()
+		if not security_id:
+			continue
+		recruiter = store.get_recruiter(str(conversation.recruiter_id or "")) if conversation.recruiter_id else None
+		targets.append(
+			{
+				"conversation_id": conversation.conversation_id,
+				"security_id": security_id,
+				"job_id": str(conversation.job_id or ""),
+				"recruiter_name": recruiter.display_name if recruiter else "",
+				"company": str(state.get("company") or (recruiter.company if recruiter else "") or ""),
+				"title": str(state.get("title") or ""),
+				"last_message": str(state.get("last_msg") or ""),
+				"last_message_at": conversation.last_message_at,
+				"unread_count": int(state.get("unread_count") or 0),
+			}
+		)
+		if len(targets) >= limit:
+			break
+	return targets
+
+
 def _not_implemented(ctx: click.Context, command: str) -> None:
 	"""Emit a consistent placeholder response for unimplemented subcommands."""
 	handle_error_output(
@@ -467,6 +513,63 @@ def rag_sync_messages_cmd(ctx: click.Context, conversation_id: str | None) -> No
 			"count": result.count,
 		},
 		render=lambda data: click.echo(f"Synced {data['count']} recruiter message(s).", err=True),
+	)
+
+
+@rag_group.command("targets")
+@click.option("--limit", default=5, type=int, show_default=True, help="返回最近可发送的 Boss 对话目标数量")
+@click.pass_context
+@handle_auth_errors("rag-targets")
+def rag_targets_cmd(ctx: click.Context, limit: int) -> None:
+	store = _resolve_store(ctx)
+	config = ctx.obj.get("config", {}) if ctx and ctx.obj else {}
+	safe_limit = max(1, min(limit, 20))
+	live_read_enabled = bool(config.get("boss_rag_allow_message_read", False))
+	cached_targets = _cached_recent_targets(store, limit=safe_limit)
+	refreshed = False
+	refresh_error = ""
+	source = "cache"
+	targets = cached_targets
+
+	if live_read_enabled:
+		try:
+			with _build_boss_adapter(ctx) as adapter:
+				targets = [_serialize_target(target) for target in adapter.list_recent_targets(limit=safe_limit)]
+			refreshed = True
+			source = "boss_live"
+		except BossAutomationError as exc:
+			refresh_error = exc.message
+			if not cached_targets:
+				handle_error_output(
+					ctx,
+					_workflow_command(ctx, "targets"),
+					code=exc.code,
+					message=exc.message,
+					recoverable=exc.recoverable,
+					recovery_action=exc.recovery_action,
+					hints=exc.hints,
+				)
+				return
+
+	handle_output(
+		ctx,
+		_workflow_command(ctx, "targets"),
+		{
+			"targets": targets,
+			"count": len(targets),
+			"limit": safe_limit,
+			"source": source,
+			"live_read_enabled": live_read_enabled,
+			"refreshed": refreshed,
+			"refresh_error": refresh_error,
+		},
+		render=lambda data: click.echo(f"Loaded {data['count']} Boss target(s).", err=True),
+		hints={
+			"next_actions": [
+				"agent ask --conversation-id <session> --question \"麻烦发一下简历\" --security-id <security_id> --auto-send-resume",
+				"agent send <draft_id> --security-id <security_id> --send-resume",
+			]
+		},
 	)
 
 

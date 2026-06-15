@@ -110,7 +110,7 @@ def test_required_tools_present():
 		"boss_ai_interview_prep", "boss_ai_chat_coach",
 		"boss_resume_list", "boss_resume_show",
 		"boss_ai_analyze_jd", "boss_ai_optimize", "boss_ai_suggest",
-		"boss_agent_init", "boss_agent_draft", "boss_agent_approve", "boss_agent_send",
+		"boss_agent_init", "boss_agent_targets", "boss_agent_draft", "boss_agent_approve", "boss_agent_send",
 		"boss_watch_list",
 		"boss_preset_list", "boss_shortlist_list", "boss_shortlist_prepare", "boss_shortlist_open", "boss_shortlist_mark_applied",
 		"boss_hr_jobs",
@@ -122,7 +122,7 @@ def test_required_tools_present():
 
 def test_tool_count():
 	"""工具总数应与当前注册一致。"""
-	assert len(TOOLS) == 45
+	assert len(TOOLS) == 46
 
 
 def test_search_tool_requires_query():
@@ -678,6 +678,11 @@ def test_build_args_agent_sync_messages():
 	assert args == ["agent", "sync-messages", "--conversation-id", "conv-1"]
 
 
+def test_build_args_agent_targets():
+	args = _build_args("boss_agent_targets", {"limit": 3})
+	assert args == ["agent", "targets", "--limit", "3"]
+
+
 def test_build_args_agent_draft():
 	args = _build_args("boss_agent_draft", {"conversation_id": "conv-1", "message_id": "msg-2"})
 	assert args == ["agent", "draft", "--conversation-id", "conv-1", "--message-id", "msg-2"]
@@ -729,7 +734,7 @@ def test_build_args_shortlist_list():
 
 def test_tool_count_after_pr41():
 	"""协议服务工具总数应与当前 MCP 暴露能力完全一致。"""
-	assert len(TOOLS) == 45
+	assert len(TOOLS) == 46
 
 
 def test_build_args_shortlist_add():

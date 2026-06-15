@@ -178,6 +178,25 @@ class RagReplyStore:
 			updated_at=str(row["updated_at"]),
 		)
 
+	def list_conversations(self) -> list[ConversationRecord]:
+		with self.connect() as conn:
+			rows = conn.execute(
+				"SELECT * FROM conversations ORDER BY COALESCE(last_message_at, updated_at) DESC, conversation_id DESC"
+			).fetchall()
+		return [
+			ConversationRecord(
+				conversation_id=str(row["conversation_id"]),
+				source=str(row["source"]),
+				job_id=row["job_id"],
+				recruiter_id=row["recruiter_id"],
+				channel=str(row["channel"]),
+				last_message_at=row["last_message_at"],
+				state=self._loads(row["state_json"]),
+				updated_at=str(row["updated_at"]),
+			)
+			for row in rows
+		]
+
 	def save_message(self, record: MessageRecord) -> None:
 		with self.connect() as conn:
 			conn.execute(

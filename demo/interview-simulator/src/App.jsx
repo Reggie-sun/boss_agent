@@ -153,6 +153,14 @@ export function App() {
   const [searchCity, setSearchCity] = useState("北京");
   const [searchResults, setSearchResults] = useState([]);
   const [searchLoading, setSearchLoading] = useState(false);
+  const [chatTargets, setChatTargets] = useState([]);
+  const [chatTargetsLoading, setChatTargetsLoading] = useState(false);
+  const [chatTargetsError, setChatTargetsError] = useState("");
+  const [chatTargetsMeta, setChatTargetsMeta] = useState({
+    source: "cache",
+    liveReadEnabled: false,
+    refreshed: false,
+  });
   const [isSendingToBoss, setIsSendingToBoss] = useState(false);
   const [sendResumeWithDraft, setSendResumeWithDraft] = useState(false);
 
@@ -162,6 +170,30 @@ export function App() {
   );
   const selectedCitation = result.citations[selectedCitationIndex] ?? null;
   const questionLength = question.replace(/\s/g, "").length;
+
+  async function loadChatTargets() {
+    setChatTargetsLoading(true);
+    setChatTargetsError("");
+    try {
+      const response = await fetch("/api/agent/targets?limit=5");
+      const payload = await response.json();
+      if (!response.ok || !payload.ok) {
+        throw new Error(payload.errorMessage || "读取 Boss 对话目标失败。");
+      }
+      setChatTargets(Array.isArray(payload.targets) ? payload.targets : []);
+      setChatTargetsMeta({
+        source: String(payload.source || "cache"),
+        liveReadEnabled: Boolean(payload.liveReadEnabled),
+        refreshed: Boolean(payload.refreshed),
+      });
+      setChatTargetsError(payload.refreshError ? String(payload.refreshError) : "");
+    } catch (error) {
+      setChatTargets([]);
+      setChatTargetsError(error instanceof Error ? error.message : "读取 Boss 对话目标失败。");
+    } finally {
+      setChatTargetsLoading(false);
+    }
+  }
 
   useEffect(() => {
     let cancelled = false;
@@ -204,6 +236,7 @@ export function App() {
       }
     }
     loadBridgeState();
+    loadChatTargets();
     return () => {
       cancelled = true;
     };
@@ -239,6 +272,17 @@ export function App() {
       job_id: job.encrypt_job_id || job.job_id || "",
       title: job.title || job.job_name || "",
       company: job.company || job.brand_name || "",
+    }));
+    setApplyMode(true);
+  }
+
+  function pickTarget(target) {
+    setApplyForm((f) => ({
+      ...f,
+      security_id: target.security_id || "",
+      job_id: target.job_id || f.job_id,
+      title: target.title || f.title,
+      company: target.company || f.company,
     }));
     setApplyMode(true);
   }
@@ -526,6 +570,54 @@ export function App() {
               <li className="history-list__empty">还没有提问记录，先输入一个问题试试。</li>
             )}
           </ul>
+        </section>
+
+        <section className="category-card">
+          <div className="card-title-row">
+            <h3>最近 Boss 目标</h3>
+            <button
+              type="button"
+              className="inline-action"
+              onClick={loadChatTargets}
+              disabled={chatTargetsLoading}
+            >
+              <ArrowClockwise size={16} />
+              {chatTargetsLoading ? "刷新中" : "刷新"}
+            </button>
+          </div>
+          <ul className="history-list">
+            {chatTargets.length ? (
+              chatTargets.map((target) => (
+                <li key={target.conversation_id || target.security_id}>
+                  <button type="button" onClick={() => pickTarget(target)}>
+                    <strong>{target.company || "未知公司"} · {target.title || "未知职位"}</strong>
+                    <span>
+                      {(target.recruiter_name || "未命名 HR")}
+                      {target.unread_count ? ` · 未读 ${target.unread_count}` : ""}
+                    </span>
+                    <em>{target.last_message || target.security_id}</em>
+                  </button>
+                </li>
+              ))
+            ) : (
+              <li className="history-list__empty">
+                {chatTargetsLoading
+                  ? "正在读取最近 Boss 对话目标..."
+                  : chatTargetsMeta.liveReadEnabled
+                    ? "还没有读取到可发送目标，可以稍后刷新或手动填写 security_id。"
+                    : "当前未开启 Boss 会话读取，暂时只能手动填写 security_id 或使用历史缓存目标。"}
+              </li>
+            )}
+          </ul>
+          {chatTargetsError ? (
+            <p className="history-list__empty">{chatTargetsError}</p>
+          ) : (
+            <p className="history-list__empty">
+              {chatTargetsMeta.source === "boss_live"
+                ? "已从最近 Boss 对话刷新目标，点击即可填充发送目标。"
+                : "当前展示的是本地缓存目标。"}
+            </p>
+          )}
         </section>
       </aside>
 

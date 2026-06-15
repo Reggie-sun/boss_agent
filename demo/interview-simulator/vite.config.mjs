@@ -116,6 +116,7 @@ function createRagBridgePlugin() {
     if (!req.url) return false;
     const isAgentHealth = req.url === "/api/agent/health" || req.url === "/api/rag/health";
     const isAgentThread = req.url.startsWith("/api/agent/thread") || req.url.startsWith("/api/rag/thread");
+    const isAgentTargets = req.url.startsWith("/api/agent/targets") || req.url.startsWith("/api/rag/targets");
     const isAgentAsk = req.url === "/api/agent/ask" || req.url === "/api/rag/ask";
     const isAgentSend = req.url === "/api/agent/send" || req.url === "/api/rag/send";
 
@@ -187,6 +188,50 @@ function createRagBridgePlugin() {
             ok: false,
             errorMessage:
               error instanceof Error ? error.message : "读取多轮 memory 失败。",
+          }),
+        );
+      }
+      return true;
+    }
+
+    if (req.method === "GET" && isAgentTargets) {
+      res.setHeader("Content-Type", "application/json; charset=utf-8");
+      try {
+        const requestUrl = new URL(req.url, "http://127.0.0.1");
+        const parsedLimit = Number.parseInt(requestUrl.searchParams.get("limit") || "5", 10);
+        const safeLimit = Number.isFinite(parsedLimit) ? Math.min(Math.max(parsedLimit, 1), 20) : 5;
+        const payload = runBossJsonCommand(bridgeConfig, [
+          "agent",
+          "targets",
+          "--limit",
+          String(safeLimit),
+        ]);
+        const data = payload.data || {};
+        res.end(
+          JSON.stringify({
+            ok: true,
+            targets: Array.isArray(data.targets) ? data.targets : [],
+            count: Number(data.count || 0),
+            source: String(data.source || "cache"),
+            liveReadEnabled: Boolean(data.live_read_enabled),
+            refreshed: Boolean(data.refreshed),
+            refreshError: String(data.refresh_error || ""),
+          }),
+        );
+      } catch (error) {
+        const payload = error?.commandPayload;
+        res.statusCode =
+          payload?.error?.code === "INVALID_PARAM"
+            ? 400
+            : payload?.error?.recoverable
+              ? 502
+              : 500;
+        res.end(
+          JSON.stringify({
+            ok: false,
+            errorMessage:
+              error instanceof Error ? error.message : "读取 Boss 对话目标失败。",
+            targets: [],
           }),
         );
       }

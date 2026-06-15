@@ -553,6 +553,17 @@ TOOLS = [
 		},
 	),
 	Tool(
+		name="boss_agent_targets",
+		description="列出最近可发送的 Boss 对话目标；live 读取仍需显式开启 boss_rag_allow_message_read=true。",
+		inputSchema={
+			"type": "object",
+			"properties": {
+				"limit": {"type": "integer", "description": "返回目标数量上限", "default": 5},
+			},
+			"required": [],
+		},
+	),
+	Tool(
 		name="boss_agent_draft",
 		description="基于本地 Boss Agent store 里的消息生成草稿",
 		inputSchema={
@@ -1156,6 +1167,12 @@ def _build_args(tool_name: str, arguments: dict) -> list[str]:
 		args = ["agent", "sync-messages"]
 		if arguments.get("conversation_id"):
 			args.extend(["--conversation-id", arguments["conversation_id"]])
+		return args
+
+	if name in {"agent_targets", "rag_targets"}:
+		args = ["agent", "targets"]
+		if "limit" in arguments:
+			args.extend(["--limit", str(arguments["limit"])])
 		return args
 
 	if name in {"agent_draft", "rag_draft"}:

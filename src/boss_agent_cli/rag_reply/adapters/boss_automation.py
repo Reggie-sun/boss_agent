@@ -74,6 +74,19 @@ class SyncMessagesResult:
 	count: int
 
 
+@dataclass(slots=True)
+class RecentConversationTarget:
+	conversation_id: str
+	security_id: str
+	job_id: str
+	recruiter_name: str
+	company: str
+	title: str
+	last_message: str
+	last_message_at: str | None
+	unread_count: int
+
+
 class BossAutomationError(Exception):
 	"""Structured read-only adapter error."""
 
@@ -211,6 +224,32 @@ class BossAutomationAdapter:
 			count=len(message_ids),
 		)
 
+	def list_recent_targets(self, *, limit: int = _RECENT_CONVERSATION_LIMIT) -> list[RecentConversationTarget]:
+		"""Return recent Boss conversation targets without pulling full chat history."""
+		items, error = collect_friend_list_items(self.platform, max_pages=_RECENT_FRIEND_LIST_PAGES)
+		if error is not None:
+			self._raise_platform_error(error, fallback_message="沟通列表获取失败")
+
+		targets: list[RecentConversationTarget] = []
+		for raw_item in items[: max(limit, 0)]:
+			if not isinstance(raw_item, dict):
+				continue
+			conversation = self._save_conversation_from_friend_item(raw_item)
+			targets.append(
+				RecentConversationTarget(
+					conversation_id=conversation.conversation_id,
+					security_id=str(conversation.state.get("security_id") or ""),
+					job_id=str(conversation.job_id or ""),
+					recruiter_name=str(raw_item.get("name") or raw_item.get("friendName") or ""),
+					company=str(raw_item.get("brandName") or raw_item.get("companyName") or ""),
+					title=str(raw_item.get("title") or ""),
+					last_message=str(raw_item.get("lastMsg") or ""),
+					last_message_at=conversation.last_message_at,
+					unread_count=int(raw_item.get("unreadMsgCount") or 0),
+				)
+			)
+		return targets
+
 	def _job_record_from_raw(self, raw_item: dict[str, Any]) -> JobRecord | None:
 		job_item = JobItem.from_api(raw_item)
 		if not job_item.job_id:
@@ -297,6 +336,7 @@ class BossAutomationAdapter:
 				"last_msg": raw_item.get("lastMsg"),
 				"title": raw_item.get("title"),
 				"company": raw_item.get("brandName"),
+				"unread_count": raw_item.get("unreadMsgCount") or 0,
 			},
 			updated_at=utc_now_iso(),
 		)

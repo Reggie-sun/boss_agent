@@ -9,7 +9,7 @@ from boss_agent_cli.commands.chat_reply import ChatReplyExecutionResult
 from boss_agent_cli.ai.config import AIConfigStore
 from boss_agent_cli.main import cli
 from boss_agent_cli.rag_reply.adapters.boss_automation import SyncJobsResult, SyncMessagesResult
-from boss_agent_cli.rag_reply.models import ConversationRecord, DraftRecord, MessageRecord
+from boss_agent_cli.rag_reply.models import ConversationRecord, DraftRecord, MessageRecord, RecruiterRecord
 from boss_agent_cli.rag_reply.service import BossRagReplyService
 from boss_agent_cli.rag_reply.store import RagReplyStore
 
@@ -478,6 +478,22 @@ class _FakeBossAdapter:
 			count=1,
 		)
 
+	def list_recent_targets(self, *, limit=5):
+		assert limit == 3
+		return [
+			rag_commands.RecentConversationTarget(
+				conversation_id="boss_conv_sec_001",
+				security_id="sec_001",
+				job_id="job_001",
+				recruiter_name="张HR",
+				company="测试公司",
+				title="AI 应用工程师",
+				last_message="麻烦发一下简历",
+				last_message_at="2026-06-15T12:00:00+00:00",
+				unread_count=1,
+			)
+		]
+
 
 def test_rag_sync_jobs_uses_boss_adapter(monkeypatch, tmp_path: Path):
 	monkeypatch.setattr("boss_agent_cli.commands.rag._build_boss_adapter", lambda ctx: _FakeBossAdapter())
@@ -509,6 +525,63 @@ def test_rag_sync_messages_uses_boss_adapter_after_opt_in(monkeypatch, tmp_path:
 	assert parsed["command"] == "rag-sync-messages"
 	assert parsed["data"]["count"] == 1
 	assert parsed["data"]["conversation_ids"] == ["boss_conv_sec_001"]
+
+
+def test_rag_targets_uses_boss_adapter_after_opt_in(monkeypatch, tmp_path: Path):
+	(tmp_path / "config.json").write_text(
+		json.dumps({"boss_rag_allow_message_read": True}),
+		encoding="utf-8",
+	)
+	monkeypatch.setattr("boss_agent_cli.commands.rag._build_boss_adapter", lambda ctx: _FakeBossAdapter())
+	runner = CliRunner()
+
+	result = runner.invoke(cli, ["--json", "--data-dir", str(tmp_path), "agent", "targets", "--limit", "3"])
+
+	assert result.exit_code == 0
+	parsed = json.loads(result.output)
+	assert parsed["ok"] is True
+	assert parsed["command"] == "agent-targets"
+	assert parsed["data"]["source"] == "boss_live"
+	assert parsed["data"]["count"] == 1
+	assert parsed["data"]["targets"][0]["security_id"] == "sec_001"
+
+
+def test_rag_targets_falls_back_to_cached_targets_when_live_read_disabled(tmp_path: Path):
+	store = RagReplyStore(tmp_path / "boss-rag.sqlite3")
+	store.initialize()
+	store.save_recruiter(
+		RecruiterRecord(
+			recruiter_id="recruiter_001",
+			display_name="李HR",
+			company="缓存公司",
+		)
+	)
+	store.save_conversation(
+		ConversationRecord(
+			conversation_id="boss_conv_cached_001",
+			source="boss_sync",
+			job_id="job_cached_001",
+			recruiter_id="recruiter_001",
+			last_message_at="2026-06-15T12:00:00+00:00",
+			state={
+				"security_id": "sec_cached_001",
+				"title": "后端工程师",
+				"company": "缓存公司",
+				"last_msg": "最近方便沟通吗？",
+			},
+		)
+	)
+	runner = CliRunner()
+
+	result = runner.invoke(cli, ["--json", "--data-dir", str(tmp_path), "agent", "targets"])
+
+	assert result.exit_code == 0
+	parsed = json.loads(result.output)
+	assert parsed["ok"] is True
+	assert parsed["command"] == "agent-targets"
+	assert parsed["data"]["live_read_enabled"] is False
+	assert parsed["data"]["source"] == "cache"
+	assert parsed["data"]["targets"][0]["security_id"] == "sec_cached_001"
 
 
 def test_rag_build_service_passes_rag_auth_config(monkeypatch, tmp_path: Path):

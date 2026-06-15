@@ -865,7 +865,7 @@ SCHEMA_DATA = {
 			},
 		},
 		"agent": {
-			"description": "Boss Agent 回复工作流（子命令：init/import-messages/ingest-mock/sync-jobs/sync-messages/draft/review/ask/thread/approve/send/audit）。其中 sync-messages 仍需显式开启 boss_rag_allow_message_read=true；`send` 会真实调用 Boss 聊天发送；`rag` 为兼容旧入口。",
+			"description": "Boss Agent 回复工作流（子命令：init/import-messages/ingest-mock/sync-jobs/sync-messages/targets/draft/review/ask/thread/approve/send/audit）。其中 sync-messages 与 targets 的 live 读取仍需显式开启 boss_rag_allow_message_read=true；`send` 会真实调用 Boss 聊天发送；`rag` 为兼容旧入口。",
 			"args": [],
 			"options": {},
 			"subcommands": {
@@ -874,6 +874,7 @@ SCHEMA_DATA = {
 				"ingest-mock": "导入结构化 mock envelope 以验证 Agent workflow",
 				"sync-jobs": "同步职位摘要到本地 Agent store",
 				"sync-messages": "从 Boss 读取消息到本地 Agent store；默认需显式开启 boss_rag_allow_message_read=true",
+				"targets": "列出最近可发送的 Boss 对话目标；live 读取默认需显式开启 boss_rag_allow_message_read=true",
 				"draft": "基于本地 store 里的消息生成 Agent 草稿",
 				"review": "查看 Agent 草稿详情",
 				"ask": "以前端问题写入本地 store，并返回共享 memory + 草稿答案",
