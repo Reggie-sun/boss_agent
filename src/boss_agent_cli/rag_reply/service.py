@@ -165,7 +165,7 @@ class BossRagReplyService:
 		rag_question = build_rag_question(
 			message.message_text,
 			job_summary,
-			build_answer_objective(classification.intent),
+			build_answer_objective(classification.intent, message.message_text),
 		)
 		rag_result = self.rag_adapter.answer(
 			rag_question=rag_question,
@@ -282,7 +282,14 @@ class BossRagReplyService:
 		rag_error_message: str | None,
 	) -> DraftRecord | None:
 		if self.fallback_adapter is None:
-			return None
+			return self._build_agent_template_fallback_draft(
+				message=message,
+				classification=classification,
+				decision=decision,
+				job_summary=job_summary,
+				rag_session_id=rag_session_id,
+				rag_error_message=rag_error_message,
+			)
 		fallback_result = self.fallback_adapter.answer(
 			message_text=message.message_text,
 			intent=classification.intent,
@@ -290,7 +297,14 @@ class BossRagReplyService:
 			rag_error=rag_error_message,
 		)
 		if not fallback_result.ok:
-			return None
+			return self._build_agent_template_fallback_draft(
+				message=message,
+				classification=classification,
+				decision=decision,
+				job_summary=job_summary,
+				rag_session_id=rag_session_id,
+				rag_error_message=rag_error_message,
+			)
 		draft = DraftRecord.new(
 			conversation_id=message.conversation_id,
 			source_message_id=message.message_id,
@@ -310,6 +324,46 @@ class BossRagReplyService:
 			rag_session_id=rag_session_id,
 		)
 		return draft
+
+	def _build_agent_template_fallback_draft(
+		self,
+		*,
+		message: MessageRecord,
+		classification: ClassificationResult,
+		decision: ApprovalDecision,
+		job_summary: str | None,
+		rag_session_id: str,
+		rag_error_message: str | None,
+	) -> DraftRecord | None:
+		if self.agent_answer_adapter is None:
+			return None
+		agent_result = self.agent_answer_adapter.answer(
+			message_text=message.message_text,
+			intent=classification.intent,
+			job_summary=job_summary,
+			rag_answer="",
+			citations=[],
+		)
+		if not agent_result.ok or not agent_result.answer.strip():
+			return None
+		return DraftRecord.new(
+			conversation_id=message.conversation_id,
+			source_message_id=message.message_id,
+			draft_text=agent_result.answer,
+			intent=classification.intent,
+			risk_labels=decision.risk_labels,
+			evidence={
+				"source": "boss_agent_ai_fallback",
+				"fallback_from": "enterprise_rag",
+				"rag_error_message": rag_error_message,
+				"reasoning_summary": agent_result.reasoning_summary,
+				"raw_response": agent_result.raw_response,
+			},
+			approval_required=decision.approval_required,
+			send_allowed=False,
+			audit_status="draft_created",
+			rag_session_id=rag_session_id,
+		)
 
 	def _resolve_job_summary(self, message: MessageRecord) -> str | None:
 		if not message.job_id:

@@ -41,9 +41,43 @@ SENSITIVE_RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
 	("personal_status", (r"在职", r"目前状态", r"当前状态", r"现在还在职", r"是否在职")),
 )
 
-PROJECT_PATTERNS = (r"rag", r"项目", r"做了什么", r"具体做了什么", r"介绍一下")
-RESUME_PATTERNS = (r"fastapi", r"会.*吗", r"熟悉", r"技术栈", r"经验")
-JOB_DETAIL_PATTERNS = (r"岗位", r"你对我们岗位", r"有什么想问", r"还有什么问题")
+PROJECT_PATTERNS = (
+	r"rag",
+	r"项目",
+	r"做了什么",
+	r"具体做了什么",
+	r"介绍一下",
+	r"职责",
+	r"技术方案",
+	r"架构",
+	r"检索",
+	r"重排",
+	r"引用溯源",
+	r"召回",
+	r"多轮",
+	r"最难",
+	r"难点",
+	r"怎么解决",
+	r"如何解决",
+	r"怎么设计",
+	r"如何设计",
+)
+RESUME_PATTERNS = (
+	r"fastapi",
+	r"会.*吗",
+	r"熟悉",
+	r"技术栈",
+	r"经验",
+	r"为什么.*适合",
+	r"匹配.*岗位",
+	r"胜任",
+	r"产品.*协作",
+	r"算法.*协作",
+	r"后端.*协作",
+	r"跨团队",
+	r"沟通协作",
+)
+JOB_DETAIL_PATTERNS = (r"你对我们岗位", r"有什么想问", r"还有什么问题", r"了解这个岗位")
 SMALLTALK_PATTERNS = (r"你好", r"您好", r"收到", r"好的", r"谢谢", r"辛苦", r"在吗")
 
 

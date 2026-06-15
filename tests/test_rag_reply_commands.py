@@ -581,7 +581,7 @@ def test_rag_build_service_passes_rag_auth_config(monkeypatch, tmp_path: Path):
 	}
 
 
-def test_rag_build_service_reuses_rag_key_for_default_deepseek_fallback(monkeypatch, tmp_path: Path):
+def test_rag_build_service_skips_optional_ai_helpers_without_ai_config(monkeypatch, tmp_path: Path):
 	captured = {}
 
 	class _FakeRagHttpAdapter:
@@ -593,15 +593,11 @@ def test_rag_build_service_reuses_rag_key_for_default_deepseek_fallback(monkeypa
 
 	class _FakeFallbackAdapter:
 		def __init__(self, *, ai_service):
-			captured["fallback_model"] = ai_service.model
-			captured["fallback_base_url"] = ai_service.base_url
-			captured["fallback_api_key"] = ai_service.api_key
+			captured["fallback_model"] = ai_service.model if ai_service else None
 
 	class _FakeAgentAnswerAdapter:
 		def __init__(self, *, ai_service):
-			captured["agent_model"] = ai_service.model
-			captured["agent_base_url"] = ai_service.base_url
-			captured["agent_api_key"] = ai_service.api_key
+			captured["agent_ai_service"] = ai_service
 
 	monkeypatch.setattr(rag_commands, "RagHttpAdapter", _FakeRagHttpAdapter)
 	monkeypatch.setattr(rag_commands, "AIFallbackAdapter", _FakeFallbackAdapter)
@@ -627,10 +623,5 @@ def test_rag_build_service_reuses_rag_key_for_default_deepseek_fallback(monkeypa
 		"timeout_seconds": 11,
 		"api_key": "shared-rag-key-abc123",
 		"auth_mode": "x_api_key",
-		"fallback_model": "deepseek-chat",
-		"fallback_base_url": "https://api.deepseek.com/v1",
-		"fallback_api_key": "shared-rag-key-abc123",
-		"agent_model": "deepseek-chat",
-		"agent_base_url": "https://api.deepseek.com/v1",
-		"agent_api_key": "shared-rag-key-abc123",
+		"agent_ai_service": None,
 	}

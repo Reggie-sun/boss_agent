@@ -26,3 +26,17 @@ def test_project_question_uses_non_sensitive_path():
 	result = classify_message("你这个RAG项目具体做了什么？")
 	assert result.intent == "project_question"
 	assert result.classifier_source == "heuristic"
+
+
+@pytest.mark.parametrize(
+	("message_text", "expected_intent"),
+	[
+		("请介绍一下你做的企业级 RAG 项目，重点说职责、技术方案和结果。", "project_question"),
+		("如果让你设计检索、重排和引用溯源，你会怎么做？", "project_question"),
+		("你平时和产品、算法、后端是怎么协作的？", "resume_question"),
+		("你为什么觉得自己适合这个岗位？", "resume_question"),
+	],
+)
+def test_hr_interview_questions_map_to_expected_intents(message_text: str, expected_intent: str):
+	result = classify_message(message_text)
+	assert result.intent == expected_intent

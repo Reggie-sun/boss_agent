@@ -297,6 +297,51 @@ def test_draft_command_uses_ai_fallback_when_rag_fails(tmp_path):
 	assert store.list_messages("conv_001")[-1].source == "rag_draft_memory"
 
 
+def test_draft_command_uses_agent_answer_fallback_when_rag_fails_and_no_ai_fallback(tmp_path):
+	store = RagReplyStore(tmp_path / "boss-rag.sqlite3")
+	store.initialize()
+	store.save_conversation(ConversationRecord(conversation_id="conv_001", source="manual_import"))
+	store.save_message(
+		MessageRecord(
+			message_id="msg_001",
+			conversation_id="conv_001",
+			message_text="你平时和产品、算法、后端是怎么协作的？",
+			direction="inbound",
+		)
+	)
+	agent_adapter = _FakeAgentAnswerAdapter(
+		_FakeRagResult(
+			ok=True,
+			answer="我平时会把协作拆成业务场景、检索策略和工程交付三个层面。",
+			citations=[],
+			reasoning_summary={"strategy": "命中本地候选人面试回答模板"},
+			raw_response={"mode": "local_interview_template"},
+		)
+	)
+	service = BossRagReplyService(
+		store=store,
+		rag_adapter=_FakeRagAdapter(
+			_FakeRagResult(
+				ok=False,
+				answer="",
+				citations=[],
+				error_message="timed out",
+				audit_status="rag_failed",
+			)
+		),
+		agent_answer_adapter=agent_adapter,
+	)
+
+	draft = service.create_draft_for_message("msg_001")
+
+	assert draft.audit_status == "draft_created"
+	assert draft.evidence["source"] == "boss_agent_ai_fallback"
+	assert draft.evidence["fallback_from"] == "enterprise_rag"
+	assert draft.evidence["rag_error_message"] == "timed out"
+	assert draft.draft_text.startswith("我平时会把协作拆成业务场景")
+	assert agent_adapter.calls[0]["rag_answer"] == ""
+
+
 def test_resume_share_request_generates_local_approval_draft(tmp_path):
 	store = RagReplyStore(tmp_path / "boss-rag.sqlite3")
 	store.initialize()

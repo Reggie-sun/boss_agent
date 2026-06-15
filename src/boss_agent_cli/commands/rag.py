@@ -63,15 +63,7 @@ def _build_shared_ai_service(ctx: click.Context) -> AIService | None:
 	data_dir = Path(ctx.obj["data_dir"])
 	store = AIConfigStore(data_dir)
 	if not store.is_configured():
-		config = ctx.obj.get("config", {}) if ctx and ctx.obj else {}
-		rag_api_key = config.get("boss_rag_rag_api_key")
-		if not rag_api_key:
-			return None
-		return AIService(
-			base_url=str(PROVIDER_BASE_URLS["deepseek"]),
-			api_key=str(rag_api_key),
-			model="deepseek-chat",
-		)
+		return None
 	api_key = store.get_api_key()
 	base_url = store.get_base_url()
 	if not api_key or not base_url:
@@ -97,8 +89,6 @@ def _build_ai_fallback_adapter(ctx: click.Context) -> AIFallbackAdapter | None:
 def _build_agent_answer_adapter(ctx: click.Context) -> AgentAnswerAdapter | None:
 	"""Construct the optional agent-side answer composer."""
 	ai_service = _build_shared_ai_service(ctx)
-	if ai_service is None:
-		return None
 	return AgentAnswerAdapter(ai_service=ai_service)
 
 
