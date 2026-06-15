@@ -39,6 +39,15 @@ const emptyAnswer = {
 };
 
 const sessionStorageKey = "boss-rag-demo-thread-id";
+const defaultBrowserChannel = {
+  available: false,
+  mode: "none",
+  cdpAvailable: false,
+  bridgeAvailable: false,
+  cdpUrl: "http://localhost:9222",
+  bridgeUrl: "http://127.0.0.1:19826",
+  errorMessage: "",
+};
 
 function loadOrCreateSessionId() {
   const existing = globalThis.localStorage?.getItem(sessionStorageKey);
@@ -124,6 +133,28 @@ function normalizeReasoningSummary(reasoningSummary) {
     }));
 }
 
+function normalizeBridgeStatePayload(data, fallbackErrorMessage = "") {
+  const browserChannel =
+    data?.browserChannel && typeof data.browserChannel === "object"
+      ? {
+          ...defaultBrowserChannel,
+          ...data.browserChannel,
+        }
+      : defaultBrowserChannel;
+
+  return {
+    loading: false,
+    configured: Boolean(data?.configured),
+    ready: Boolean(data?.ready),
+    authMode: String(data?.authMode || "unknown"),
+    endpoint: String(data?.endpoint || "/api/agent/ask"),
+    errorMessage: data?.errorMessage
+      ? String(data.errorMessage)
+      : fallbackErrorMessage,
+    browserChannel,
+  };
+}
+
 export function App() {
   const [question, setQuestion] = useState(starterPrompts[0]);
   const [history, setHistory] = useState([]);
@@ -138,6 +169,7 @@ export function App() {
     authMode: "unknown",
     endpoint: "/api/agent/ask",
     errorMessage: "",
+    browserChannel: defaultBrowserChannel,
   });
   const [sessionId] = useState(() => loadOrCreateSessionId());
 
@@ -205,14 +237,7 @@ export function App() {
         const data = await response.json();
         const threadPayload = await threadResponse.json();
         if (!cancelled) {
-          setBridgeState({
-            loading: false,
-            configured: Boolean(data.configured),
-            ready: Boolean(data.ready),
-            authMode: String(data.authMode || "unknown"),
-            endpoint: String(data.endpoint || "/api/agent/ask"),
-            errorMessage: data.errorMessage ? String(data.errorMessage) : "",
-          });
+          setBridgeState(normalizeBridgeStatePayload(data));
           if (threadPayload.ok && threadPayload.thread) {
             setThread(
               Array.isArray(threadPayload.thread.messages)
@@ -223,14 +248,12 @@ export function App() {
         }
       } catch (error) {
         if (!cancelled) {
-          setBridgeState({
-            loading: false,
-            configured: false,
-            ready: false,
-            authMode: "unknown",
-            endpoint: "/api/agent/ask",
-            errorMessage: error instanceof Error ? error.message : "无法读取本地代理状态。",
-          });
+          setBridgeState(
+            normalizeBridgeStatePayload(
+              null,
+              error instanceof Error ? error.message : "无法读取本地代理状态。",
+            ),
+          );
         }
       }
     }
@@ -372,6 +395,36 @@ export function App() {
   async function handleSendToBoss() {
     if (!result.draftId || isSendingToBoss) return;
 
+    let latestBridgeState = bridgeState;
+    try {
+      const healthResponse = await fetch("/api/agent/health");
+      const healthPayload = await healthResponse.json();
+      latestBridgeState = normalizeBridgeStatePayload(healthPayload);
+      setBridgeState(latestBridgeState);
+    } catch (error) {
+      latestBridgeState = normalizeBridgeStatePayload(
+        null,
+        error instanceof Error ? error.message : "无法检查浏览器发送通道状态。",
+      );
+      setBridgeState(latestBridgeState);
+    }
+
+    if (!latestBridgeState.browserChannel.available) {
+      setResult((current) => ({
+        ...current,
+        delivery: {
+          status: "browser_channel_unavailable",
+          message_sent: false,
+          resume_sent: false,
+          error_message:
+            latestBridgeState.browserChannel.errorMessage ||
+            latestBridgeState.errorMessage ||
+            "未检测到可用的浏览器发送通道。",
+        },
+      }));
+      return;
+    }
+
     setIsSendingToBoss(true);
     try {
       const response = await fetch("/api/agent/send", {
@@ -489,8 +542,8 @@ export function App() {
           </div>
           <ul className="history-list">
             {thread.length ? (
-              thread.map((item) => (
-                <li key={item.id}>
+              thread.map((item, index) => (
+                <li key={`${item.id || item.content || item.role}-${index}`}>
                   <button
                     type="button"
                     className={`thread-item thread-item--${item.role}`}
@@ -505,8 +558,8 @@ export function App() {
                 </li>
               ))
             ) : history.length ? (
-              history.map((item) => (
-                <li key={item.id}>
+              history.map((item, index) => (
+                <li key={`${item.id || item.question || item.status}-${index}`}>
                   <button type="button" onClick={() => setQuestion(item.question)}>
                     <strong>{item.question}</strong>
                     <span>
@@ -537,8 +590,8 @@ export function App() {
           </div>
           <ul className="history-list">
             {chatTargets.length ? (
-              chatTargets.map((target) => (
-                <li key={target.conversation_id || target.security_id}>
+              chatTargets.map((target, index) => (
+                <li key={`${target.conversation_id || target.security_id}-${index}`}>
                   <button type="button" onClick={() => pickTarget(target)}>
                     <strong>{target.company || "未知公司"} · {target.title || "未知职位"}</strong>
                     <span>
@@ -633,6 +686,10 @@ export function App() {
                     ? "已通过 Boss 真实发送消息，并附带在线简历。"
                     : "已通过 Boss 真实发送这条 Agent 草稿消息。"}
                 </p>
+              ) : result.delivery?.status === "browser_channel_unavailable" ? (
+                <p>
+                  发送到 Boss 失败：{result.delivery.error_message || "当前 CDP / Bridge 不可用。"}
+                </p>
               ) : result.delivery?.status === "disabled" ? (
                 <p>已识别为发简历请求，但本地未开启自动发送。</p>
               ) : result.delivery?.status === "missing_security_id" ? (
@@ -694,6 +751,12 @@ export function App() {
                     ? "这一步会复用 `boss agent send`，由后端通过 CDP 真实发送。"
                     : "当前回答还没有可发送的 draft_id。"}
                 </span>
+                {!bridgeState.browserChannel.available &&
+                bridgeState.browserChannel.errorMessage ? (
+                  <span>
+                    当前浏览器发送通道不可用：{bridgeState.browserChannel.errorMessage}
+                  </span>
+                ) : null}
               </div>
               <div className="answer-actions__controls">
                 <label className="send-toggle">
@@ -750,9 +813,9 @@ export function App() {
                       onChange={(e) => handleTargetSelection(e.target.value)}
                     >
                       <option value="">选择已回复的 Boss 对话目标</option>
-                      {chatTargets.map((target) => (
+                      {chatTargets.map((target, index) => (
                         <option
-                          key={targetOptionValue(target)}
+                          key={`${targetOptionValue(target)}-${index}`}
                           value={targetOptionValue(target)}
                         >
                           {`${target.company || "未知公司"} · ${target.recruiter_name || "未命名 HR"} · ${target.title || "未知职位"}`}

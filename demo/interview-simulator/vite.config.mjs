@@ -27,12 +27,58 @@ function loadBridgeConfig() {
     dataDir: get("BOSS_RAG_DATA_DIR", "~/.boss-agent"),
     pythonBin: get("BOSS_RAG_PYTHON_BIN", get("PYTHON", "python")),
     baseUrl: get("BOSS_RAG_RAG_BASE_URL", "").replace(/\/$/, ""),
+    cdpUrl: get("BOSS_RAG_CDP_URL", get("BOSS_CDP_URL", "http://localhost:9222")).replace(/\/$/, ""),
+    bridgeUrl: get("BOSS_RAG_BRIDGE_URL", "http://127.0.0.1:19826").replace(/\/$/, ""),
     authMode: get("BOSS_RAG_RAG_AUTH_MODE", "none").toLowerCase(),
     apiKey:
       get("BOSS_RAG_RAG_API_KEY") ||
       get("RAG_API_KEY") ||
       get("RAG_AUTH_API_KEY") ||
       "",
+  };
+}
+
+async function readJsonWithTimeout(url, timeoutMs = 1500) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(url, { signal: controller.signal });
+    if (!response.ok) return null;
+    return await response.json();
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function detectBrowserChannel(config) {
+  const cdpVersion = await readJsonWithTimeout(`${config.cdpUrl}/json/version`);
+  const bridgeStatus = await readJsonWithTimeout(`${config.bridgeUrl}/status`);
+
+  const cdpAvailable = Boolean(cdpVersion?.webSocketDebuggerUrl);
+  const bridgeAvailable = Boolean(bridgeStatus?.extensionConnected);
+  const available = cdpAvailable || bridgeAvailable;
+
+  let mode = "none";
+  if (cdpAvailable && bridgeAvailable) {
+    mode = "cdp+bridge";
+  } else if (cdpAvailable) {
+    mode = "cdp";
+  } else if (bridgeAvailable) {
+    mode = "bridge";
+  }
+
+  return {
+    available,
+    mode,
+    cdpAvailable,
+    bridgeAvailable,
+    cdpUrl: config.cdpUrl,
+    bridgeUrl: config.bridgeUrl,
+    errorMessage: available
+      ? ""
+      : `未检测到可用的浏览器发送通道：CDP (${config.cdpUrl}) / Bridge (${config.bridgeUrl})。请先启动带 remote debugging 的 Chrome，或连接 BOSS Agent Bridge 扩展。`,
   };
 }
 
@@ -124,6 +170,7 @@ function createRagBridgePlugin() {
       res.setHeader("Content-Type", "application/json; charset=utf-8");
       try {
         runBossJsonCommand(bridgeConfig, ["agent", "init"]);
+        const browserChannel = await detectBrowserChannel(bridgeConfig);
         const ready =
           Boolean(bridgeConfig.baseUrl) &&
           (bridgeConfig.authMode === "none" || Boolean(bridgeConfig.apiKey));
@@ -135,6 +182,7 @@ function createRagBridgePlugin() {
             endpoint: "/api/agent/ask + /api/agent/send",
             workflow: "boss-agent-cli",
             dataDir: bridgeConfig.dataDir,
+            browserChannel,
             errorMessage: bridgeConfig.baseUrl
               ? ""
               : "未找到 BOSS_RAG_RAG_BASE_URL，BOSS_AGENT workflow 无法调用 Enterprise RAG。",
@@ -150,6 +198,7 @@ function createRagBridgePlugin() {
             endpoint: "/api/agent/ask + /api/agent/send",
             workflow: "boss-agent-cli",
             dataDir: bridgeConfig.dataDir,
+            browserChannel: await detectBrowserChannel(bridgeConfig),
             errorMessage:
               error instanceof Error ? error.message : "本地 workflow 初始化失败。",
           }),
@@ -253,6 +302,25 @@ function createRagBridgePlugin() {
           return true;
         }
 
+        const browserChannel = await detectBrowserChannel(bridgeConfig);
+        if (!browserChannel.available) {
+          res.statusCode = 503;
+          res.end(
+            JSON.stringify({
+              ok: false,
+              errorMessage: browserChannel.errorMessage,
+              browserChannel,
+              delivery: {
+                status: "browser_channel_unavailable",
+                message_sent: false,
+                resume_sent: false,
+                error_message: browserChannel.errorMessage,
+              },
+            }),
+          );
+          return true;
+        }
+
         const args = ["agent", "send", draftId];
         if (securityId) args.push("--security-id", securityId);
         if (sendResume) args.push("--send-resume");
@@ -282,6 +350,7 @@ function createRagBridgePlugin() {
               command: payload.command,
               draft: data.draft || null,
             },
+            browserChannel,
           }),
         );
       } catch (error) {
@@ -302,6 +371,7 @@ function createRagBridgePlugin() {
           JSON.stringify({
             ok: false,
             errorMessage,
+            browserChannel: await detectBrowserChannel(bridgeConfig),
             delivery: {
               status: normalizedStatus,
               message_sent: false,
