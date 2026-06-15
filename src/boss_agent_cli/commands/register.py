@@ -83,7 +83,7 @@ def register_candidate_commands(cli: click.Group) -> None:
 	cli.add_command(digest.digest_cmd, "digest")
 	cli.add_command(config_cmd.config_group, "config")
 	cli.add_command(clean.clean_cmd, "clean")
-	cli.add_command(rag.rag_group, "rag")
+	cli.add_command(rag.rag_group, "agent")
 	cli.add_command(resume_cmd.resume_group, "resume")
 	cli.add_command(ai_cmd.ai_group, "ai")
 	cli.add_command(stats.stats_cmd, "stats")

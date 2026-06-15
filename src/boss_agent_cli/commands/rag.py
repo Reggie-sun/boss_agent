@@ -1,7 +1,8 @@
-"""Boss RAG reply workflow commands."""
+"""Boss Agent reply workflow commands with legacy rag compatibility."""
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
 
 import click
@@ -12,16 +13,39 @@ from boss_agent_cli.auth.manager import AuthManager
 from boss_agent_cli.commands._platform import get_platform_instance
 from boss_agent_cli.display import handle_error_output, handle_output
 from boss_agent_cli.display import handle_auth_errors
+from boss_agent_cli.rag_reply.adapters.agent_answer import AgentAnswerAdapter
 from boss_agent_cli.rag_reply.adapters.ai_fallback import AIFallbackAdapter
 from boss_agent_cli.rag_reply.adapters.boss_automation import BossAutomationAdapter, BossAutomationError
 from boss_agent_cli.rag_reply.adapters.manual_import import import_messages
 from boss_agent_cli.rag_reply.adapters.mock_envelope import load_and_ingest_mock_envelope
 from boss_agent_cli.rag_reply.adapters.rag_http import RagHttpAdapter
 from boss_agent_cli.rag_reply.langchain_memory import build_thread_payload
-from boss_agent_cli.rag_reply.models import ConversationRecord, MessageRecord, new_id
+from boss_agent_cli.rag_reply.models import AuditLogRecord, ConversationRecord, MessageRecord, new_id
 from boss_agent_cli.rag_reply.review import draft_to_payload
 from boss_agent_cli.rag_reply.service import BossRagReplyService
 from boss_agent_cli.rag_reply.store import RagReplyStore
+
+
+@dataclass(slots=True)
+class ResumeSendResult:
+	attempted: bool
+	status: str
+	message_sent: bool
+	resume_sent: bool
+	messages: list[str]
+	error_message: str = ""
+	security_id: str = ""
+
+
+def _workflow_name(ctx: click.Context) -> str:
+	"""Return the active workflow surface name."""
+	parent = ctx.parent.info_name if ctx.parent else ""
+	return "agent" if parent == "agent" else "rag"
+
+
+def _workflow_command(ctx: click.Context, action: str) -> str:
+	"""Return the envelope command name for the current workflow surface."""
+	return f"{_workflow_name(ctx)}-{action}"
 
 
 def _resolve_store(ctx: click.Context) -> RagReplyStore:
@@ -35,8 +59,8 @@ def _resolve_store(ctx: click.Context) -> RagReplyStore:
 	return store
 
 
-def _build_ai_fallback_adapter(ctx: click.Context) -> AIFallbackAdapter | None:
-	"""Construct the optional local AI fallback adapter."""
+def _build_shared_ai_service(ctx: click.Context) -> AIService | None:
+	"""Construct the optional shared AI service used by local agent helpers."""
 	data_dir = Path(ctx.obj["data_dir"])
 	store = AIConfigStore(data_dir)
 	if not store.is_configured():
@@ -44,27 +68,39 @@ def _build_ai_fallback_adapter(ctx: click.Context) -> AIFallbackAdapter | None:
 		rag_api_key = config.get("boss_rag_rag_api_key")
 		if not rag_api_key:
 			return None
-		return AIFallbackAdapter(
-			ai_service=AIService(
-				base_url=str(PROVIDER_BASE_URLS["deepseek"]),
-				api_key=str(rag_api_key),
-				model="deepseek-chat",
-			)
+		return AIService(
+			base_url=str(PROVIDER_BASE_URLS["deepseek"]),
+			api_key=str(rag_api_key),
+			model="deepseek-chat",
 		)
 	api_key = store.get_api_key()
 	base_url = store.get_base_url()
 	if not api_key or not base_url:
 		return None
 	config = store.load_config()
-	return AIFallbackAdapter(
-		ai_service=AIService(
-			base_url=base_url,
-			api_key=api_key,
-			model=config["ai_model"],
-			temperature=config.get("ai_temperature", 0.7),
-			max_tokens=config.get("ai_max_tokens", 4096),
-		)
+	return AIService(
+		base_url=base_url,
+		api_key=api_key,
+		model=config["ai_model"],
+		temperature=config.get("ai_temperature", 0.7),
+		max_tokens=config.get("ai_max_tokens", 4096),
 	)
+
+
+def _build_ai_fallback_adapter(ctx: click.Context) -> AIFallbackAdapter | None:
+	"""Construct the optional local AI fallback adapter."""
+	ai_service = _build_shared_ai_service(ctx)
+	if ai_service is None:
+		return None
+	return AIFallbackAdapter(ai_service=ai_service)
+
+
+def _build_agent_answer_adapter(ctx: click.Context) -> AgentAnswerAdapter | None:
+	"""Construct the optional agent-side answer composer."""
+	ai_service = _build_shared_ai_service(ctx)
+	if ai_service is None:
+		return None
+	return AgentAnswerAdapter(ai_service=ai_service)
 
 
 def _build_service(ctx: click.Context) -> BossRagReplyService:
@@ -80,6 +116,7 @@ def _build_service(ctx: click.Context) -> BossRagReplyService:
 		store=_resolve_store(ctx),
 		rag_adapter=rag_adapter,
 		fallback_adapter=_build_ai_fallback_adapter(ctx),
+		agent_answer_adapter=_build_agent_answer_adapter(ctx),
 	)
 
 
@@ -98,9 +135,13 @@ def _ensure_conversation(
 	conversation_id: str,
 	job_id: str | None = None,
 	recruiter_id: str | None = None,
+	security_id: str | None = None,
 ) -> ConversationRecord:
 	"""Create or refresh a frontend-driven conversation record."""
 	existing = store.get_conversation(conversation_id)
+	state = dict(existing.state) if existing and isinstance(existing.state, dict) else {"origin": "interview-simulator"}
+	if security_id:
+		state["security_id"] = security_id
 	return ConversationRecord(
 		conversation_id=conversation_id,
 		source="frontend_bridge",
@@ -108,7 +149,7 @@ def _ensure_conversation(
 		recruiter_id=recruiter_id or (existing.recruiter_id if existing else None),
 		channel=existing.channel if existing else "boss",
 		last_message_at=existing.last_message_at if existing else None,
-		state=existing.state if existing else {"origin": "interview-simulator"},
+		state=state,
 	)
 
 
@@ -119,6 +160,7 @@ def _persist_frontend_question(
 	question: str,
 	job_id: str | None = None,
 	recruiter_id: str | None = None,
+	security_id: str | None = None,
 ) -> MessageRecord:
 	"""Persist one frontend prompt into the shared Boss RAG store."""
 	conversation = _ensure_conversation(
@@ -126,6 +168,7 @@ def _persist_frontend_question(
 		conversation_id=conversation_id,
 		job_id=job_id,
 		recruiter_id=recruiter_id,
+		security_id=security_id,
 	)
 	message = MessageRecord(
 		message_id=new_id("frontmsg"),
@@ -152,6 +195,139 @@ def _persist_frontend_question(
 	return message
 
 
+def _resolve_security_id(
+	store: RagReplyStore,
+	*,
+	conversation_id: str,
+	security_id: str | None = None,
+	job_id: str | None = None,
+) -> str:
+	"""Resolve the target security_id from explicit input, conversation state, or stored job."""
+	explicit = str(security_id or "").strip()
+	if explicit:
+		return explicit
+	conversation = store.get_conversation(conversation_id)
+	if conversation and isinstance(conversation.state, dict):
+		from_state = str(conversation.state.get("security_id") or "").strip()
+		if from_state:
+			return from_state
+	resolved_job_id = str(job_id or (conversation.job_id if conversation else "") or "").strip()
+	if not resolved_job_id:
+		return ""
+	job = store.get_job(resolved_job_id)
+	return str(job.security_id if job else "").strip()
+
+
+def _send_resume_reply(ctx: click.Context, *, security_id: str, message: str) -> ResumeSendResult:
+	"""Send the chat reply and online resume via the existing CDP chat-reply path."""
+	data_dir = ctx.obj["data_dir"]
+	logger = ctx.obj["logger"]
+	auth = AuthManager(data_dir, logger=logger, platform=ctx.obj.get("platform", "zhipin"))
+	with get_platform_instance(ctx, auth) as platform:
+		client = platform._client
+		message_response = client.send_chat_message(security_id, message)
+		if message_response.get("code") != 0:
+			return ResumeSendResult(
+				attempted=True,
+				status="message_failed",
+				message_sent=False,
+				resume_sent=False,
+				messages=[],
+				error_message=str(message_response.get("message") or "消息发送失败"),
+				security_id=security_id,
+			)
+		resume_response = client.send_resume(security_id)
+		messages = [f"消息已发送: {message[:50]}..."]
+		if resume_response.get("code") == 0:
+			messages.append("在线简历已发送")
+			return ResumeSendResult(
+				attempted=True,
+				status="sent",
+				message_sent=True,
+				resume_sent=True,
+				messages=messages,
+				security_id=security_id,
+			)
+		messages.append(f"简历发送失败: {resume_response.get('message', '未知错误')}")
+		return ResumeSendResult(
+			attempted=True,
+			status="resume_failed",
+			message_sent=True,
+			resume_sent=False,
+			messages=messages,
+			error_message=str(resume_response.get("message") or "简历发送失败"),
+			security_id=security_id,
+		)
+
+
+def _maybe_auto_send_resume(
+	ctx: click.Context,
+	*,
+	store: RagReplyStore,
+	draft: object,
+	conversation_id: str,
+	job_id: str | None = None,
+	security_id: str | None = None,
+	auto_send_resume: bool = False,
+) -> dict[str, object] | None:
+	"""Auto-send the online resume when explicitly enabled and intent matches."""
+	if not auto_send_resume:
+		return None
+	intent = str(getattr(draft, "intent", "") or "")
+	if intent != "resume_share_request":
+		return None
+	config = ctx.obj.get("config", {}) if ctx and ctx.obj else {}
+	if not bool(config.get("boss_rag_send_enabled", False)):
+		return {
+			"attempted": False,
+			"status": "disabled",
+			"message": "未开启 boss_rag_send_enabled，已跳过自动发送简历。",
+		}
+	resolved_security_id = _resolve_security_id(
+		store,
+		conversation_id=conversation_id,
+		security_id=security_id,
+		job_id=job_id,
+	)
+	if not resolved_security_id:
+		return {
+			"attempted": False,
+			"status": "missing_security_id",
+			"message": "缺少 security_id，无法自动发送在线简历。",
+		}
+	draft_text = str(getattr(draft, "draft_text", "") or "").strip()
+	if not draft_text:
+		return {
+			"attempted": False,
+			"status": "missing_message",
+			"message": "草稿为空，已跳过自动发送简历。",
+		}
+	result = _send_resume_reply(ctx, security_id=resolved_security_id, message=draft_text)
+	store.append_audit_log(
+		AuditLogRecord.new(
+			event_type="resume_auto_send",
+			entity_type="conversation",
+			entity_id=conversation_id,
+			payload={
+				"security_id": result.security_id,
+				"status": result.status,
+				"message_sent": result.message_sent,
+				"resume_sent": result.resume_sent,
+				"error_message": result.error_message,
+			},
+		)
+	)
+	return {
+		"attempted": result.attempted,
+		"status": result.status,
+		"message_sent": result.message_sent,
+		"resume_sent": result.resume_sent,
+		"messages": result.messages,
+		"error_message": result.error_message,
+		"security_id": result.security_id,
+	}
+
+
 def _require_message_read_enabled(ctx: click.Context) -> bool:
 	"""Return False with a structured error when Boss message reading is disabled."""
 	config = ctx.obj.get("config", {}) if ctx and ctx.obj else {}
@@ -159,7 +335,7 @@ def _require_message_read_enabled(ctx: click.Context) -> bool:
 		return True
 	handle_error_output(
 		ctx,
-		"rag-sync-messages",
+		_workflow_command(ctx, "sync-messages"),
 		code="RAG_READ_NOT_ENABLED",
 		message="Boss message reading is disabled by default. Enable boss_rag_allow_message_read explicitly before syncing messages.",
 		recoverable=True,
@@ -168,8 +344,8 @@ def _require_message_read_enabled(ctx: click.Context) -> bool:
 			"manual_action_required": True,
 			"default_safe_mode": True,
 			"next_actions": [
-				"Use boss rag import-messages for manual fallback.",
-				"Use boss rag ingest-mock for structured mock envelope testing.",
+				"Use boss agent import-messages for manual fallback.",
+				"Use boss agent ingest-mock for structured mock envelope testing.",
 			],
 		},
 	)
@@ -180,9 +356,9 @@ def _not_implemented(ctx: click.Context, command: str) -> None:
 	"""Emit a consistent placeholder response for unimplemented subcommands."""
 	handle_error_output(
 		ctx,
-		command,
+		_workflow_command(ctx, command),
 		code="NOT_IMPLEMENTED",
-		message="This Boss RAG workflow command is planned but not implemented yet.",
+		message="This Boss Agent workflow command is planned but not implemented yet.",
 		recoverable=False,
 		recovery_action="Continue with the next implementation task in docs/superpowers/plans/2026-06-10-boss-rag-reply-agent-implementation-plan.md.",
 	)
@@ -191,7 +367,7 @@ def _not_implemented(ctx: click.Context, command: str) -> None:
 @click.group("rag")
 @click.pass_context
 def rag_group(ctx: click.Context) -> None:
-	"""Boss RAG reply workflow commands."""
+	"""Boss Agent workflow commands. Legacy alias: rag."""
 	ctx.ensure_object(dict)
 
 
@@ -201,9 +377,9 @@ def rag_init_cmd(ctx: click.Context) -> None:
 	store = _resolve_store(ctx)
 	handle_output(
 		ctx,
-		"rag-init",
+		_workflow_command(ctx, "init"),
 		{"status": "initialized", "db_path": str(store.db_path)},
-		render=lambda data: click.echo(f"Initialized Boss RAG store at {data['db_path']}.", err=True),
+		render=lambda data: click.echo(f"Initialized Boss Agent store at {data['db_path']}.", err=True),
 	)
 
 
@@ -213,13 +389,13 @@ def rag_init_cmd(ctx: click.Context) -> None:
 @click.pass_context
 def rag_import_messages_cmd(ctx: click.Context, file_path: str | None, fmt: str | None) -> None:
 	if not file_path or not fmt:
-		_not_implemented(ctx, "rag-import-messages")
+		_not_implemented(ctx, "import-messages")
 		return
 	store = _resolve_store(ctx)
 	result = import_messages(Path(file_path), fmt, store)
 	handle_output(
 		ctx,
-		"rag-import-messages",
+		_workflow_command(ctx, "import-messages"),
 		{
 			"import_batch_id": result.import_batch_id,
 			"conversation_ids": result.conversation_ids,
@@ -235,13 +411,13 @@ def rag_import_messages_cmd(ctx: click.Context, file_path: str | None, fmt: str 
 @click.pass_context
 def rag_ingest_mock_cmd(ctx: click.Context, file_path: str | None) -> None:
 	if not file_path:
-		_not_implemented(ctx, "rag-ingest-mock")
+		_not_implemented(ctx, "ingest-mock")
 		return
 	store = _resolve_store(ctx)
 	result = load_and_ingest_mock_envelope(Path(file_path), store)
 	handle_output(
 		ctx,
-		"rag-ingest-mock",
+		_workflow_command(ctx, "ingest-mock"),
 		{
 			"import_batch_id": result.import_batch_id,
 			"conversation_ids": result.conversation_ids,
@@ -263,7 +439,7 @@ def rag_sync_jobs_cmd(ctx: click.Context, query: str | None) -> None:
 	except BossAutomationError as exc:
 		handle_error_output(
 			ctx,
-			"rag-sync-jobs",
+			_workflow_command(ctx, "sync-jobs"),
 			code=exc.code,
 			message=exc.message,
 			recoverable=exc.recoverable,
@@ -273,7 +449,7 @@ def rag_sync_jobs_cmd(ctx: click.Context, query: str | None) -> None:
 		return
 	handle_output(
 		ctx,
-		"rag-sync-jobs",
+		_workflow_command(ctx, "sync-jobs"),
 		{
 			"sync_batch_id": result.sync_batch_id,
 			"source": result.source,
@@ -297,7 +473,7 @@ def rag_sync_messages_cmd(ctx: click.Context, conversation_id: str | None) -> No
 	except BossAutomationError as exc:
 		handle_error_output(
 			ctx,
-			"rag-sync-messages",
+			_workflow_command(ctx, "sync-messages"),
 			code=exc.code,
 			message=exc.message,
 			recoverable=exc.recoverable,
@@ -307,7 +483,7 @@ def rag_sync_messages_cmd(ctx: click.Context, conversation_id: str | None) -> No
 		return
 	handle_output(
 		ctx,
-		"rag-sync-messages",
+		_workflow_command(ctx, "sync-messages"),
 		{
 			"import_batch_id": result.import_batch_id,
 			"conversation_ids": result.conversation_ids,
@@ -333,7 +509,7 @@ def rag_draft_cmd(ctx: click.Context, conversation_id: str | None, message_id: s
 		drafts = service.create_drafts_for_all_messages()
 	handle_output(
 		ctx,
-		"rag-draft",
+		_workflow_command(ctx, "draft"),
 		[draft_to_payload(draft) for draft in drafts],
 		render=lambda data: click.echo(f"Created {len(data)} draft(s).", err=True),
 	)
@@ -349,7 +525,7 @@ def rag_review_cmd(ctx: click.Context, draft_id: str | None) -> None:
 		if draft is None:
 			handle_error_output(
 				ctx,
-				"rag-review",
+				_workflow_command(ctx, "review"),
 				code="DRAFT_NOT_FOUND",
 				message=f"Unknown draft_id={draft_id}",
 				recoverable=False,
@@ -360,7 +536,7 @@ def rag_review_cmd(ctx: click.Context, draft_id: str | None) -> None:
 		payload = [draft_to_payload(draft) for draft in store.list_drafts()]
 	handle_output(
 		ctx,
-		"rag-review",
+		_workflow_command(ctx, "review"),
 		payload,
 		render=lambda data: click.echo("Draft review ready.", err=True),
 	)
@@ -371,6 +547,8 @@ def rag_review_cmd(ctx: click.Context, draft_id: str | None) -> None:
 @click.option("--question", required=True)
 @click.option("--job-id", default=None)
 @click.option("--recruiter-id", default=None)
+@click.option("--security-id", default=None)
+@click.option("--auto-send-resume", is_flag=True, default=False)
 @click.pass_context
 def rag_ask_cmd(
 	ctx: click.Context,
@@ -378,6 +556,8 @@ def rag_ask_cmd(
 	question: str,
 	job_id: str | None,
 	recruiter_id: str | None,
+	security_id: str | None,
+	auto_send_resume: bool,
 ) -> None:
 	service = _build_service(ctx)
 	store = service.store
@@ -387,20 +567,32 @@ def rag_ask_cmd(
 		question=question.strip(),
 		job_id=job_id,
 		recruiter_id=recruiter_id,
+		security_id=security_id,
 	)
 	draft = service.create_draft_for_message(message.message_id)
 	evidence = draft.evidence if isinstance(draft.evidence, dict) else {}
+	delivery = _maybe_auto_send_resume(
+		ctx,
+		store=store,
+		draft=draft,
+		conversation_id=conversation_id,
+		job_id=job_id,
+		security_id=security_id,
+		auto_send_resume=auto_send_resume,
+	)
 	handle_output(
 		ctx,
-		"rag-ask",
+		_workflow_command(ctx, "ask"),
 		{
 			"conversation_id": conversation_id,
 			"message_id": message.message_id,
 			"answer": draft.draft_text,
+			"answer_source": str(evidence.get("source") or ""),
 			"citations": evidence.get("citations") if isinstance(evidence.get("citations"), list) else [],
 			"reasoning_summary": evidence.get("reasoning_summary")
 			if isinstance(evidence.get("reasoning_summary"), dict)
 			else None,
+			"delivery": delivery,
 			"error_message": str(evidence.get("error_message") or evidence.get("rag_error_message") or ""),
 			"audit_status": draft.audit_status,
 			"draft": draft_to_payload(draft),
@@ -420,7 +612,7 @@ def rag_thread_cmd(ctx: click.Context, conversation_id: str) -> None:
 	store = _resolve_store(ctx)
 	handle_output(
 		ctx,
-		"rag-thread",
+		_workflow_command(ctx, "thread"),
 		{
 			"conversation_id": conversation_id,
 			"messages": build_thread_payload(store=store, conversation_id=conversation_id),
@@ -441,7 +633,7 @@ def rag_approve_cmd(ctx: click.Context, draft_id: str, copy: bool) -> None:
 	result = service.approve_draft(draft_id, copy_to_clipboard=copy)
 	handle_output(
 		ctx,
-		"rag-approve",
+		_workflow_command(ctx, "approve"),
 		{
 			"draft": draft_to_payload(result.draft),
 			"approval_event": {
@@ -472,7 +664,7 @@ def rag_audit_cmd(ctx: click.Context, draft_id: str | None) -> None:
 	]
 	handle_output(
 		ctx,
-		"rag-audit",
+		_workflow_command(ctx, "audit"),
 		payload,
 		render=lambda data: click.echo(f"Found {len(data)} audit log(s).", err=True),
 	)

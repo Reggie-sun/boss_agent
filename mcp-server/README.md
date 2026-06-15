@@ -73,7 +73,7 @@ MCP Server 内部调用 `boss` CLI 时会关闭子进程 stdin，避免子进程
 
 ## 可用工具
 
-当前 MCP Server 默认暴露 **41 个工具**：低风险工具面 + Boss RAG workflow 工具。
+当前 MCP Server 默认暴露 **41 个工具**：低风险工具面 + Boss Agent workflow 工具。
 
 ### 认证与环境
 
@@ -119,19 +119,19 @@ MCP Server 内部调用 `boss` CLI 时会关闭子进程 stdin，避免子进程
 | `boss_ai_interview_prep` | 基于岗位描述生成面试准备 |
 | `boss_ai_chat_coach` | 基于用户主动提供文本生成沟通建议 |
 
-### Boss RAG Workflow
+### Boss Agent Workflow
 
 | 工具 | 说明 |
 |------|------|
-| `boss_rag_init` | 初始化本地 Boss RAG 数据目录与索引 |
-| `boss_rag_import_messages` | 导入历史消息文件到 Boss RAG |
-| `boss_rag_ingest_mock` | 注入 mock 对话样本到 Boss RAG |
-| `boss_rag_sync_jobs` | 从本地状态同步职位数据到 Boss RAG |
-| `boss_rag_sync_messages` | 从本地会话同步消息到 Boss RAG |
-| `boss_rag_draft` | 基于会话上下文生成回复草稿 |
-| `boss_rag_review` | 审阅已有 Boss RAG 草稿 |
-| `boss_rag_approve` | 批准 Boss RAG 草稿，并可选复制到剪贴板 |
-| `boss_rag_audit` | 审计 Boss RAG 草稿的依据与元数据 |
+| `boss_agent_init` | 初始化本地 Boss Agent 数据目录与索引 |
+| `boss_agent_import_messages` | 导入历史消息文件到 Boss Agent |
+| `boss_agent_ingest_mock` | 注入 mock 对话样本到 Boss Agent |
+| `boss_agent_sync_jobs` | 从本地状态同步职位数据到 Boss Agent |
+| `boss_agent_sync_messages` | 从本地会话同步消息到 Boss Agent |
+| `boss_agent_draft` | 基于会话上下文生成回复草稿 |
+| `boss_agent_review` | 审阅已有 Boss Agent 草稿 |
+| `boss_agent_approve` | 批准 Boss Agent 草稿，并可选复制到剪贴板 |
+| `boss_agent_audit` | 审计 Boss Agent 草稿的依据与元数据 |
 
 ### 招聘者低风险入口
 

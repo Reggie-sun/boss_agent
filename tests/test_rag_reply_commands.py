@@ -17,12 +17,19 @@ def test_rag_group_is_registered():
 	runner = CliRunner()
 	result = runner.invoke(cli, ["--json", "rag", "--help"])
 	assert result.exit_code == 0
-	assert "Boss RAG reply workflow commands." in result.output
+	assert "Boss Agent workflow commands. Legacy alias: rag." in result.output
 
 
-def test_rag_sync_messages_requires_explicit_opt_in():
+def test_agent_group_alias_is_registered():
 	runner = CliRunner()
-	result = runner.invoke(cli, ["--json", "rag", "sync-messages"])
+	result = runner.invoke(cli, ["--json", "agent", "--help"])
+	assert result.exit_code == 0
+	assert "Boss Agent workflow commands. Legacy alias: rag." in result.output
+
+
+def test_rag_sync_messages_requires_explicit_opt_in(tmp_path: Path):
+	runner = CliRunner()
+	result = runner.invoke(cli, ["--json", "--data-dir", str(tmp_path), "rag", "sync-messages"])
 	assert result.exit_code == 1
 	parsed = json.loads(result.output)
 	assert parsed["ok"] is False
@@ -180,6 +187,171 @@ def test_rag_ask_persists_frontend_turn_and_returns_thread(monkeypatch, tmp_path
 	assert store.list_messages("demo-session-001")[-1].source == "rag_draft_memory"
 
 
+def test_agent_ask_uses_agent_command_name(monkeypatch, tmp_path: Path):
+	store = RagReplyStore(tmp_path / "boss-rag.sqlite3")
+	store.initialize()
+	service = BossRagReplyService(
+		store=store,
+		rag_adapter=SimpleNamespace(
+			answer=lambda **kwargs: SimpleNamespace(
+				ok=True,
+				answer="现在通过 agent ask 暴露这条链路。",
+				citations=[],
+				reasoning_summary=None,
+				raw_response={},
+				error_message=None,
+				audit_status="draft_created",
+				send_allowed=False,
+				approval_required=True,
+			)
+		),
+	)
+	monkeypatch.setattr(rag_commands, "_build_service", lambda ctx: service)
+	runner = CliRunner()
+
+	result = runner.invoke(
+		cli,
+		[
+			"--json",
+			"--data-dir",
+			str(tmp_path),
+			"agent",
+			"ask",
+			"--conversation-id",
+			"demo-session-agent",
+			"--question",
+			"你这个RAG项目具体做了什么？",
+		],
+	)
+
+	assert result.exit_code == 0
+	parsed = json.loads(result.output)
+	assert parsed["ok"] is True
+	assert parsed["command"] == "agent-ask"
+
+
+def test_rag_ask_auto_sends_resume_when_enabled(monkeypatch, tmp_path: Path):
+	(tmp_path / "config.json").write_text(
+		json.dumps({"boss_rag_send_enabled": True}),
+		encoding="utf-8",
+	)
+	store = RagReplyStore(tmp_path / "boss-rag.sqlite3")
+	store.initialize()
+	service = BossRagReplyService(
+		store=store,
+		rag_adapter=SimpleNamespace(
+			answer=lambda **kwargs: SimpleNamespace(
+				ok=True,
+				answer="unused",
+				citations=[],
+				reasoning_summary=None,
+				raw_response={},
+				error_message=None,
+				audit_status="draft_created",
+				send_allowed=False,
+				approval_required=True,
+			)
+		),
+	)
+	monkeypatch.setattr(rag_commands, "_build_service", lambda ctx: service)
+	monkeypatch.setattr(
+		rag_commands,
+		"_send_resume_reply",
+		lambda ctx, **kwargs: rag_commands.ResumeSendResult(
+			attempted=True,
+			status="sent",
+			message_sent=True,
+			resume_sent=True,
+			messages=["消息已发送", "在线简历已发送"],
+			security_id="sec_001",
+		),
+	)
+	runner = CliRunner()
+
+	result = runner.invoke(
+		cli,
+		[
+			"--json",
+			"--data-dir",
+			str(tmp_path),
+			"rag",
+			"ask",
+			"--conversation-id",
+			"demo-session-002",
+			"--question",
+			"你好我对你很感兴趣可以发一份简历吗",
+			"--security-id",
+			"sec_001",
+			"--auto-send-resume",
+		],
+	)
+
+	assert result.exit_code == 0
+	parsed = json.loads(result.output)
+	assert parsed["ok"] is True
+	assert parsed["data"]["draft"]["intent"] == "resume_share_request"
+	assert parsed["data"]["delivery"] == {
+		"attempted": True,
+		"status": "sent",
+		"message_sent": True,
+		"resume_sent": True,
+		"messages": ["消息已发送", "在线简历已发送"],
+		"error_message": "",
+		"security_id": "sec_001",
+	}
+
+
+def test_rag_ask_reports_disabled_resume_send_when_flag_off(monkeypatch, tmp_path: Path):
+	monkeypatch.setenv("BOSS_RAG_SEND_ENABLED", "false")
+	store = RagReplyStore(tmp_path / "boss-rag.sqlite3")
+	store.initialize()
+	service = BossRagReplyService(
+		store=store,
+		rag_adapter=SimpleNamespace(
+			answer=lambda **kwargs: SimpleNamespace(
+				ok=True,
+				answer="unused",
+				citations=[],
+				reasoning_summary=None,
+				raw_response={},
+				error_message=None,
+				audit_status="draft_created",
+				send_allowed=False,
+				approval_required=True,
+			)
+		),
+	)
+	monkeypatch.setattr(rag_commands, "_build_service", lambda ctx: service)
+	runner = CliRunner()
+
+	result = runner.invoke(
+		cli,
+		[
+			"--json",
+			"--data-dir",
+			str(tmp_path),
+			"rag",
+			"ask",
+			"--conversation-id",
+			"demo-session-003",
+			"--question",
+			"方便发一份简历过来吗？",
+			"--security-id",
+			"sec_001",
+			"--auto-send-resume",
+		],
+	)
+
+	assert result.exit_code == 0
+	parsed = json.loads(result.output)
+	assert parsed["ok"] is True
+	assert parsed["data"]["delivery"] == {
+		"attempted": False,
+		"status": "disabled",
+		"message": "未开启 boss_rag_send_enabled，已跳过自动发送简历。",
+	}
+
+
 class _FakeBossAdapter:
 	def __enter__(self):
 		return self
@@ -264,8 +436,14 @@ def test_rag_build_service_passes_rag_auth_config(monkeypatch, tmp_path: Path):
 			captured["fallback_model"] = ai_service.model
 			captured["fallback_base_url"] = ai_service.base_url
 
+	class _FakeAgentAnswerAdapter:
+		def __init__(self, *, ai_service):
+			captured["agent_model"] = ai_service.model
+			captured["agent_base_url"] = ai_service.base_url
+
 	monkeypatch.setattr(rag_commands, "RagHttpAdapter", _FakeRagHttpAdapter)
 	monkeypatch.setattr(rag_commands, "AIFallbackAdapter", _FakeFallbackAdapter)
+	monkeypatch.setattr(rag_commands, "AgentAnswerAdapter", _FakeAgentAnswerAdapter)
 	monkeypatch.setattr(rag_commands, "_resolve_store", lambda ctx: "store")
 	monkeypatch.setenv("BOSS_AGENT_MACHINE_ID", "test-machine")
 	ai_store = AIConfigStore(tmp_path)
@@ -297,6 +475,8 @@ def test_rag_build_service_passes_rag_auth_config(monkeypatch, tmp_path: Path):
 		"auth_mode": "x_api_key",
 		"fallback_model": "gpt-4o-mini",
 		"fallback_base_url": "https://api.openai.com/v1",
+		"agent_model": "gpt-4o-mini",
+		"agent_base_url": "https://api.openai.com/v1",
 	}
 
 
@@ -316,8 +496,15 @@ def test_rag_build_service_reuses_rag_key_for_default_deepseek_fallback(monkeypa
 			captured["fallback_base_url"] = ai_service.base_url
 			captured["fallback_api_key"] = ai_service.api_key
 
+	class _FakeAgentAnswerAdapter:
+		def __init__(self, *, ai_service):
+			captured["agent_model"] = ai_service.model
+			captured["agent_base_url"] = ai_service.base_url
+			captured["agent_api_key"] = ai_service.api_key
+
 	monkeypatch.setattr(rag_commands, "RagHttpAdapter", _FakeRagHttpAdapter)
 	monkeypatch.setattr(rag_commands, "AIFallbackAdapter", _FakeFallbackAdapter)
+	monkeypatch.setattr(rag_commands, "AgentAnswerAdapter", _FakeAgentAnswerAdapter)
 	monkeypatch.setattr(rag_commands, "_resolve_store", lambda ctx: "store")
 	ctx = SimpleNamespace(
 		obj={
@@ -342,4 +529,7 @@ def test_rag_build_service_reuses_rag_key_for_default_deepseek_fallback(monkeypa
 		"fallback_model": "deepseek-chat",
 		"fallback_base_url": "https://api.deepseek.com/v1",
 		"fallback_api_key": "shared-rag-key-abc123",
+		"agent_model": "deepseek-chat",
+		"agent_base_url": "https://api.deepseek.com/v1",
+		"agent_api_key": "shared-rag-key-abc123",
 	}

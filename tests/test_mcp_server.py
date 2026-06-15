@@ -1,5 +1,6 @@
 """模型上下文协议服务测试 — 覆盖工具定义、参数构建和调用逻辑。"""
 import inspect
+import os
 import sys
 import types
 from pathlib import Path
@@ -70,8 +71,8 @@ def test_recruiter_tool_description_includes_availability():
 	assert "zhipin-recruiter" in tool.description
 
 
-def test_rag_tool_description_includes_availability():
-	tool = next(t for t in TOOLS if t.name == "boss_rag_draft")
+def test_agent_tool_description_includes_availability():
+	tool = next(t for t in TOOLS if t.name == "boss_agent_draft")
 	assert "可用性:" in tool.description
 	assert "roles=candidate" in tool.description
 	assert "zhilian" in tool.description
@@ -109,7 +110,7 @@ def test_required_tools_present():
 		"boss_ai_interview_prep", "boss_ai_chat_coach",
 		"boss_resume_list", "boss_resume_show",
 		"boss_ai_analyze_jd", "boss_ai_optimize", "boss_ai_suggest",
-		"boss_rag_init", "boss_rag_draft", "boss_rag_approve",
+		"boss_agent_init", "boss_agent_draft", "boss_agent_approve",
 		"boss_watch_list",
 		"boss_preset_list", "boss_shortlist_list", "boss_shortlist_prepare", "boss_shortlist_open", "boss_shortlist_mark_applied",
 		"boss_hr_jobs",
@@ -486,13 +487,14 @@ def test_run_dispatches_sse_transport(mock_run_sse):
 		port=9001,
 		sse_path="/events",
 		message_path="/inbox",
+		reload=False,
 	)
 
 
 @patch("boss_agent_cli.mcp_server._run_http_server")
 def test_run_dispatches_http_transport(mock_run_http):
 	run(["--transport", "http", "--host", "127.0.0.1", "--port", "9002", "--path", "/rpc"])
-	mock_run_http.assert_called_once_with(host="127.0.0.1", port=9002, path="/rpc")
+	mock_run_http.assert_called_once_with(host="127.0.0.1", port=9002, path="/rpc", reload=False)
 
 
 @patch("boss_agent_cli.mcp_server._serve_asgi_app")
@@ -502,7 +504,15 @@ def test_run_sse_server_builds_app_and_serves(mock_create_app, mock_serve):
 	mock_create_app.return_value = fake_app
 	_run_sse_server(host="127.0.0.1", port=8765, sse_path="/sse", message_path="/messages/")
 	mock_create_app.assert_called_once_with(sse_path="/sse", message_path="/messages/")
-	mock_serve.assert_called_once_with(fake_app, host="127.0.0.1", port=8765)
+	mock_serve.assert_called_once_with(
+		fake_app,
+		host="127.0.0.1",
+		port=8765,
+		reload=False,
+		transport="sse",
+		sse_path="/sse",
+		message_path="/messages/",
+	)
 
 
 @patch("boss_agent_cli.mcp_server._serve_asgi_app")
@@ -512,7 +522,51 @@ def test_run_http_server_builds_app_and_serves(mock_create_app, mock_serve):
 	mock_create_app.return_value = fake_app
 	_run_http_server(host="127.0.0.1", port=8765, path="/mcp")
 	mock_create_app.assert_called_once_with(path="/mcp")
-	mock_serve.assert_called_once_with(fake_app, host="127.0.0.1", port=8765)
+	mock_serve.assert_called_once_with(
+		fake_app,
+		host="127.0.0.1",
+		port=8765,
+		reload=False,
+		transport="http",
+		path="/mcp",
+	)
+
+
+@patch("uvicorn.run")
+def test_serve_asgi_app_reload_uses_env_backed_factory(mock_run):
+	with patch.dict(
+		os.environ,
+		{
+			"BOSS_AGENT_MCP_TRANSPORT": "stdio",
+			"BOSS_AGENT_MCP_PATH": "/mcp",
+			"BOSS_AGENT_MCP_SSE_PATH": "/sse",
+			"BOSS_AGENT_MCP_MESSAGE_PATH": "/messages/",
+		},
+		clear=False,
+	):
+		server._serve_asgi_app(
+			object(),
+			host="127.0.0.1",
+			port=8765,
+			reload=True,
+			transport="http",
+			path="/rpc",
+			sse_path="/events",
+			message_path="/inbox/",
+		)
+		assert os.environ["BOSS_AGENT_MCP_TRANSPORT"] == "http"
+		assert os.environ["BOSS_AGENT_MCP_PATH"] == "/rpc"
+		assert os.environ["BOSS_AGENT_MCP_SSE_PATH"] == "/events"
+		assert os.environ["BOSS_AGENT_MCP_MESSAGE_PATH"] == "/inbox/"
+		mock_run.assert_called_once_with(
+			"boss_agent_cli.mcp_server:create_app",
+			host="127.0.0.1",
+			port=8765,
+			log_level="info",
+			reload=True,
+			factory=True,
+			reload_dirs=["/app/src", "/app/mcp-server"],
+		)
 
 
 # ── 新增工具 _build_args 覆盖（PR #41 扩展）─────────────────
@@ -600,48 +654,52 @@ def test_build_args_ai_suggest():
 	assert args == ["ai", "suggest", "my", "--jd", "后端岗位"]
 
 
-def test_build_args_rag_init():
-	assert _build_args("boss_rag_init", {}) == ["rag", "init"]
+def test_build_args_agent_init():
+	assert _build_args("boss_agent_init", {}) == ["agent", "init"]
 
 
-def test_build_args_rag_import_messages():
-	args = _build_args("boss_rag_import_messages", {"file": "/tmp/messages.json", "format": "json"})
-	assert args == ["rag", "import-messages", "--file", "/tmp/messages.json", "--format", "json"]
+def test_build_args_agent_import_messages():
+	args = _build_args("boss_agent_import_messages", {"file": "/tmp/messages.json", "format": "json"})
+	assert args == ["agent", "import-messages", "--file", "/tmp/messages.json", "--format", "json"]
 
 
-def test_build_args_rag_ingest_mock():
-	args = _build_args("boss_rag_ingest_mock", {"file": "/tmp/mock.md"})
-	assert args == ["rag", "ingest-mock", "--file", "/tmp/mock.md"]
+def test_build_args_agent_ingest_mock():
+	args = _build_args("boss_agent_ingest_mock", {"file": "/tmp/mock.md"})
+	assert args == ["agent", "ingest-mock", "--file", "/tmp/mock.md"]
 
 
-def test_build_args_rag_sync_jobs():
-	args = _build_args("boss_rag_sync_jobs", {"query": "python"})
-	assert args == ["rag", "sync-jobs", "--query", "python"]
+def test_build_args_agent_sync_jobs():
+	args = _build_args("boss_agent_sync_jobs", {"query": "python"})
+	assert args == ["agent", "sync-jobs", "--query", "python"]
 
 
-def test_build_args_rag_sync_messages():
-	args = _build_args("boss_rag_sync_messages", {"conversation_id": "conv-1"})
-	assert args == ["rag", "sync-messages", "--conversation-id", "conv-1"]
+def test_build_args_agent_sync_messages():
+	args = _build_args("boss_agent_sync_messages", {"conversation_id": "conv-1"})
+	assert args == ["agent", "sync-messages", "--conversation-id", "conv-1"]
 
 
-def test_build_args_rag_draft():
-	args = _build_args("boss_rag_draft", {"conversation_id": "conv-1", "message_id": "msg-2"})
-	assert args == ["rag", "draft", "--conversation-id", "conv-1", "--message-id", "msg-2"]
+def test_build_args_agent_draft():
+	args = _build_args("boss_agent_draft", {"conversation_id": "conv-1", "message_id": "msg-2"})
+	assert args == ["agent", "draft", "--conversation-id", "conv-1", "--message-id", "msg-2"]
 
 
-def test_build_args_rag_review():
-	args = _build_args("boss_rag_review", {"draft_id": "draft-1"})
-	assert args == ["rag", "review", "--draft-id", "draft-1"]
+def test_build_args_agent_review():
+	args = _build_args("boss_agent_review", {"draft_id": "draft-1"})
+	assert args == ["agent", "review", "--draft-id", "draft-1"]
 
 
-def test_build_args_rag_approve():
-	args = _build_args("boss_rag_approve", {"draft_id": "draft-1", "copy": True})
-	assert args == ["rag", "approve", "draft-1", "--copy"]
+def test_build_args_agent_approve():
+	args = _build_args("boss_agent_approve", {"draft_id": "draft-1", "copy": True})
+	assert args == ["agent", "approve", "draft-1", "--copy"]
 
 
-def test_build_args_rag_audit():
-	args = _build_args("boss_rag_audit", {"draft_id": "draft-1"})
-	assert args == ["rag", "audit", "--draft-id", "draft-1"]
+def test_build_args_agent_audit():
+	args = _build_args("boss_agent_audit", {"draft_id": "draft-1"})
+	assert args == ["agent", "audit", "--draft-id", "draft-1"]
+
+
+def test_build_args_legacy_rag_alias_still_routes_to_agent():
+	assert _build_args("boss_rag_init", {}) == ["agent", "init"]
 
 
 def test_build_args_watch_list():

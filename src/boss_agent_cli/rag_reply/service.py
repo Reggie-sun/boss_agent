@@ -50,6 +50,19 @@ class FallbackAdapterProtocol(Protocol):
 		...
 
 
+class AgentAnswerAdapterProtocol(Protocol):
+	def answer(
+		self,
+		*,
+		message_text: str,
+		intent: str,
+		job_summary: str | None,
+		rag_answer: str,
+		citations: list[dict[str, object]] | None = None,
+	) -> RagAnswerProtocol:
+		...
+
+
 @dataclass(slots=True)
 class ApprovalResult:
 	event: ApprovalEventRecord
@@ -66,10 +79,12 @@ class BossRagReplyService:
 		store: RagReplyStore,
 		rag_adapter: RagAdapterProtocol,
 		fallback_adapter: FallbackAdapterProtocol | None = None,
+		agent_answer_adapter: AgentAnswerAdapterProtocol | None = None,
 	) -> None:
 		self.store = store
 		self.rag_adapter = rag_adapter
 		self.fallback_adapter = fallback_adapter
+		self.agent_answer_adapter = agent_answer_adapter
 
 	def create_draft_for_message(self, message_id: str) -> DraftRecord:
 		message = self.store.get_message(message_id)
@@ -191,23 +206,70 @@ class BossRagReplyService:
 				audit_status="rag_failed",
 				rag_session_id=rag_session_id,
 			)
+		agent_answer = self._build_agent_answer(
+			message=message,
+			classification=classification,
+			job_summary=job_summary,
+			rag_answer=rag_result.answer,
+			citations=rag_result.citations,
+		)
+		draft_text = rag_result.answer
+		evidence_source = "enterprise_rag"
+		reasoning_summary = rag_result.reasoning_summary
+		evidence: dict[str, object] = {
+			"source": evidence_source,
+			"citations": rag_result.citations,
+			"reasoning_summary": reasoning_summary,
+		}
+		if agent_answer is not None and agent_answer.ok and agent_answer.answer.strip():
+			draft_text = agent_answer.answer
+			evidence_source = "boss_agent_ai"
+			reasoning_summary = self._merge_reasoning_summaries(
+				rag_reasoning=rag_result.reasoning_summary,
+				agent_reasoning=agent_answer.reasoning_summary,
+			)
+			evidence = {
+				"source": evidence_source,
+				"upstream_source": "enterprise_rag",
+				"grounded_answer": rag_result.answer,
+				"citations": rag_result.citations,
+				"reasoning_summary": reasoning_summary,
+				"agent_raw_response": agent_answer.raw_response,
+			}
+		elif agent_answer is not None and agent_answer.error_message:
+			evidence["agent_error_message"] = agent_answer.error_message
 		draft = DraftRecord.new(
 			conversation_id=message.conversation_id,
 			source_message_id=message.message_id,
-			draft_text=rag_result.answer,
+			draft_text=draft_text,
 			intent=classification.intent,
 			risk_labels=decision.risk_labels,
-			evidence={
-				"source": "enterprise_rag",
-				"citations": rag_result.citations,
-				"reasoning_summary": rag_result.reasoning_summary,
-			},
+			evidence=evidence,
 			approval_required=decision.approval_required,
 			send_allowed=False,
 			audit_status="draft_created",
 			rag_session_id=rag_session_id,
 		)
 		return draft
+
+	def _build_agent_answer(
+		self,
+		*,
+		message: MessageRecord,
+		classification: ClassificationResult,
+		job_summary: str | None,
+		rag_answer: str,
+		citations: list[dict[str, object]],
+	) -> RagAnswerProtocol | None:
+		if self.agent_answer_adapter is None:
+			return None
+		return self.agent_answer_adapter.answer(
+			message_text=message.message_text,
+			intent=classification.intent,
+			job_summary=job_summary,
+			rag_answer=rag_answer,
+			citations=citations,
+		)
 
 	def _build_fallback_draft(
 		self,
@@ -254,6 +316,19 @@ class BossRagReplyService:
 			return None
 		job = self.store.get_job(message.job_id)
 		return None if job is None else job.summary
+
+	@staticmethod
+	def _merge_reasoning_summaries(
+		*,
+		rag_reasoning: dict[str, object] | None,
+		agent_reasoning: dict[str, object] | None,
+	) -> dict[str, object] | None:
+		if rag_reasoning and agent_reasoning:
+			return {
+				"grounding": rag_reasoning,
+				"agent_strategy": agent_reasoning,
+			}
+		return agent_reasoning or rag_reasoning
 
 	@staticmethod
 	def _build_rag_session_id(message: MessageRecord) -> str:

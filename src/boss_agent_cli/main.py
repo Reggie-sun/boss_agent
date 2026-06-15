@@ -15,6 +15,14 @@ from boss_agent_cli.platforms import list_platforms
 class BossCliGroup(click.Group):
 	"""Click group that preserves the JSON envelope contract for usage errors."""
 
+	def get_command(self, ctx: click.Context, cmd_name: str) -> click.Command | None:
+		"""Resolve hidden legacy aliases without re-exposing them as top-level commands."""
+		if cmd_name == "rag":
+			aliased = super().get_command(ctx, "agent")
+			if aliased is not None:
+				return aliased
+		return super().get_command(ctx, cmd_name)
+
 	def main(
 		self,
 		args: Sequence[str] | None = None,

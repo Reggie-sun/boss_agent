@@ -644,11 +644,12 @@ boss config reset           # 恢复默认
 | `boss_rag_rag_timeout_seconds` | RAG 请求超时秒数 |
 | `boss_rag_rag_api_key` | Enterprise RAG integration key；仅在服务端要求鉴权时配置 |
 | `boss_rag_rag_auth_mode` | RAG 鉴权模式：`none` / `x_api_key` / `bearer` |
-| `boss_rag_allow_message_read` | 是否显式允许 `boss rag sync-messages` 读取 Boss 消息，默认 `false` |
+| `boss_rag_allow_message_read` | 是否显式允许 `boss agent sync-messages` 读取 Boss 消息，默认 `false` |
 | `boss_rag_send_enabled` | 预留发送总开关，V1 默认 `false`，且不进入 MVP 接受路径 |
 
 补充：
 
+- Agent workflow 的工具入口已经切换到 `boss_agent_*` / `boss agent ...`；当前配置键仍保留 `boss_rag_*` 兼容命名。
 - `boss_rag_rag_api_key` 也支持直接从环境变量读取，优先顺序是 `BOSS_RAG_RAG_API_KEY`，其次兼容 `RAG_API_KEY` 和 `RAG_AUTH_API_KEY`。
 - 这些环境变量会覆盖 `config.json` 中的同名 Boss RAG 配置。
 - `boss` 会在启动时自动读取当前工作目录下的项目 `.env`；如果同名环境变量已经在 shell 中 `export`，则以已导出的值为准。
@@ -657,14 +658,14 @@ boss config reset           # 恢复默认
 
 ---
 
-## 🧠 Boss RAG V1
+## 🧠 Boss Agent V1
 
 V1 边界是 `Boss read-only automation + RAG draft reply + human approval send gate`。
 
-- `boss rag import-messages` / `boss rag ingest-mock`：低风险 fallback，支持手动导入或 mock JSON envelope。
-- `boss rag sync-jobs`：读取职位列表/详情并保存本地摘要。
-- `boss rag sync-messages`：默认关闭；只有 `boss_rag_allow_message_read=true` 且本地登录态有效时才会读取 Boss 消息。
-- `boss rag draft` / `review` / `approve --copy`：生成草稿、查看 evidence/risk labels、人工批准并复制到剪贴板。
+- `boss agent import-messages` / `boss agent ingest-mock`：低风险 fallback，支持手动导入或 mock JSON envelope。
+- `boss agent sync-jobs`：读取职位列表/详情并保存本地摘要。
+- `boss agent sync-messages`：默认关闭；只有 `boss_rag_allow_message_read=true` 且本地登录态有效时才会读取 Boss 消息。
+- `boss agent draft` / `review` / `approve --copy`：生成草稿、查看 evidence/risk labels、人工批准并复制到剪贴板。
 
 重要 guardrails：
 

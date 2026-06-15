@@ -97,7 +97,7 @@ _CANDIDATE_COMMANDS = {
 	"stats",
 	"resume",
 	"ai",
-	"rag",
+	"agent",
 }
 
 _QIANCHENG_PLACEHOLDER_COMMANDS = {
@@ -124,7 +124,7 @@ def _command_availability(
 	candidate_platforms: list[str],
 	recruiter_platforms: list[str],
 ) -> dict[str, Any]:
-	if cmd_name in {"hr", "rag"}:
+	if cmd_name in {"hr", "agent"}:
 		commands = cast(dict[str, Any], SCHEMA_DATA.get("commands", {}))
 		group_spec = commands.get(cmd_name, {})
 		if not isinstance(group_spec, dict):
@@ -864,22 +864,22 @@ SCHEMA_DATA = {
 				"chat-coach": "基于聊天记录诊断沟通状态并给出下一步建议",
 			},
 		},
-		"rag": {
-			"description": "Boss RAG 回复工作流（子命令：init/import-messages/ingest-mock/sync-jobs/sync-messages/draft/review/ask/thread/approve/audit）。其中 sync-messages 仍需显式开启 boss_rag_allow_message_read=true。",
+		"agent": {
+			"description": "Boss Agent 回复工作流（子命令：init/import-messages/ingest-mock/sync-jobs/sync-messages/draft/review/ask/thread/approve/audit）。其中 sync-messages 仍需显式开启 boss_rag_allow_message_read=true；`rag` 为兼容旧入口。",
 			"args": [],
 			"options": {},
 			"subcommands": {
-				"init": "初始化本地 Boss RAG SQLite store",
-				"import-messages": "从 json/md/csv 手动导入消息到本地 RAG store",
-				"ingest-mock": "导入结构化 mock envelope 以验证 RAG workflow",
-				"sync-jobs": "同步职位摘要到本地 RAG store",
-				"sync-messages": "从 Boss 读取消息到本地 RAG store；默认需显式开启 boss_rag_allow_message_read=true",
-				"draft": "基于本地 store 里的消息生成 RAG 草稿",
-				"review": "查看 RAG 草稿详情",
+				"init": "初始化本地 Boss Agent SQLite store",
+				"import-messages": "从 json/md/csv 手动导入消息到本地 Agent store",
+				"ingest-mock": "导入结构化 mock envelope 以验证 Agent workflow",
+				"sync-jobs": "同步职位摘要到本地 Agent store",
+				"sync-messages": "从 Boss 读取消息到本地 Agent store；默认需显式开启 boss_rag_allow_message_read=true",
+				"draft": "基于本地 store 里的消息生成 Agent 草稿",
+				"review": "查看 Agent 草稿详情",
 				"ask": "以前端问题写入本地 store，并返回共享 memory + 草稿答案",
 				"thread": "查看 conversation 级别的本地多轮 memory / thread 消息",
 				"approve": "批准草稿，可选复制到剪贴板",
-				"audit": "查看 RAG workflow 审计日志",
+				"audit": "查看 Agent workflow 审计日志",
 			},
 		},
 		"hr": {

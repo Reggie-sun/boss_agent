@@ -52,6 +52,32 @@ class _FakeFallbackAdapter:
 		return self.result
 
 
+class _FakeAgentAnswerAdapter:
+	def __init__(self, result: _FakeRagResult) -> None:
+		self.result = result
+		self.calls: list[dict[str, object]] = []
+
+	def answer(
+		self,
+		*,
+		message_text: str,
+		intent: str,
+		job_summary: str | None,
+		rag_answer: str,
+		citations: list[dict] | None = None,
+	) -> _FakeRagResult:
+		self.calls.append(
+			{
+				"message_text": message_text,
+				"intent": intent,
+				"job_summary": job_summary,
+				"rag_answer": rag_answer,
+				"citations": list(citations or []),
+			}
+		)
+		return self.result
+
+
 def test_draft_command_saves_draft_and_audit_log(tmp_path):
 	store = RagReplyStore(tmp_path / "boss-rag.sqlite3")
 	store.initialize()
@@ -101,6 +127,95 @@ def test_draft_command_saves_draft_and_audit_log(tmp_path):
 	assert messages[-1].direction == "outbound"
 	assert messages[-1].source == "rag_draft_memory"
 	assert messages[-1].message_text == "这是候选草稿"
+
+
+def test_draft_command_uses_agent_answer_adapter_when_rag_succeeds(tmp_path):
+	store = RagReplyStore(tmp_path / "boss-rag.sqlite3")
+	store.initialize()
+	store.save_conversation(ConversationRecord(conversation_id="conv_001", source="manual_import"))
+	store.save_message(
+		MessageRecord(
+			message_id="msg_001",
+			conversation_id="conv_001",
+			message_text="介绍下你做的 RAG。",
+			direction="inbound",
+		)
+	)
+	rag_adapter = _FakeRagAdapter(
+		_FakeRagResult(
+			ok=True,
+			answer="候选人负责企业级 RAG 项目的检索链路和问答编排。",
+			citations=[{"title": "企业级RAG面试参考文档"}],
+			reasoning_summary={"mode": "grounded"},
+		)
+	)
+	agent_adapter = _FakeAgentAnswerAdapter(
+		_FakeRagResult(
+			ok=True,
+			answer="我在这个企业级 RAG 项目里主要负责检索链路和问答编排，也做了引用溯源和多轮问答优化。",
+			citations=[],
+			reasoning_summary={"strategy": "改写成第一人称"},
+			raw_response={"answer_text": "rewritten"},
+		)
+	)
+	service = BossRagReplyService(
+		store=store,
+		rag_adapter=rag_adapter,
+		agent_answer_adapter=agent_adapter,
+	)
+
+	draft = service.create_draft_for_message("msg_001")
+
+	assert draft.audit_status == "draft_created"
+	assert draft.draft_text.startswith("我在这个企业级 RAG 项目里")
+	assert draft.evidence["source"] == "boss_agent_ai"
+	assert draft.evidence["upstream_source"] == "enterprise_rag"
+	assert draft.evidence["grounded_answer"] == "候选人负责企业级 RAG 项目的检索链路和问答编排。"
+	assert draft.evidence["reasoning_summary"] == {
+		"grounding": {"mode": "grounded"},
+		"agent_strategy": {"strategy": "改写成第一人称"},
+	}
+	assert agent_adapter.calls[0]["rag_answer"] == "候选人负责企业级 RAG 项目的检索链路和问答编排。"
+
+
+def test_draft_command_falls_back_to_grounded_answer_when_agent_rewrite_fails(tmp_path):
+	store = RagReplyStore(tmp_path / "boss-rag.sqlite3")
+	store.initialize()
+	store.save_conversation(ConversationRecord(conversation_id="conv_001", source="manual_import"))
+	store.save_message(
+		MessageRecord(
+			message_id="msg_001",
+			conversation_id="conv_001",
+			message_text="介绍下你做的 RAG。",
+			direction="inbound",
+		)
+	)
+	service = BossRagReplyService(
+		store=store,
+		rag_adapter=_FakeRagAdapter(
+			_FakeRagResult(
+				ok=True,
+				answer="候选人负责企业级 RAG 项目的检索链路和问答编排。",
+				citations=[{"title": "企业级RAG面试参考文档"}],
+				reasoning_summary={"mode": "grounded"},
+			)
+		),
+		agent_answer_adapter=_FakeAgentAnswerAdapter(
+			_FakeRagResult(
+				ok=False,
+				answer="",
+				citations=[],
+				error_message="llm unavailable",
+				audit_status="agent_answer_failed",
+			)
+		),
+	)
+
+	draft = service.create_draft_for_message("msg_001")
+
+	assert draft.draft_text == "候选人负责企业级 RAG 项目的检索链路和问答编排。"
+	assert draft.evidence["source"] == "enterprise_rag"
+	assert draft.evidence["agent_error_message"] == "llm unavailable"
 
 
 def test_draft_command_persists_closed_record_when_rag_fails(tmp_path):

@@ -94,7 +94,7 @@ The project enables Low-Risk Assistance Mode by default. It is intentionally sco
 - **Structured transport**: stdout is JSON-only, stderr is logs-only, which keeps automation stable
 - **Platform-aware login**: user-triggered login state is stored locally and encrypted; it is not a risk-control bypass workflow
 - **Cross-platform adapter layer**: `Platform` / `RecruiterPlatform` registries are live, with low-risk mode governing sensitive capabilities
-- **MCP server with 41 tools**: exposes the low-risk tool surface plus Boss RAG workflow tools by default
+- **MCP server with 41 tools**: exposes the low-risk tool surface plus Boss Agent workflow tools by default
 
 ## 📦 Install
 
@@ -438,14 +438,14 @@ Invariant contracts:
 
 All state lives under `~/.boss-agent/` — encrypted tokens, cached searches, chat history snapshots, resumes, AI config. Nothing leaves your machine except explicit API calls.
 
-## 🧠 Boss RAG V1
+## 🧠 Boss Agent V1
 
 V1 is intentionally narrow: `Boss read-only automation + RAG draft reply + human approval send gate`.
 
-- `boss rag import-messages` / `boss rag ingest-mock`: low-risk fallback for manual import or mock JSON envelopes
-- `boss rag sync-jobs`: reads job list/detail into a local SQLite summary store
-- `boss rag sync-messages`: disabled by default; requires `boss_rag_allow_message_read=true` plus a valid local login/session
-- `boss rag draft` / `review` / `approve --copy`: create drafts, inspect evidence/risk labels, and copy approved text to the clipboard
+- `boss agent import-messages` / `boss agent ingest-mock`: low-risk fallback for manual import or mock JSON envelopes
+- `boss agent sync-jobs`: reads job list/detail into a local SQLite summary store
+- `boss agent sync-messages`: disabled by default; requires `boss_rag_allow_message_read=true` plus a valid local login/session
+- `boss agent draft` / `review` / `approve --copy`: create drafts, inspect evidence/risk labels, and copy approved text to the clipboard
 
 Guardrails:
 
@@ -453,6 +453,7 @@ Guardrails:
 - sensitive intents such as salary/offer, availability/schedule, interview time, personal status, resignation status, contact exchange, and unclear risky messages always require human approval
 - Boss raw messages, recruiter info, and full job details stay local by default; the RAG request only includes the HR question, an optional short job summary, and the answer objective
 - if `/api/v1/chat/ask` fails, the workflow fails closed with `audit_status="rag_failed"`, `send_allowed=false`, and `approval_required=true`
+- the workflow tools now use `boss_agent_*` / `boss agent ...`; config keys intentionally remain `boss_rag_*` for compatibility
 - when the RAG service is protected, configure `boss_rag_rag_api_key` and choose `boss_rag_rag_auth_mode` as `x_api_key` or `bearer`
 - `boss_rag_rag_api_key` can also come from environment variables; `BOSS_RAG_RAG_API_KEY` takes precedence, and both `RAG_API_KEY` and `RAG_AUTH_API_KEY` are accepted as compatibility aliases
 

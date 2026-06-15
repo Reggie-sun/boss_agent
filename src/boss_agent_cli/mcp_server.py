@@ -4,6 +4,7 @@ import argparse
 import asyncio
 import copy
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -28,6 +29,10 @@ DEFAULT_PORT = 8765
 DEFAULT_HTTP_PATH = "/mcp"
 DEFAULT_SSE_PATH = "/sse"
 DEFAULT_MESSAGE_PATH = "/messages/"
+_RELOAD_TRANSPORT_ENV = "BOSS_AGENT_MCP_TRANSPORT"
+_RELOAD_PATH_ENV = "BOSS_AGENT_MCP_PATH"
+_RELOAD_SSE_PATH_ENV = "BOSS_AGENT_MCP_SSE_PATH"
+_RELOAD_MESSAGE_PATH_ENV = "BOSS_AGENT_MCP_MESSAGE_PATH"
 
 
 def _build_schema_with_availability() -> dict[str, Any]:
@@ -65,10 +70,10 @@ def _tool_availability(tool_name: str) -> dict[str, Any] | None:
 		return commands["preset"].get("availability")
 	if name.startswith("shortlist_"):
 		return commands["shortlist"].get("availability")
-	if name.startswith("rag_"):
-		sub_name = name.removeprefix("rag_").replace("_", "-")
-		rag_availability = commands["rag"].get("availability") or {}
-		return rag_availability.get("subcommands", {}).get(sub_name, rag_availability)
+	if name.startswith("agent_") or name.startswith("rag_"):
+		sub_name = name.removeprefix("agent_").removeprefix("rag_").replace("_", "-")
+		agent_availability = commands["agent"].get("availability") or {}
+		return agent_availability.get("subcommands", {}).get(sub_name, agent_availability)
 	if name.startswith("hr_"):
 		sub_name = name.removeprefix("hr_").replace("_", "-")
 		hr_availability = commands["hr"].get("availability") or {}
@@ -494,13 +499,13 @@ TOOLS = [
 		},
 	),
 	Tool(
-		name="boss_rag_init",
-		description="初始化本地 Boss RAG workflow store",
+		name="boss_agent_init",
+		description="初始化本地 Boss Agent workflow store",
 		inputSchema={"type": "object", "properties": {}, "required": []},
 	),
 	Tool(
-		name="boss_rag_import_messages",
-		description="从 json/md/csv 手动导入消息到本地 Boss RAG store",
+		name="boss_agent_import_messages",
+		description="从 json/md/csv 手动导入消息到本地 Boss Agent store",
 		inputSchema={
 			"type": "object",
 			"properties": {
@@ -515,8 +520,8 @@ TOOLS = [
 		},
 	),
 	Tool(
-		name="boss_rag_ingest_mock",
-		description="导入结构化 mock envelope 以验证 Boss RAG workflow",
+		name="boss_agent_ingest_mock",
+		description="导入结构化 mock envelope 以验证 Boss Agent workflow",
 		inputSchema={
 			"type": "object",
 			"properties": {
@@ -526,8 +531,8 @@ TOOLS = [
 		},
 	),
 	Tool(
-		name="boss_rag_sync_jobs",
-		description="同步职位摘要到本地 Boss RAG store",
+		name="boss_agent_sync_jobs",
+		description="同步职位摘要到本地 Boss Agent store",
 		inputSchema={
 			"type": "object",
 			"properties": {
@@ -537,8 +542,8 @@ TOOLS = [
 		},
 	),
 	Tool(
-		name="boss_rag_sync_messages",
-		description="从 Boss 读取消息到本地 Boss RAG store。仍需显式开启 boss_rag_allow_message_read=true。",
+		name="boss_agent_sync_messages",
+		description="从 Boss 读取消息到本地 Boss Agent store。仍需显式开启 boss_rag_allow_message_read=true。",
 		inputSchema={
 			"type": "object",
 			"properties": {
@@ -548,8 +553,8 @@ TOOLS = [
 		},
 	),
 	Tool(
-		name="boss_rag_draft",
-		description="基于本地 Boss RAG store 里的消息生成草稿",
+		name="boss_agent_draft",
+		description="基于本地 Boss Agent store 里的消息生成草稿",
 		inputSchema={
 			"type": "object",
 			"properties": {
@@ -560,8 +565,8 @@ TOOLS = [
 		},
 	),
 	Tool(
-		name="boss_rag_review",
-		description="查看 Boss RAG 草稿详情；不传 draft_id 时返回全部草稿",
+		name="boss_agent_review",
+		description="查看 Boss Agent 草稿详情；不传 draft_id 时返回全部草稿",
 		inputSchema={
 			"type": "object",
 			"properties": {
@@ -571,8 +576,8 @@ TOOLS = [
 		},
 	),
 	Tool(
-		name="boss_rag_approve",
-		description="批准 Boss RAG 草稿，可选复制到剪贴板",
+		name="boss_agent_approve",
+		description="批准 Boss Agent 草稿，可选复制到剪贴板",
 		inputSchema={
 			"type": "object",
 			"properties": {
@@ -583,8 +588,8 @@ TOOLS = [
 		},
 	),
 	Tool(
-		name="boss_rag_audit",
-		description="查看 Boss RAG workflow 审计日志",
+		name="boss_agent_audit",
+		description="查看 Boss Agent workflow 审计日志",
 		inputSchema={
 			"type": "object",
 			"properties": {
@@ -1119,49 +1124,49 @@ def _build_args(tool_name: str, arguments: dict) -> list[str]:
 	if name == "ai_suggest":
 		return ["ai", "suggest", arguments["resume"], "--jd", arguments["jd_text"]]
 
-	if name == "rag_init":
-		return ["rag", "init"]
+	if name in {"agent_init", "rag_init"}:
+		return ["agent", "init"]
 
-	if name == "rag_import_messages":
-		return ["rag", "import-messages", "--file", arguments["file"], "--format", arguments["format"]]
+	if name in {"agent_import_messages", "rag_import_messages"}:
+		return ["agent", "import-messages", "--file", arguments["file"], "--format", arguments["format"]]
 
-	if name == "rag_ingest_mock":
-		return ["rag", "ingest-mock", "--file", arguments["file"]]
+	if name in {"agent_ingest_mock", "rag_ingest_mock"}:
+		return ["agent", "ingest-mock", "--file", arguments["file"]]
 
-	if name == "rag_sync_jobs":
-		args = ["rag", "sync-jobs"]
+	if name in {"agent_sync_jobs", "rag_sync_jobs"}:
+		args = ["agent", "sync-jobs"]
 		if arguments.get("query"):
 			args.extend(["--query", arguments["query"]])
 		return args
 
-	if name == "rag_sync_messages":
-		args = ["rag", "sync-messages"]
+	if name in {"agent_sync_messages", "rag_sync_messages"}:
+		args = ["agent", "sync-messages"]
 		if arguments.get("conversation_id"):
 			args.extend(["--conversation-id", arguments["conversation_id"]])
 		return args
 
-	if name == "rag_draft":
-		args = ["rag", "draft"]
+	if name in {"agent_draft", "rag_draft"}:
+		args = ["agent", "draft"]
 		if arguments.get("conversation_id"):
 			args.extend(["--conversation-id", arguments["conversation_id"]])
 		if arguments.get("message_id"):
 			args.extend(["--message-id", arguments["message_id"]])
 		return args
 
-	if name == "rag_review":
-		args = ["rag", "review"]
+	if name in {"agent_review", "rag_review"}:
+		args = ["agent", "review"]
 		if arguments.get("draft_id"):
 			args.extend(["--draft-id", arguments["draft_id"]])
 		return args
 
-	if name == "rag_approve":
-		args = ["rag", "approve", arguments["draft_id"]]
+	if name in {"agent_approve", "rag_approve"}:
+		args = ["agent", "approve", arguments["draft_id"]]
 		if arguments.get("copy"):
 			args.append("--copy")
 		return args
 
-	if name == "rag_audit":
-		args = ["rag", "audit"]
+	if name in {"agent_audit", "rag_audit"}:
+		args = ["agent", "audit"]
 		if arguments.get("draft_id"):
 			args.extend(["--draft-id", arguments["draft_id"]])
 		return args
@@ -1423,20 +1428,78 @@ def _create_streamable_http_app(*, path: str = DEFAULT_HTTP_PATH):
 	)
 
 
-def _serve_asgi_app(app, *, host: str, port: int) -> None:
+def create_app(
+	*,
+	transport: str | None = None,
+	path: str | None = None,
+	sse_path: str | None = None,
+	message_path: str | None = None,
+):
+	transport = transport or os.environ.get(_RELOAD_TRANSPORT_ENV, DEFAULT_TRANSPORT)
+	path = path or os.environ.get(_RELOAD_PATH_ENV, DEFAULT_HTTP_PATH)
+	sse_path = sse_path or os.environ.get(_RELOAD_SSE_PATH_ENV, DEFAULT_SSE_PATH)
+	message_path = message_path or os.environ.get(_RELOAD_MESSAGE_PATH_ENV, DEFAULT_MESSAGE_PATH)
+
+	if transport == "sse":
+		return _create_sse_app(sse_path=sse_path, message_path=message_path)
+	return _create_streamable_http_app(path=path)
+
+
+def _serve_asgi_app(
+	app,
+	*,
+	host: str,
+	port: int,
+	reload: bool = False,
+	transport: str = DEFAULT_TRANSPORT,
+	path: str = DEFAULT_HTTP_PATH,
+	sse_path: str = DEFAULT_SSE_PATH,
+	message_path: str = DEFAULT_MESSAGE_PATH,
+) -> None:
 	import uvicorn
+
+	if reload:
+		os.environ[_RELOAD_TRANSPORT_ENV] = transport
+		os.environ[_RELOAD_PATH_ENV] = path
+		os.environ[_RELOAD_SSE_PATH_ENV] = sse_path
+		os.environ[_RELOAD_MESSAGE_PATH_ENV] = message_path
+		uvicorn.run(
+			"boss_agent_cli.mcp_server:create_app",
+			host=host,
+			port=port,
+			log_level="info",
+			reload=True,
+			factory=True,
+			reload_dirs=["/app/src", "/app/mcp-server"],
+		)
+		return
 
 	uvicorn.run(app, host=host, port=port, log_level="info")
 
 
-def _run_sse_server(*, host: str, port: int, sse_path: str, message_path: str) -> None:
+def _run_sse_server(*, host: str, port: int, sse_path: str, message_path: str, reload: bool = False) -> None:
 	app = _create_sse_app(sse_path=sse_path, message_path=message_path)
-	_serve_asgi_app(app, host=host, port=port)
+	_serve_asgi_app(
+		app,
+		host=host,
+		port=port,
+		reload=reload,
+		transport="sse",
+		sse_path=sse_path,
+		message_path=message_path,
+	)
 
 
-def _run_http_server(*, host: str, port: int, path: str) -> None:
+def _run_http_server(*, host: str, port: int, path: str, reload: bool = False) -> None:
 	app = _create_streamable_http_app(path=path)
-	_serve_asgi_app(app, host=host, port=port)
+	_serve_asgi_app(
+		app,
+		host=host,
+		port=port,
+		reload=reload,
+		transport="http",
+		path=path,
+	)
 
 
 def _parse_cli_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -1452,6 +1515,7 @@ def _parse_cli_args(argv: list[str] | None = None) -> argparse.Namespace:
 	parser.add_argument("--path", default=DEFAULT_HTTP_PATH, help="HTTP streaming 路径")
 	parser.add_argument("--sse-path", default=DEFAULT_SSE_PATH, help="SSE 建链路径")
 	parser.add_argument("--message-path", default=DEFAULT_MESSAGE_PATH, help="SSE 消息回传路径")
+	parser.add_argument("--reload", action="store_true", help="开发模式：源码变更后自动重载")
 	return parser.parse_args(argv)
 
 
@@ -1461,9 +1525,15 @@ def run(argv: list[str] | None = None) -> None:
 		asyncio.run(main())
 		return
 	if args.transport == "sse":
-		_run_sse_server(host=args.host, port=args.port, sse_path=args.sse_path, message_path=args.message_path)
+		_run_sse_server(
+			host=args.host,
+			port=args.port,
+			sse_path=args.sse_path,
+			message_path=args.message_path,
+			reload=args.reload,
+		)
 		return
-	_run_http_server(host=args.host, port=args.port, path=args.path)
+	_run_http_server(host=args.host, port=args.port, path=args.path, reload=args.reload)
 
 
 if __name__ == "__main__":

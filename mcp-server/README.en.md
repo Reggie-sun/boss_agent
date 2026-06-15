@@ -84,7 +84,7 @@ The current MCP server exposes **32 low-risk tools** by default.
 | `boss_resume_list` | List local resumes |
 | `boss_resume_show` | View a local resume |
 
-Current MCP Server exposes **41 tools** by default: the low-risk surface plus Boss RAG workflow tools.
+Current MCP Server exposes **41 tools** by default: the low-risk surface plus Boss Agent workflow tools.
 
 ### AI assistance
 
@@ -97,19 +97,19 @@ Current MCP Server exposes **41 tools** by default: the low-risk surface plus Bo
 | `boss_ai_interview_prep` | Generate interview preparation from a job description |
 | `boss_ai_chat_coach` | Coach communication from user-provided text |
 
-### Boss RAG workflow
+### Boss Agent workflow
 
 | Tool | Description |
 |------|-------------|
-| `boss_rag_init` | Initialize the local Boss RAG workspace and index |
-| `boss_rag_import_messages` | Import historical message files into Boss RAG |
-| `boss_rag_ingest_mock` | Seed mock conversation samples into Boss RAG |
-| `boss_rag_sync_jobs` | Sync local job data into Boss RAG |
-| `boss_rag_sync_messages` | Sync local conversations into Boss RAG |
-| `boss_rag_draft` | Draft a reply from conversation context |
-| `boss_rag_review` | Review an existing Boss RAG draft |
-| `boss_rag_approve` | Approve a Boss RAG draft and optionally copy it |
-| `boss_rag_audit` | Audit a Boss RAG draft and its evidence metadata |
+| `boss_agent_init` | Initialize the local Boss Agent workspace and index |
+| `boss_agent_import_messages` | Import historical message files into Boss Agent |
+| `boss_agent_ingest_mock` | Seed mock conversation samples into Boss Agent |
+| `boss_agent_sync_jobs` | Sync local job data into Boss Agent |
+| `boss_agent_sync_messages` | Sync local conversations into Boss Agent |
+| `boss_agent_draft` | Draft a reply from conversation context |
+| `boss_agent_review` | Review an existing Boss Agent draft |
+| `boss_agent_approve` | Approve a Boss Agent draft and optionally copy it |
+| `boss_agent_audit` | Audit a Boss Agent draft and its evidence metadata |
 
 ### Recruiter low-risk entry points
 

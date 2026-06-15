@@ -114,11 +114,14 @@ function createRagBridgePlugin() {
 
   async function handler(req, res) {
     if (!req.url) return false;
+    const isAgentHealth = req.url === "/api/agent/health" || req.url === "/api/rag/health";
+    const isAgentThread = req.url.startsWith("/api/agent/thread") || req.url.startsWith("/api/rag/thread");
+    const isAgentAsk = req.url === "/api/agent/ask" || req.url === "/api/rag/ask";
 
-    if (req.method === "GET" && req.url === "/api/rag/health") {
+    if (req.method === "GET" && isAgentHealth) {
       res.setHeader("Content-Type", "application/json; charset=utf-8");
       try {
-        runBossJsonCommand(bridgeConfig, ["rag", "init"]);
+        runBossJsonCommand(bridgeConfig, ["agent", "init"]);
         const ready =
           Boolean(bridgeConfig.baseUrl) &&
           (bridgeConfig.authMode === "none" || Boolean(bridgeConfig.apiKey));
@@ -127,7 +130,7 @@ function createRagBridgePlugin() {
             configured: Boolean(bridgeConfig.baseUrl),
             ready,
             authMode: bridgeConfig.authMode || "none",
-            endpoint: "/api/rag/ask",
+            endpoint: "/api/agent/ask",
             workflow: "boss-agent-cli",
             dataDir: bridgeConfig.dataDir,
             errorMessage: bridgeConfig.baseUrl
@@ -142,7 +145,7 @@ function createRagBridgePlugin() {
             configured: Boolean(bridgeConfig.baseUrl),
             ready: false,
             authMode: bridgeConfig.authMode || "none",
-            endpoint: "/api/rag/ask",
+            endpoint: "/api/agent/ask",
             workflow: "boss-agent-cli",
             dataDir: bridgeConfig.dataDir,
             errorMessage:
@@ -153,7 +156,7 @@ function createRagBridgePlugin() {
       return true;
     }
 
-    if (req.method === "GET" && req.url.startsWith("/api/rag/thread")) {
+    if (req.method === "GET" && isAgentThread) {
       const requestUrl = new URL(req.url, "http://127.0.0.1");
       const sessionId = String(requestUrl.searchParams.get("sessionId") || "").trim();
       res.setHeader("Content-Type", "application/json; charset=utf-8");
@@ -164,7 +167,7 @@ function createRagBridgePlugin() {
       }
       try {
         const payload = runBossJsonCommand(bridgeConfig, [
-          "rag",
+          "agent",
           "thread",
           "--conversation-id",
           sessionId,
@@ -285,7 +288,7 @@ function createRagBridgePlugin() {
       return true;
     }
 
-    if (req.method !== "POST" || req.url !== "/api/rag/ask") return false;
+    if (req.method !== "POST" || !isAgentAsk) return false;
 
     res.setHeader("Content-Type", "application/json; charset=utf-8");
 
@@ -306,6 +309,10 @@ function createRagBridgePlugin() {
       const parsed = rawBody ? JSON.parse(rawBody) : {};
       const question = String(parsed.question || "").trim();
       const sessionId = String(parsed.sessionId || "").trim() || `session-${Date.now()}`;
+      const jobId = String(parsed.job_id || "").trim();
+      const recruiterId = String(parsed.recruiter_id || "").trim();
+      const securityId = String(parsed.security_id || "").trim();
+      const autoSendResume = Boolean(parsed.auto_send_resume);
 
       if (!question) {
         res.statusCode = 400;
@@ -313,14 +320,20 @@ function createRagBridgePlugin() {
         return true;
       }
 
-      const payload = runBossJsonCommand(bridgeConfig, [
-        "rag",
+      const args = [
+        "agent",
         "ask",
         "--conversation-id",
         sessionId,
         "--question",
         question,
-      ]);
+      ];
+      if (jobId) args.push("--job-id", jobId);
+      if (recruiterId) args.push("--recruiter-id", recruiterId);
+      if (securityId) args.push("--security-id", securityId);
+      if (autoSendResume) args.push("--auto-send-resume");
+
+      const payload = runBossJsonCommand(bridgeConfig, args);
       const data = payload.data || {};
       const draft = data.draft || {};
       const thread = normalizeThread(sessionId, data.thread);
@@ -355,6 +368,10 @@ function createRagBridgePlugin() {
             draft,
             question,
           },
+          delivery:
+            data.delivery && typeof data.delivery === "object"
+              ? data.delivery
+              : null,
           thread,
         }),
       );

@@ -29,6 +29,7 @@ const emptyAnswer = {
   answer: "",
   citations: [],
   reasoningSummary: null,
+  delivery: null,
   auditStatus: "idle",
   errorMessage: "",
   latencyMs: null,
@@ -129,7 +130,7 @@ export function App() {
     configured: false,
     ready: false,
     authMode: "unknown",
-    endpoint: "/api/rag/ask",
+    endpoint: "/api/agent/ask",
     errorMessage: "",
   });
   const [sessionId] = useState(() => loadOrCreateSessionId());
@@ -163,8 +164,8 @@ export function App() {
     async function loadBridgeState() {
       try {
         const [response, threadResponse] = await Promise.all([
-          fetch("/api/rag/health"),
-          fetch(`/api/rag/thread?sessionId=${encodeURIComponent(sessionId)}`),
+          fetch("/api/agent/health"),
+          fetch(`/api/agent/thread?sessionId=${encodeURIComponent(sessionId)}`),
         ]);
         const data = await response.json();
         const threadPayload = await threadResponse.json();
@@ -174,7 +175,7 @@ export function App() {
             configured: Boolean(data.configured),
             ready: Boolean(data.ready),
             authMode: String(data.authMode || "unknown"),
-            endpoint: String(data.endpoint || "/api/rag/ask"),
+            endpoint: String(data.endpoint || "/api/agent/ask"),
             errorMessage: data.errorMessage ? String(data.errorMessage) : "",
           });
           if (threadPayload.ok && threadPayload.thread) {
@@ -192,7 +193,7 @@ export function App() {
             configured: false,
             ready: false,
             authMode: "unknown",
-            endpoint: "/api/rag/ask",
+            endpoint: "/api/agent/ask",
             errorMessage: error instanceof Error ? error.message : "无法读取本地代理状态。",
           });
         }
@@ -275,7 +276,7 @@ export function App() {
     const start = performance.now();
 
     try {
-      const response = await fetch("/api/rag/ask", {
+      const response = await fetch("/api/agent/ask", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -284,6 +285,9 @@ export function App() {
           question: trimmed,
           sessionId,
           mode: "accurate",
+          job_id: applyForm.job_id.trim(),
+          security_id: applyForm.security_id.trim(),
+          auto_send_resume: Boolean(applyForm.security_id.trim()),
         }),
       });
       const payload = await response.json();
@@ -291,7 +295,7 @@ export function App() {
         if (payload.thread?.messages) {
           setThread(payload.thread.messages);
         }
-        throw new Error(payload.errorMessage || "RAG 请求失败，请检查本地服务状态。");
+        throw new Error(payload.errorMessage || "Agent 请求失败，请检查本地服务状态。");
       }
 
       const nextResult = {
@@ -301,6 +305,10 @@ export function App() {
         reasoningSummary:
           payload.reasoningSummary && typeof payload.reasoningSummary === "object"
             ? payload.reasoningSummary
+            : null,
+        delivery:
+          payload.delivery && typeof payload.delivery === "object"
+            ? payload.delivery
             : null,
         auditStatus: String(payload.auditStatus || "answered"),
         errorMessage: "",
@@ -328,10 +336,10 @@ export function App() {
         ...current,
       ]);
     } catch (error) {
-      const message = error instanceof Error ? error.message : "RAG 请求失败。";
+      const message = error instanceof Error ? error.message : "Agent 请求失败。";
       setResult({
         ...emptyAnswer,
-        auditStatus: "rag_failed",
+        auditStatus: "agent_failed",
         errorMessage: message,
         latencyMs: Math.round(performance.now() - start),
         askedAt: new Date().toLocaleTimeString("zh-CN", {
@@ -367,7 +375,7 @@ export function App() {
           </div>
           <div>
             <h1>AI 面试问答台</h1>
-            <p>Agent 代调用 Enterprise RAG</p>
+            <p>Agent 编排并调用 Enterprise RAG</p>
           </div>
         </div>
 
@@ -381,7 +389,7 @@ export function App() {
               {bridgeState.loading ? "检查中" : bridgeState.ready ? "已连接" : "待配置"}
             </span>
           </div>
-          <h2>本地 RAG 代理</h2>
+          <h2>本地 Agent 代理</h2>
           <p>会话 ID：{sessionId.slice(0, 12)}...</p>
           <p>多轮记忆：{thread.length ? `${Math.ceil(thread.length / 2)} 轮` : "尚未建立"}</p>
           <p>鉴权模式：{bridgeState.authMode}</p>
@@ -452,7 +460,7 @@ export function App() {
       <section className="workspace">
         <header className="workspace-header">
           <div>
-            <span className="eyebrow">RAG 问题输入</span>
+            <span className="eyebrow">Agent 问题输入</span>
             <h2>让 Agent 调用知识库回答</h2>
           </div>
           <div className="meta-pill">
@@ -496,15 +504,24 @@ export function App() {
         <section className="answer-region">
           <div className="answer-region__header">
             <div>
-              <h3>RAG 回答结果</h3>
+              <h3>Agent 回答结果</h3>
               <p>
                 <span className={`answer-region__verified-dot ${result.ok ? "is-success" : ""}`} />
                 {result.ok
-                  ? `已收到 grounded answer${result.latencyMs ? ` · ${result.latencyMs}ms` : ""}`
+                  ? `已收到 Agent 最终回答${result.latencyMs ? ` · ${result.latencyMs}ms` : ""}`
                   : isLoading
-                    ? "正在等待 Enterprise RAG 返回"
+                    ? "正在等待 Agent 完成编排"
                     : "等待你发起问题"}
               </p>
+              {result.delivery?.status === "sent" ? (
+                <p>已通过当前对话上下文发送在线简历。</p>
+              ) : result.delivery?.status === "disabled" ? (
+                <p>已识别为发简历请求，但本地未开启自动发送。</p>
+              ) : result.delivery?.status === "missing_security_id" ? (
+                <p>已识别为发简历请求，但当前没有可用的 `security_id`。</p>
+              ) : result.delivery?.status === "resume_failed" || result.delivery?.status === "message_failed" ? (
+                <p>已尝试发送简历，但执行失败：{result.delivery.error_message || "未知错误"}。</p>
+              ) : null}
             </div>
             <div className="answer-region__status">
               {result.errorMessage ? <WarningCircle size={18} weight="fill" /> : <CheckCircle size={18} weight="fill" />}
@@ -518,7 +535,7 @@ export function App() {
                 <div className="answer-loader" />
                 <div>
                   <strong>Agent 正在整理回答</strong>
-                  <p>这一步会由本地代理向 `/api/v1/chat/ask` 发起请求，并回收 answer / citations。</p>
+                  <p>这一步会由本地 Agent workflow 调用 `/api/v1/chat/ask`，再整理最终 answer / citations。</p>
                 </div>
               </div>
             ) : result.errorMessage ? (
@@ -749,7 +766,7 @@ export function App() {
               ))
             ) : (
               <div className="empty-card-copy">
-                当前回答还没有可展示的 citations。真实 RAG 返回后，会在这里展示证据列表。
+                当前回答还没有可展示的 citations。若底层 RAG 命中证据，这里会展示引用列表。
               </div>
             )}
           </div>
@@ -782,6 +799,16 @@ export function App() {
               <span className="outline-index">3</span>
               <span>返回 answer / citations / reasoning，并同步多轮 memory</span>
             </li>
+            {result.delivery ? (
+              <li className={result.delivery.status === "sent" ? "is-current" : ""}>
+                <span className="outline-index">4</span>
+                <span>
+                  {result.delivery.status === "sent"
+                    ? "已调用 BOSS 对话发送消息并附带在线简历"
+                    : "已评估是否需要自动发送在线简历"}
+                </span>
+              </li>
+            ) : null}
           </ol>
 
           <div className="reasoning-panel">
@@ -822,7 +849,7 @@ export function App() {
           <Quotes size={20} />
           <span>
             候选人画像
-            <em>快速验证 RAG 风格</em>
+            <em>快速验证 Agent 回答风格</em>
           </span>
         </button>
 

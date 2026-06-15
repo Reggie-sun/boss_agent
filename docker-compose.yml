@@ -3,19 +3,33 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      args:
+        HTTP_PROXY: ""
+        HTTPS_PROXY: ""
+        http_proxy: ""
+        https_proxy: ""
+        ALL_PROXY: ""
+        all_proxy: ""
     container_name: boss-agent
     restart: unless-stopped
     network_mode: host
     env_file:
       - path: .env
         required: false
+    environment:
+      PYTHONPATH: /app/src
     volumes:
+      - ./src:/app/src
+      - ./mcp-server:/app/mcp-server
       - ${HOME}/.boss-agent:/root/.boss-agent
     command:
-      - boss-mcp
+      - python
+      - -m
+      - boss_agent_cli.mcp_server
       - --transport
       - http
       - --host
       - 0.0.0.0
       - --port
-      - "8765"
+      - "${BOSS_AGENT_PORT:-8766}"
+      - --reload
