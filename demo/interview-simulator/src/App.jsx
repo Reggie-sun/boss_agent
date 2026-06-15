@@ -88,6 +88,10 @@ function excerptFromCitation(citation) {
   );
 }
 
+function targetOptionValue(target) {
+  return String(target.conversation_id || target.security_id || "");
+}
+
 function normalizeReasoningSummary(reasoningSummary) {
   if (!reasoningSummary || typeof reasoningSummary !== "object") return [];
 
@@ -161,12 +165,19 @@ export function App() {
     liveReadEnabled: false,
     refreshed: false,
   });
+  const [selectedTargetValue, setSelectedTargetValue] = useState("");
   const [isSendingToBoss, setIsSendingToBoss] = useState(false);
   const [sendResumeWithDraft, setSendResumeWithDraft] = useState(false);
 
   const reasoningItems = useMemo(
     () => normalizeReasoningSummary(result.reasoningSummary),
     [result.reasoningSummary],
+  );
+  const selectedChatTarget = useMemo(
+    () =>
+      chatTargets.find((target) => targetOptionValue(target) === selectedTargetValue) ||
+      null,
+    [chatTargets, selectedTargetValue],
   );
   const selectedCitation = result.citations[selectedCitationIndex] ?? null;
   const questionLength = question.replace(/\s/g, "").length;
@@ -284,7 +295,16 @@ export function App() {
       title: target.title || f.title,
       company: target.company || f.company,
     }));
+    setSelectedTargetValue(targetOptionValue(target));
     setApplyMode(true);
+  }
+
+  function handleTargetSelection(value) {
+    setSelectedTargetValue(value);
+    const target = chatTargets.find((item) => targetOptionValue(item) === value);
+    if (target) {
+      pickTarget(target);
+    }
   }
 
   async function handleApply() {
@@ -830,6 +850,40 @@ export function App() {
 
             {/* 投递表单 */}
             <div className="apply-form">
+              {chatTargets.length ? (
+                <div className="apply-form__row">
+                  <div className="apply-field">
+                    <label>最近 Boss 目标</label>
+                    <select
+                      className="apply-input"
+                      value={selectedTargetValue}
+                      onChange={(e) => handleTargetSelection(e.target.value)}
+                    >
+                      <option value="">选择最近 Boss 对话目标</option>
+                      {chatTargets.map((target) => (
+                        <option
+                          key={targetOptionValue(target)}
+                          value={targetOptionValue(target)}
+                        >
+                          {`${target.company || "未知公司"} · ${target.recruiter_name || "未命名 HR"} · ${target.title || "未知职位"}`}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+              ) : null}
+
+              {selectedChatTarget ? (
+                <div className="apply-result apply-result--ok">
+                  <CheckCircle size={18} weight="fill" />
+                  <span>
+                    已选发送目标：{selectedChatTarget.company || "未知公司"} /{" "}
+                    {selectedChatTarget.recruiter_name || "未命名 HR"} /{" "}
+                    {selectedChatTarget.security_id || "无 security_id"}
+                  </span>
+                </div>
+              ) : null}
+
               <div className="apply-form__row">
                 <div className="apply-field">
                   <label>Security ID</label>
