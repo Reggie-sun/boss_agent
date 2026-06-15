@@ -791,18 +791,25 @@ export function App() {
           ) : null}
         </section>
 
-{/* ── BOSS 直聘全自动投递 ──────────────────────────────── */}
+{/* ── Boss 对话测试 / 职位投递工具 ──────────────────────────────── */}
       <section className="apply-panel apply-panel--inline">
         <div className="apply-panel__header" onClick={() => setApplyMode((m) => !m)}>
           <div className="apply-panel__title-row">
             <PaperPlaneTilt size={22} weight="bold" />
-            <h2>BOSS 直聘 · 全自动投递</h2>
+            <h2>Boss 对话测试 / 职位投递工具</h2>
           </div>
           <span className="apply-panel__toggle">{applyMode ? "收起 ▲" : "展开 ▼"}</span>
         </div>
 
         {applyMode && (
           <div className="apply-panel__body">
+            <div className="apply-result">
+              <span>
+                当前聊天测试请优先使用“对话发送目标”加 `发送到 Boss`。
+                下方“搜职位 / 主动投递并发简历”是另一条独立链路，适合还没建立对话时主动投递。
+              </span>
+            </div>
+
             {/* 搜索职位 */}
             <div className="apply-search">
               <div className="apply-search__inputs">
@@ -853,13 +860,13 @@ export function App() {
               {chatTargets.length ? (
                 <div className="apply-form__row">
                   <div className="apply-field">
-                    <label>最近 Boss 目标</label>
+                    <label>对话发送目标</label>
                     <select
                       className="apply-input"
                       value={selectedTargetValue}
                       onChange={(e) => handleTargetSelection(e.target.value)}
                     >
-                      <option value="">选择最近 Boss 对话目标</option>
+                      <option value="">选择已回复的 Boss 对话目标</option>
                       {chatTargets.map((target) => (
                         <option
                           key={targetOptionValue(target)}
@@ -877,7 +884,7 @@ export function App() {
                 <div className="apply-result apply-result--ok">
                   <CheckCircle size={18} weight="fill" />
                   <span>
-                    已选发送目标：{selectedChatTarget.company || "未知公司"} /{" "}
+                    已选对话目标：{selectedChatTarget.company || "未知公司"} /{" "}
                     {selectedChatTarget.recruiter_name || "未命名 HR"} /{" "}
                     {selectedChatTarget.security_id || "无 security_id"}
                   </span>
@@ -967,7 +974,7 @@ export function App() {
                 }
               >
                 <PaperPlaneTilt size={18} weight="fill" />
-                {applyLoading ? "投递中..." : "全自动发简历"}
+                {applyLoading ? "投递中..." : "主动投递并发简历"}
               </button>
 
               {applyResult && (
