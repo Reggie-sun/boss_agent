@@ -4,6 +4,10 @@ import { spawnSync } from "node:child_process";
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 
+const BOSS_GEEK_CHAT_URL = "https://www.zhipin.com/web/geek/chat";
+const DELIVERY_PROBE_CACHE_TTL_MS = 10_000;
+let cachedDeliveryProbe = null;
+
 function parseEnvFile(filePath) {
   if (!fs.existsSync(filePath)) return {};
   const values = {};
@@ -52,6 +56,23 @@ async function readJsonWithTimeout(url, timeoutMs = 1500) {
   }
 }
 
+async function readTextWithTimeout(url, { method = "GET", timeoutMs = 1500 } = {}) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(url, { method, signal: controller.signal });
+    return {
+      ok: response.ok,
+      status: response.status,
+      text: await response.text(),
+    };
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 async function detectBrowserChannel(config) {
   const cdpVersion = await readJsonWithTimeout(`${config.cdpUrl}/json/version`);
   const bridgeStatus = await readJsonWithTimeout(`${config.bridgeUrl}/status`);
@@ -80,6 +101,268 @@ async function detectBrowserChannel(config) {
       ? ""
       : `未检测到可用的浏览器发送通道：CDP (${config.cdpUrl}) / Bridge (${config.bridgeUrl})。请先启动带 remote debugging 的 Chrome，或连接 BOSS Agent Bridge 扩展。`,
   };
+}
+
+async function createCdpProbeTarget(cdpUrl) {
+  const response = await readTextWithTimeout(
+    `${cdpUrl}/json/new?${encodeURIComponent("about:blank")}`,
+    { method: "PUT", timeoutMs: 2000 },
+  );
+  if (!response?.ok || !response.text) return null;
+  try {
+    return JSON.parse(response.text);
+  } catch {
+    return null;
+  }
+}
+
+async function closeCdpProbeTarget(cdpUrl, targetId) {
+  if (!targetId) return;
+  await readTextWithTimeout(`${cdpUrl}/json/close/${targetId}`, {
+    timeoutMs: 1500,
+  });
+}
+
+async function evaluateCdpProbeTarget(target, url) {
+  if (!target?.webSocketDebuggerUrl) {
+    return {
+      ok: false,
+      href: "",
+      title: "",
+      hasUserList: false,
+      bodySnippet: "",
+      navigationEvents: [],
+      errorMessage: "CDP probe target 缺少 webSocketDebuggerUrl。",
+    };
+  }
+
+  const navigationEvents = [];
+  const ws = new WebSocket(target.webSocketDebuggerUrl);
+  let requestId = 0;
+  const pending = new Map();
+
+  const waitForSocketOpen = new Promise((resolve, reject) => {
+    ws.onopen = resolve;
+    ws.onerror = reject;
+  });
+
+  function trackNavigationEvent(data) {
+    const candidateUrl =
+      data?.params?.url ||
+      data?.params?.frame?.url ||
+      "";
+    if (!candidateUrl) return;
+    navigationEvents.push({
+      method: String(data.method || "unknown"),
+      url: String(candidateUrl),
+    });
+  }
+
+  function send(method, params = {}) {
+    const id = ++requestId;
+    ws.send(JSON.stringify({ id, method, params }));
+    return new Promise((resolve, reject) => {
+      pending.set(id, { resolve, reject });
+    });
+  }
+
+  ws.onmessage = (event) => {
+    const data = JSON.parse(event.data);
+    if (data.id && pending.has(data.id)) {
+      const { resolve, reject } = pending.get(data.id);
+      pending.delete(data.id);
+      if (data.error) reject(new Error(JSON.stringify(data.error)));
+      else resolve(data.result);
+      return;
+    }
+
+    if (
+      data.method === "Page.frameScheduledNavigation" ||
+      data.method === "Page.frameRequestedNavigation" ||
+      data.method === "Page.frameStartedNavigating" ||
+      data.method === "Page.frameNavigated" ||
+      data.method === "Page.navigatedWithinDocument"
+    ) {
+      trackNavigationEvent(data);
+    }
+  };
+
+  try {
+    await waitForSocketOpen;
+    await send("Page.enable");
+    await send("Runtime.enable");
+    await send("Page.navigate", { url });
+    await new Promise((resolve) => setTimeout(resolve, 6500));
+
+    const result = await send("Runtime.evaluate", {
+      expression: `(() => JSON.stringify({
+        href: location.href,
+        title: document.title,
+        hasUserList: !!document.querySelector('.user-list-content'),
+        bodySnippet: (document.body?.innerText || '').slice(0, 500)
+      }))()`,
+      returnByValue: true,
+      awaitPromise: true,
+    });
+
+    let snapshot = {
+      href: "",
+      title: "",
+      hasUserList: false,
+      bodySnippet: "",
+    };
+    try {
+      snapshot = JSON.parse(result?.result?.value || "{}");
+    } catch {
+      snapshot = {
+        href: "",
+        title: "",
+        hasUserList: false,
+        bodySnippet: "",
+      };
+    }
+
+    return {
+      ok: true,
+      ...snapshot,
+      navigationEvents,
+      errorMessage: "",
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      href: "",
+      title: "",
+      hasUserList: false,
+      bodySnippet: "",
+      navigationEvents,
+      errorMessage: error instanceof Error ? error.message : "CDP probe 执行失败。",
+    };
+  } finally {
+    try {
+      ws.close();
+    } catch {
+      // noop
+    }
+  }
+}
+
+async function detectBossDeliveryChannel(config) {
+  const transport = await detectBrowserChannel(config);
+  const baseState = {
+    ...transport,
+    transportAvailable: transport.available,
+    chatPageReachable: false,
+    chatPageUrl: BOSS_GEEK_CHAT_URL,
+    preflightStatus: transport.available ? "pending" : "transport_unavailable",
+    lastObservedUrl: "",
+    lastObservedTitle: "",
+    redirectUrl: "",
+  };
+
+  if (!transport.cdpAvailable) {
+    if (transport.bridgeAvailable) {
+      return {
+        ...baseState,
+        available: false,
+        preflightStatus: "cdp_required",
+        errorMessage:
+          "当前只检测到 Bridge 扩展，但这个 demo 的 Boss 对话发送预检仍需要 CDP Chrome 才能确认聊天页是否可达。",
+      };
+    }
+    return {
+      ...baseState,
+      available: false,
+    };
+  }
+
+  const cacheKey = config.cdpUrl;
+  if (
+    cachedDeliveryProbe &&
+    cachedDeliveryProbe.key === cacheKey &&
+    cachedDeliveryProbe.expiresAt > Date.now()
+  ) {
+    return cachedDeliveryProbe.value;
+  }
+
+  const target = await createCdpProbeTarget(config.cdpUrl);
+  if (!target?.id) {
+    const unavailable = {
+      ...baseState,
+      available: false,
+      preflightStatus: "probe_target_unavailable",
+      errorMessage: "无法创建 CDP 临时探针页面，暂时不能验证 Boss 聊天页是否可达。",
+    };
+    cachedDeliveryProbe = {
+      key: cacheKey,
+      expiresAt: Date.now() + DELIVERY_PROBE_CACHE_TTL_MS,
+      value: unavailable,
+    };
+    return unavailable;
+  }
+
+  let probeResult;
+  try {
+    probeResult = await evaluateCdpProbeTarget(target, BOSS_GEEK_CHAT_URL);
+  } finally {
+    await closeCdpProbeTarget(config.cdpUrl, target.id);
+  }
+
+  const redirectEvent = Array.isArray(probeResult?.navigationEvents)
+    ? probeResult.navigationEvents.find((item) => String(item?.url || "").includes("/web/user/"))
+    : null;
+  const redirectedToLogin =
+    Boolean(redirectEvent) ||
+    String(probeResult?.href || "").includes("/web/user/");
+
+  let resolved;
+  if (!probeResult?.ok) {
+    resolved = {
+      ...baseState,
+      available: false,
+      preflightStatus: "probe_failed",
+      errorMessage:
+        probeResult?.errorMessage || "Boss 聊天页预检失败，暂时不能确认发送链路可用。",
+    };
+  } else if (probeResult.hasUserList) {
+    resolved = {
+      ...baseState,
+      available: true,
+      chatPageReachable: true,
+      preflightStatus: "ready",
+      lastObservedUrl: String(probeResult.href || ""),
+      lastObservedTitle: String(probeResult.title || ""),
+      errorMessage: "",
+    };
+  } else if (redirectedToLogin) {
+    resolved = {
+      ...baseState,
+      available: false,
+      preflightStatus: "chat_login_redirect",
+      lastObservedUrl: String(probeResult.href || ""),
+      lastObservedTitle: String(probeResult.title || ""),
+      redirectUrl: String(redirectEvent?.url || probeResult?.href || ""),
+      errorMessage:
+        "Boss 聊天页当前不可达：CDP Chrome 访问 `/web/geek/chat` 时被重定向到了 `/web/user/`。这通常表示当前 9222 profile 的 Boss 聊天登录前置态无效。",
+    };
+  } else {
+    resolved = {
+      ...baseState,
+      available: false,
+      preflightStatus: "chat_page_unreachable",
+      lastObservedUrl: String(probeResult.href || ""),
+      lastObservedTitle: String(probeResult.title || ""),
+      errorMessage:
+        "Boss 聊天页未能进入可发送状态：没有检测到候选人聊天列表（`.user-list-content`）。",
+    };
+  }
+
+  cachedDeliveryProbe = {
+    key: cacheKey,
+    expiresAt: Date.now() + DELIVERY_PROBE_CACHE_TTL_MS,
+    value: resolved,
+  };
+  return resolved;
 }
 
 function readBody(req) {
@@ -170,7 +453,7 @@ function createRagBridgePlugin() {
       res.setHeader("Content-Type", "application/json; charset=utf-8");
       try {
         runBossJsonCommand(bridgeConfig, ["agent", "init"]);
-        const browserChannel = await detectBrowserChannel(bridgeConfig);
+        const browserChannel = await detectBossDeliveryChannel(bridgeConfig);
         const ready =
           Boolean(bridgeConfig.baseUrl) &&
           (bridgeConfig.authMode === "none" || Boolean(bridgeConfig.apiKey));
@@ -198,7 +481,7 @@ function createRagBridgePlugin() {
             endpoint: "/api/agent/ask + /api/agent/send",
             workflow: "boss-agent-cli",
             dataDir: bridgeConfig.dataDir,
-            browserChannel: await detectBrowserChannel(bridgeConfig),
+            browserChannel: await detectBossDeliveryChannel(bridgeConfig),
             errorMessage:
               error instanceof Error ? error.message : "本地 workflow 初始化失败。",
           }),
@@ -302,7 +585,7 @@ function createRagBridgePlugin() {
           return true;
         }
 
-        const browserChannel = await detectBrowserChannel(bridgeConfig);
+        const browserChannel = await detectBossDeliveryChannel(bridgeConfig);
         if (!browserChannel.available) {
           res.statusCode = 503;
           res.end(
@@ -371,7 +654,7 @@ function createRagBridgePlugin() {
           JSON.stringify({
             ok: false,
             errorMessage,
-            browserChannel: await detectBrowserChannel(bridgeConfig),
+            browserChannel: await detectBossDeliveryChannel(bridgeConfig),
             delivery: {
               status: normalizedStatus,
               message_sent: false,

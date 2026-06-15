@@ -41,11 +41,18 @@ const emptyAnswer = {
 const sessionStorageKey = "boss-rag-demo-thread-id";
 const defaultBrowserChannel = {
   available: false,
+  transportAvailable: false,
+  chatPageReachable: false,
   mode: "none",
   cdpAvailable: false,
   bridgeAvailable: false,
   cdpUrl: "http://localhost:9222",
   bridgeUrl: "http://127.0.0.1:19826",
+  chatPageUrl: "https://www.zhipin.com/web/geek/chat",
+  preflightStatus: "none",
+  lastObservedUrl: "",
+  lastObservedTitle: "",
+  redirectUrl: "",
   errorMessage: "",
 };
 
@@ -558,6 +565,14 @@ export function App() {
           <p>多轮记忆：{thread.length ? `${Math.ceil(thread.length / 2)} 轮` : "尚未建立"}</p>
           <p>鉴权模式：{bridgeState.authMode}</p>
           <p>调用入口：{bridgeState.endpoint}</p>
+          <p>
+            Boss 发送预检：
+            {bridgeState.browserChannel.available
+              ? " 聊天页可达"
+              : bridgeState.browserChannel.errorMessage
+                ? " 未就绪"
+                : " 未检查"}
+          </p>
         </section>
 
         <section className="progress-card">

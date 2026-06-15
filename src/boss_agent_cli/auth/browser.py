@@ -129,6 +129,7 @@ def login_via_cdp(*, cdp_url: str | None = None, timeout: int = 120, platform: s
 		else:
 			raise TimeoutError(f"CDP 扫码登录超时（{timeout}s）")
 
+		time.sleep(_POST_LOGIN_WAIT)
 		try:
 			_warm_home_for_runtime(page, home_url, stage="CDP 登录后回到首页")
 		except Exception:

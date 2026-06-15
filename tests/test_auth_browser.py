@@ -7,6 +7,7 @@ from boss_agent_cli.auth.browser import (
 	LOGIN_PAGE_URL,
 	_NAV_TIMEOUT_MS,
 	_NETWORKIDLE_GRACE_MS,
+	_POST_LOGIN_WAIT,
 	login_via_cdp,
 	login_via_browser,
 	refresh_stoken,
@@ -46,7 +47,7 @@ def test_login_via_cdp_stops_playwright_on_timeout(mock_sleep, mock_probe_cdp):
 	mock_context.cookies.return_value = []
 	mock_launcher, mock_playwright, mock_page = _mock_cdp_playwright(mock_context)
 
-	with patch("boss_agent_cli.auth.browser.sync_playwright", return_value=mock_launcher):
+	with patch("boss_agent_cli.auth.browser._sync_playwright", return_value=lambda: mock_launcher):
 		with pytest.raises(TimeoutError):
 			login_via_cdp(timeout=1)
 
@@ -66,7 +67,7 @@ def test_login_via_cdp_extracts_stoken_after_warming_home(mock_probe_cdp, mock_s
 	mock_launcher, mock_playwright, mock_page = _mock_cdp_playwright(mock_context)
 	mock_page.evaluate.return_value = "UA"
 
-	with patch("boss_agent_cli.auth.browser.sync_playwright", return_value=mock_launcher):
+	with patch("boss_agent_cli.auth.browser._sync_playwright", return_value=lambda: mock_launcher):
 		result = login_via_cdp(timeout=1, platform="zhipin")
 
 	assert result["stoken"] == "fresh-stoken"
@@ -74,6 +75,7 @@ def test_login_via_cdp_extracts_stoken_after_warming_home(mock_probe_cdp, mock_s
 	mock_page.goto.assert_any_call(LOGIN_PAGE_URL, wait_until="commit", timeout=_NAV_TIMEOUT_MS)
 	mock_page.goto.assert_any_call(HOME_URL, wait_until="domcontentloaded", timeout=_NAV_TIMEOUT_MS)
 	mock_page.wait_for_load_state.assert_called_once_with("networkidle", timeout=_NETWORKIDLE_GRACE_MS)
+	mock_sleep.assert_any_call(_POST_LOGIN_WAIT)
 	mock_extract_stoken.assert_called_once_with(mock_page)
 	mock_page.close.assert_called_once()
 	mock_playwright.stop.assert_called_once()
@@ -90,7 +92,7 @@ def test_login_via_cdp_stops_playwright_when_user_agent_extraction_fails(mock_sl
 	mock_launcher, mock_playwright, mock_page = _mock_cdp_playwright(mock_context)
 	mock_page.evaluate.side_effect = RuntimeError("user agent unavailable")
 
-	with patch("boss_agent_cli.auth.browser.sync_playwright", return_value=mock_launcher):
+	with patch("boss_agent_cli.auth.browser._sync_playwright", return_value=lambda: mock_launcher):
 		with pytest.raises(RuntimeError, match="user agent unavailable"):
 			login_via_cdp(timeout=1)
 
@@ -115,7 +117,7 @@ def test_login_via_browser_tolerates_networkidle_timeout(mock_sleep, mock_extrac
 	mock_browser = MagicMock()
 	mock_browser.new_context.return_value = mock_context
 
-	with patch("boss_agent_cli.auth.browser.sync_playwright", return_value=_mock_playwright_context(mock_browser)):
+	with patch("boss_agent_cli.auth.browser._sync_playwright", return_value=lambda: _mock_playwright_context(mock_browser)):
 		result = login_via_browser(timeout=2, platform="zhipin")
 
 	assert result["stoken"] == "fresh-stoken"
@@ -139,7 +141,7 @@ def test_refresh_stoken_tolerates_networkidle_timeout(mock_extract_stoken):
 	mock_browser = MagicMock()
 	mock_browser.new_context.return_value = mock_context
 
-	with patch("boss_agent_cli.auth.browser.sync_playwright", return_value=_mock_playwright_context(mock_browser)):
+	with patch("boss_agent_cli.auth.browser._sync_playwright", return_value=lambda: _mock_playwright_context(mock_browser)):
 		result = refresh_stoken({"wt2": "cookie"}, "UA")
 
 	assert result == "fresh-stoken"
