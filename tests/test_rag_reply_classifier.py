@@ -10,6 +10,7 @@ from boss_agent_cli.rag_reply.classifier import classify_message
 		("方便发一份简历过来吗？", "resume_share_request"),
 		("什么时候方便面试？", "interview_time"),
 		("现在是在职吗？", "personal_status"),
+		("为什么离职？", "resignation_status"),
 		("方便加微信吗？", "contact_exchange"),
 		("把手机号发我", "contact_exchange"),
 		("邮箱给我一下", "contact_exchange"),

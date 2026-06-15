@@ -291,6 +291,7 @@ export function App() {
           mode: "accurate",
           job_id: applyForm.job_id.trim(),
           security_id: applyForm.security_id.trim(),
+          auto_send_resume: true,
         }),
       });
       const payload = await response.json();

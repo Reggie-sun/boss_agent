@@ -421,7 +421,15 @@ class BossRagReplyService:
 		if intent == "smalltalk":
 			return "您好，已收到您的消息，感谢联系。"
 		if intent == "resume_share_request":
-			return "可以的，我稍后会通过 BOSS 直聘官方页面发送简历；如果您希望我补充特定项目经历或作品，也欢迎告诉我。"
-		if intent in {"contact_exchange", "salary_or_offer", "availability_or_schedule", "interview_time", "resignation_status", "personal_status", "unsafe_or_unclear"}:
+			return "可以的，我现在通过 BOSS 直聘官方页面发送在线简历；如果您希望我补充特定项目经历或作品，也欢迎告诉我。"
+		if intent == "resignation_status":
+			return "我目前主要是希望寻找更聚焦 AI 应用落地、RAG、Agent 或 LLM 工程化方向的机会。当前项目让我积累了企业级 RAG 从架构到落地的完整经验，下一步希望进入更成熟的 AI 团队或更有 AI 产品化空间的环境，把这类系统继续做深。"
+		if intent == "personal_status":
+			return "我目前是在职看机会，简历里到岗时间是一个月内。如果双方匹配，我会按流程做好交接，保证入职安排稳定可控。"
+		if intent == "availability_or_schedule":
+			return "我可以配合安排沟通时间，工作日晚上或周末通常更方便；如果您这边有明确时间，我也可以尽量协调。"
+		if intent == "interview_time":
+			return "可以的，我这边可以配合面试安排。您方便给我几个可选时间吗？我确认后会尽快回复。"
+		if intent in {"contact_exchange", "salary_or_offer", "unsafe_or_unclear"}:
 			return ""
 		return message.message_text
