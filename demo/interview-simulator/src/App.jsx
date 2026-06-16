@@ -79,6 +79,14 @@ const defaultBossSearchForm = {
   count: "3",
 };
 
+function bossBridgeErrorMessage(error, fallback) {
+  const message = error instanceof Error ? error.message : "";
+  if (message === "Failed to fetch" || message.includes("NetworkError")) {
+    return "本地 Vite bridge 无响应。请刷新页面，或确认当前页面打开的是正在运行的 demo/interview-simulator dev server。";
+  }
+  return message || fallback;
+}
+
 function loadOrCreateSessionId() {
   const existing = globalThis.localStorage?.getItem(sessionStorageKey);
   if (existing) return existing;
@@ -443,7 +451,7 @@ export function App() {
       }
     } catch (error) {
       setBossSearchJobs([]);
-      setBossAutomationError(error instanceof Error ? error.message : "BOSS 搜索失败。");
+      setBossAutomationError(bossBridgeErrorMessage(error, "BOSS 搜索失败。"));
     } finally {
       setIsBossSearching(false);
     }
@@ -481,7 +489,7 @@ export function App() {
       await loadChatTargets();
     } catch (error) {
       setBossAutomationError(
-        error instanceof Error ? error.message : "Agent 自动开聊失败。",
+        bossBridgeErrorMessage(error, "Agent 自动开聊失败。"),
       );
     } finally {
       setIsBossAutoRunning(false);

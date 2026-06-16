@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 
@@ -398,61 +398,84 @@ function normalizeThread(sessionId, messages) {
 }
 
 function runBossJsonCommand(config, args) {
-  const child = spawnSync(
-    config.pythonBin,
-    [
-      "-c",
-      "from boss_agent_cli.main import cli; import sys; cli.main(args=sys.argv[1:], standalone_mode=False)",
-      "--json",
-      "--data-dir",
-      config.dataDir,
-      ...args,
-    ],
-    {
-      cwd: config.repoRoot,
-      encoding: "utf8",
-      ...(config.commandTimeoutMs ? { timeout: config.commandTimeoutMs } : {}),
-      killSignal: "SIGTERM",
-      env: {
-        ...process.env,
-        PYTHONPATH: process.env.PYTHONPATH
-          ? `${config.repoRoot}/src:${process.env.PYTHONPATH}`
-          : `${config.repoRoot}/src`,
+  return new Promise((resolve, reject) => {
+    const child = spawn(
+      config.pythonBin,
+      [
+        "-c",
+        "from boss_agent_cli.main import cli; import sys; cli.main(args=sys.argv[1:], standalone_mode=False)",
+        "--json",
+        "--data-dir",
+        config.dataDir,
+        ...args,
+      ],
+      {
+        cwd: config.repoRoot,
+        env: {
+          ...process.env,
+          PYTHONPATH: process.env.PYTHONPATH
+            ? `${config.repoRoot}/src:${process.env.PYTHONPATH}`
+            : `${config.repoRoot}/src`,
+        },
       },
-    },
-  );
-
-  if (child.error) {
-    if (child.error.code === "ETIMEDOUT") {
-      const seconds = Math.round((config.commandTimeoutMs || 0) / 1000);
-      throw new Error(`boss-agent-cli 执行超过 ${seconds}s，已停止本次请求。请检查 CDP 发送链路或稍后重试。`);
-    }
-    throw child.error;
-  }
-  if (child.status !== 0 && !child.stdout.trim()) {
-    throw new Error(child.stderr.trim() || `boss command failed with exit code ${child.status}`);
-  }
-
-  let parsed = {};
-  try {
-    parsed = child.stdout.trim() ? JSON.parse(child.stdout) : {};
-  } catch (error) {
-    throw new Error(
-      `无法解析 boss-agent-cli 输出: ${child.stdout.trim() || child.stderr.trim() || String(error)}`,
     );
-  }
 
-  if (!parsed.ok) {
-    const errorMessage =
-      parsed.error?.message ||
-      parsed.errorMessage ||
-      child.stderr.trim() ||
-      "boss-agent-cli 返回错误。";
-    const commandError = new Error(errorMessage);
-    commandError.commandPayload = parsed;
-    throw commandError;
-  }
-  return parsed;
+    let stdout = "";
+    let stderr = "";
+    let timedOut = false;
+    const timer = config.commandTimeoutMs
+      ? setTimeout(() => {
+          timedOut = true;
+          child.kill("SIGTERM");
+        }, config.commandTimeoutMs)
+      : null;
+
+    child.stdout.setEncoding("utf8");
+    child.stderr.setEncoding("utf8");
+    child.stdout.on("data", (chunk) => {
+      stdout += chunk;
+    });
+    child.stderr.on("data", (chunk) => {
+      stderr += chunk;
+    });
+    child.on("error", (error) => {
+      if (timer) clearTimeout(timer);
+      reject(error);
+    });
+    child.on("close", (status) => {
+      if (timer) clearTimeout(timer);
+      if (timedOut) {
+        const seconds = Math.round((config.commandTimeoutMs || 0) / 1000);
+        reject(new Error(`boss-agent-cli 执行超过 ${seconds}s，已停止本次请求。请检查 CDP 发送链路或稍后重试。`));
+        return;
+      }
+      if (status !== 0 && !stdout.trim()) {
+        reject(new Error(stderr.trim() || `boss command failed with exit code ${status}`));
+        return;
+      }
+
+      let parsed = {};
+      try {
+        parsed = stdout.trim() ? JSON.parse(stdout) : {};
+      } catch (error) {
+        reject(new Error(`无法解析 boss-agent-cli 输出: ${stdout.trim() || stderr.trim() || String(error)}`));
+        return;
+      }
+
+      if (!parsed.ok) {
+        const errorMessage =
+          parsed.error?.message ||
+          parsed.errorMessage ||
+          stderr.trim() ||
+          "boss-agent-cli 返回错误。";
+        const commandError = new Error(errorMessage);
+        commandError.commandPayload = parsed;
+        reject(commandError);
+        return;
+      }
+      resolve(parsed);
+    });
+  });
 }
 
 function createRagBridgePlugin() {
@@ -472,7 +495,7 @@ function createRagBridgePlugin() {
     if (req.method === "GET" && isAgentHealth) {
       res.setHeader("Content-Type", "application/json; charset=utf-8");
       try {
-        runBossJsonCommand(bridgeConfig, ["agent", "init"]);
+        await runBossJsonCommand(bridgeConfig, ["agent", "init"]);
         const browserChannel = await detectBossDeliveryChannel(bridgeConfig);
         const ready =
           Boolean(bridgeConfig.baseUrl) &&
@@ -520,7 +543,7 @@ function createRagBridgePlugin() {
         return true;
       }
       try {
-        const payload = runBossJsonCommand(bridgeConfig, [
+        const payload = await runBossJsonCommand(bridgeConfig, [
           "agent",
           "thread",
           "--conversation-id",
@@ -552,7 +575,7 @@ function createRagBridgePlugin() {
         const requestUrl = new URL(req.url, "http://127.0.0.1");
         const parsedLimit = Number.parseInt(requestUrl.searchParams.get("limit") || "5", 10);
         const safeLimit = Number.isFinite(parsedLimit) ? Math.min(Math.max(parsedLimit, 1), 20) : 5;
-        const payload = runBossJsonCommand(bridgeConfig, [
+        const payload = await runBossJsonCommand(bridgeConfig, [
           "agent",
           "targets",
           "--limit",
@@ -593,7 +616,7 @@ function createRagBridgePlugin() {
     if (req.method === "GET" && isWatcherStatus) {
       res.setHeader("Content-Type", "application/json; charset=utf-8");
       try {
-        const payload = runBossJsonCommand(bridgeConfig, ["agent", "watcher-status"]);
+        const payload = await runBossJsonCommand(bridgeConfig, ["agent", "watcher-status"]);
         res.end(JSON.stringify({ ok: true, data: payload.data || {} }));
       } catch (error) {
         res.statusCode = 500;
@@ -612,7 +635,7 @@ function createRagBridgePlugin() {
     if (req.method === "POST" && isWatcherRun) {
       res.setHeader("Content-Type", "application/json; charset=utf-8");
       try {
-        const payload = runBossJsonCommand(bridgeConfig, ["agent", "watcher-run", "--once"]);
+        const payload = await runBossJsonCommand(bridgeConfig, ["agent", "watcher-run", "--once"]);
         res.end(JSON.stringify({ ok: true, data: payload.data || {} }));
       } catch (error) {
         const payload = error?.commandPayload;
@@ -642,7 +665,7 @@ function createRagBridgePlugin() {
         }
         const args = ["agent", action === "pause" ? "watcher-pause" : "watcher-resume"];
         if (conversationId) args.push("--conversation-id", conversationId);
-        const payload = runBossJsonCommand(bridgeConfig, args);
+        const payload = await runBossJsonCommand(bridgeConfig, args);
         res.end(JSON.stringify({ ok: true, data: payload.data || {} }));
       } catch (error) {
         res.statusCode = 500;
@@ -708,7 +731,7 @@ function createRagBridgePlugin() {
         if (targetCompany) args.push("--target-company", targetCompany);
         if (targetTitle) args.push("--target-title", targetTitle);
 
-        const payload = runBossJsonCommand(bridgeConfig, args);
+        const payload = await runBossJsonCommand(bridgeConfig, args);
         const data = payload.data || {};
         const deliveryStatus = sendAttachmentResume
           ? (data.resume_sent ? "sent" : "resume_failed")
@@ -803,7 +826,7 @@ function createRagBridgePlugin() {
         if (company) args.push("--company", company);
         if (message) args.push("--message", message);
 
-        const payload = runBossJsonCommand(bridgeConfig, args);
+        const payload = await runBossJsonCommand(bridgeConfig, args);
         res.end(JSON.stringify({
           ok: true,
           data: payload.data,
@@ -855,7 +878,7 @@ function createRagBridgePlugin() {
         if (jobType) args.push("--job-type", jobType);
         if (welfare) args.push("--welfare", welfare);
 
-        const payload = runBossJsonCommand(bridgeConfig, args);
+        const payload = await runBossJsonCommand(bridgeConfig, args);
         res.end(JSON.stringify({
           ok: true,
           data: payload.data,
@@ -912,7 +935,7 @@ function createRagBridgePlugin() {
         if (jobType) args.push("--job-type", jobType);
         if (welfare) args.push("--welfare", welfare);
 
-        const payload = runBossJsonCommand(bridgeConfig, args);
+        const payload = await runBossJsonCommand(bridgeConfig, args);
         res.end(JSON.stringify({
           ok: true,
           data: payload.data,
@@ -934,7 +957,7 @@ function createRagBridgePlugin() {
     if (req.method === "GET" && req.url === "/api/boss/resumes") {
       res.setHeader("Content-Type", "application/json; charset=utf-8");
       try {
-        const payload = runBossJsonCommand(bridgeConfig, ["resume", "list"]);
+        const payload = await runBossJsonCommand(bridgeConfig, ["resume", "list"]);
         res.end(JSON.stringify({ ok: true, data: payload.data }));
       } catch (error) {
         res.statusCode = 500;
@@ -991,7 +1014,7 @@ function createRagBridgePlugin() {
       if (securityId) args.push("--security-id", securityId);
       if (autoSendResume) args.push("--auto-send-resume");
 
-      const payload = runBossJsonCommand(bridgeConfig, args);
+      const payload = await runBossJsonCommand(bridgeConfig, args);
       const data = payload.data || {};
       const draft = data.draft || {};
       const thread = normalizeThread(sessionId, data.thread);
