@@ -2,8 +2,19 @@ from pathlib import Path
 
 import pytest
 
-from boss_agent_cli.rag_reply.models import DraftRecord
-from boss_agent_cli.rag_reply.watcher import WatcherAction, build_action_for_draft
+from boss_agent_cli.rag_reply.models import (
+    AuditLogRecord,
+    ConversationRecord,
+    DraftRecord,
+    MessageRecord,
+)
+from boss_agent_cli.rag_reply.service import BossRagReplyService
+from boss_agent_cli.rag_reply.store import RagReplyStore
+from boss_agent_cli.rag_reply.watcher import (
+    BossPassiveWatcher,
+    WatcherAction,
+    build_action_for_draft,
+)
 from boss_agent_cli.rag_reply.watcher_config import WatcherConfig, WatcherConfigError
 
 
@@ -125,3 +136,135 @@ def test_unknown_intent_blocks(tmp_path):
 
     assert action.kind == "block"
     assert action.blocked_reason == "intent_not_allowlisted"
+
+
+class _FakeRagResult:
+    ok = True
+    answer = "RAG 回答"
+    citations = []
+    reasoning_summary = None
+    raw_response = {}
+    error_message = None
+    audit_status = "answered"
+    send_allowed = False
+    approval_required = True
+
+
+class _FakeRagAdapter:
+    def answer(self, *, rag_question: str, session_id: str, mode: str = "accurate"):
+        return _FakeRagResult()
+
+
+class _RecordingDelivery:
+    def __init__(self):
+        self.calls = []
+
+    def send(
+        self,
+        *,
+        security_id,
+        message,
+        send_attachment_resume=False,
+        resume_file="",
+        target=None,
+    ):
+        self.calls.append(
+            {
+                "security_id": security_id,
+                "message": message,
+                "send_attachment_resume": send_attachment_resume,
+                "resume_file": resume_file,
+                "target": target or {},
+            }
+        )
+        return {
+            "ok": True,
+            "status": "sent",
+            "message_sent": True,
+            "resume_sent": bool(send_attachment_resume),
+            "error_message": "",
+            "results": ["sent"],
+        }
+
+
+def _store(tmp_path):
+    store = RagReplyStore(tmp_path / "boss-rag.sqlite3")
+    store.initialize()
+    return store
+
+
+def _service(store):
+    return BossRagReplyService(store=store, rag_adapter=_FakeRagAdapter())
+
+
+def test_run_once_sends_contact_reply_and_writes_audit(tmp_path):
+    store = _store(tmp_path)
+    store.save_conversation(
+        ConversationRecord(
+            conversation_id="conv_001",
+            source="test",
+            state={
+                "security_id": "sec_001",
+                "recruiter_name": "张三",
+                "company": "测试公司",
+                "title": "AI 工程师",
+            },
+        )
+    )
+    store.save_message(
+        MessageRecord(
+            message_id="msg_001",
+            conversation_id="conv_001",
+            message_text="方便给个联系方式吗",
+            direction="inbound",
+        )
+    )
+    delivery = _RecordingDelivery()
+    watcher = BossPassiveWatcher(
+        store=store, service=_service(store), config=_config(tmp_path), delivery=delivery
+    )
+
+    result = watcher.run_once()
+
+    assert result.processed == 1
+    assert delivery.calls[0]["message"] == "我的手机号是 13800138000，微信号是 reggie-ai。"
+    audit = store.list_audit_logs("conv_001")[-1]
+    assert audit.event_type == "watcher_task"
+    assert audit.payload["status"] == "sent"
+
+
+def test_run_once_skips_already_processed_message(tmp_path):
+    store = _store(tmp_path)
+    store.save_conversation(
+        ConversationRecord(
+            conversation_id="conv_001",
+            source="test",
+            state={"security_id": "sec_001"},
+        )
+    )
+    store.save_message(
+        MessageRecord(
+            message_id="msg_001",
+            conversation_id="conv_001",
+            message_text="你好",
+            direction="inbound",
+        )
+    )
+    store.append_audit_log(
+        AuditLogRecord.new(
+            event_type="watcher_task",
+            entity_type="conversation",
+            entity_id="conv_001",
+            payload={"message_id": "msg_001", "status": "sent"},
+        )
+    )
+    delivery = _RecordingDelivery()
+    watcher = BossPassiveWatcher(
+        store=store, service=_service(store), config=_config(tmp_path), delivery=delivery
+    )
+
+    result = watcher.run_once()
+
+    assert result.processed == 0
+    assert result.skipped == 1
+    assert delivery.calls == []
