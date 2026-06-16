@@ -38,9 +38,9 @@ function loadBridgeConfig() {
       "BOSS_RAG_RESUME_ATTACHMENT_PATH",
       path.join(repoRoot, "孙瑞杰的简历.pdf"),
     ),
-    commandTimeoutMs: Number.isFinite(parsedCommandTimeout)
+    commandTimeoutMs: Number.isFinite(parsedCommandTimeout) && parsedCommandTimeout > 0
       ? Math.max(parsedCommandTimeout, 5) * 1000
-      : 45_000,
+      : null,
     baseUrl: get("BOSS_RAG_RAG_BASE_URL", "").replace(/\/$/, ""),
     cdpUrl: get("BOSS_RAG_CDP_URL", get("BOSS_CDP_URL", "http://localhost:9222")).replace(/\/$/, ""),
     bridgeUrl: get("BOSS_RAG_BRIDGE_URL", "http://127.0.0.1:19826").replace(/\/$/, ""),
@@ -411,7 +411,7 @@ function runBossJsonCommand(config, args) {
     {
       cwd: config.repoRoot,
       encoding: "utf8",
-      timeout: config.commandTimeoutMs,
+      ...(config.commandTimeoutMs ? { timeout: config.commandTimeoutMs } : {}),
       killSignal: "SIGTERM",
       env: {
         ...process.env,
@@ -424,7 +424,7 @@ function runBossJsonCommand(config, args) {
 
   if (child.error) {
     if (child.error.code === "ETIMEDOUT") {
-      const seconds = Math.round(config.commandTimeoutMs / 1000);
+      const seconds = Math.round((config.commandTimeoutMs || 0) / 1000);
       throw new Error(`boss-agent-cli 执行超过 ${seconds}s，已停止本次请求。请检查 CDP 发送链路或稍后重试。`);
     }
     throw child.error;
