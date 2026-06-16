@@ -829,6 +829,7 @@ function createRagBridgePlugin() {
         const body = rawBody ? JSON.parse(rawBody) : {};
         const query = String(body.query || "").trim();
         const city = String(body.city || "北京").trim();
+        const salary = String(body.salary || "").trim();
 
         if (!query) {
           res.statusCode = 400;
@@ -838,6 +839,7 @@ function createRagBridgePlugin() {
 
         const args = ["search", query];
         if (city) args.push("--city", city);
+        if (salary) args.push("--salary", salary);
 
         const payload = runBossJsonCommand(bridgeConfig, args);
         res.end(JSON.stringify({
@@ -850,6 +852,45 @@ function createRagBridgePlugin() {
         res.end(JSON.stringify({
           ok: false,
           errorMessage: error instanceof Error ? error.message : "搜索失败",
+          error: p?.error || null,
+        }));
+      }
+      return true;
+    }
+
+    // ── Boss Auto Greet API ───────────────────────────────────────
+    if (req.method === "POST" && req.url === "/api/boss/auto-greet") {
+      res.setHeader("Content-Type", "application/json; charset=utf-8");
+      try {
+        const rawBody = await readBody(req);
+        const body = rawBody ? JSON.parse(rawBody) : {};
+        const query = String(body.query || "").trim();
+        const city = String(body.city || "北京").trim();
+        const salary = String(body.salary || "").trim();
+        const count = Number.parseInt(String(body.count || "3"), 10);
+
+        if (!query) {
+          res.statusCode = 400;
+          res.end(JSON.stringify({ ok: false, errorMessage: "query 不能为空。" }));
+          return true;
+        }
+
+        const args = ["batch-greet", query, "--count", String(Number.isFinite(count) ? Math.min(Math.max(count, 1), 10) : 3)];
+        if (city) args.push("--city", city);
+        if (salary) args.push("--salary", salary);
+
+        const payload = runBossJsonCommand(bridgeConfig, args);
+        res.end(JSON.stringify({
+          ok: true,
+          data: payload.data,
+          hints: payload.hints,
+        }));
+      } catch (error) {
+        const p = error?.commandPayload;
+        res.statusCode = p?.error?.recoverable ? 400 : 500;
+        res.end(JSON.stringify({
+          ok: false,
+          errorMessage: error instanceof Error ? error.message : "自动开聊失败",
           error: p?.error || null,
         }));
       }

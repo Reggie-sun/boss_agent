@@ -57,6 +57,15 @@ const defaultBrowserChannel = {
   errorMessage: "",
 };
 
+const bossCityOptions = ["北京", "上海", "广州", "深圳", "杭州", "成都", "武汉", "南京", "苏州"];
+const bossSalaryOptions = ["", "3K以下", "3-5K", "5-10K", "10-15K", "10-20K", "20-50K", "50K以上"];
+const defaultBossSearchForm = {
+  query: "AI Agent",
+  city: "广州",
+  salary: "20-50K",
+  count: "3",
+};
+
 function loadOrCreateSessionId() {
   const existing = globalThis.localStorage?.getItem(sessionStorageKey);
   if (existing) return existing;
@@ -107,6 +116,18 @@ function excerptFromCitation(citation) {
 
 function targetOptionValue(target) {
   return String(target.conversation_id || target.security_id || "");
+}
+
+function normalizeBossJob(item) {
+  return {
+    security_id: String(item?.security_id || item?.securityId || ""),
+    job_id: String(item?.job_id || item?.jobId || item?.encryptJobId || ""),
+    title: String(item?.title || item?.jobName || "未知职位"),
+    company: String(item?.company || item?.brandName || "未知公司"),
+    salary: String(item?.salary || item?.salaryDesc || ""),
+    city: String(item?.city || item?.cityName || ""),
+    experience: String(item?.experience || item?.jobExperience || ""),
+  };
 }
 
 function resolveSecurityId({ manualSecurityId = "", selectedChatTarget = null, chatTargets = [] }) {
@@ -223,6 +244,12 @@ export function App() {
   const [applyForm, setApplyForm] = useState({
     security_id: "",
   });
+  const [bossSearchForm, setBossSearchForm] = useState(defaultBossSearchForm);
+  const [bossSearchJobs, setBossSearchJobs] = useState([]);
+  const [bossAutomationResult, setBossAutomationResult] = useState(null);
+  const [bossAutomationError, setBossAutomationError] = useState("");
+  const [isBossSearching, setIsBossSearching] = useState(false);
+  const [isBossAutoRunning, setIsBossAutoRunning] = useState(false);
   const [chatTargets, setChatTargets] = useState([]);
   const [chatTargetsLoading, setChatTargetsLoading] = useState(false);
   const [chatTargetsError, setChatTargetsError] = useState("");
@@ -258,6 +285,17 @@ export function App() {
     () => watcherState.tasks.slice().reverse().slice(0, 6),
     [watcherState.tasks],
   );
+  const normalizedBossJobs = useMemo(
+    () => bossSearchJobs.map(normalizeBossJob),
+    [bossSearchJobs],
+  );
+
+  function updateBossSearchForm(field, value) {
+    setBossSearchForm((current) => ({
+      ...current,
+      [field]: value,
+    }));
+  }
 
   async function loadChatTargets() {
     setChatTargetsLoading(true);
@@ -349,6 +387,67 @@ export function App() {
       }));
     } finally {
       setIsWatcherBusy(false);
+    }
+  }
+
+  async function handleBossSearchPreview() {
+    const query = bossSearchForm.query.trim();
+    if (!query || isBossSearching) return;
+    setIsBossSearching(true);
+    setBossAutomationError("");
+    setBossAutomationResult(null);
+    try {
+      const response = await fetch("/api/boss/search", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          query,
+          city: bossSearchForm.city,
+          salary: bossSearchForm.salary,
+        }),
+      });
+      const payload = await response.json();
+      if (!response.ok || !payload.ok) {
+        throw new Error(payload.errorMessage || "BOSS 搜索失败。");
+      }
+      setBossSearchJobs(Array.isArray(payload.data) ? payload.data : []);
+    } catch (error) {
+      setBossSearchJobs([]);
+      setBossAutomationError(error instanceof Error ? error.message : "BOSS 搜索失败。");
+    } finally {
+      setIsBossSearching(false);
+    }
+  }
+
+  async function handleBossAutoGreet() {
+    const query = bossSearchForm.query.trim();
+    if (!query || isBossAutoRunning) return;
+    setIsBossAutoRunning(true);
+    setBossAutomationError("");
+    setBossAutomationResult(null);
+    try {
+      const response = await fetch("/api/boss/auto-greet", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          query,
+          city: bossSearchForm.city,
+          salary: bossSearchForm.salary,
+          count: bossSearchForm.count,
+        }),
+      });
+      const payload = await response.json();
+      if (!response.ok || !payload.ok) {
+        throw new Error(payload.errorMessage || "Agent 自动开聊失败。");
+      }
+      setBossAutomationResult(payload.data || {});
+      await loadChatTargets();
+    } catch (error) {
+      setBossAutomationError(
+        error instanceof Error ? error.message : "Agent 自动开聊失败。",
+      );
+    } finally {
+      setIsBossAutoRunning(false);
     }
   }
 
@@ -1155,24 +1254,118 @@ export function App() {
           ) : null}
         </section>
 
-{/* ── Boss 对话发送测试 ──────────────────────────────── */}
+{/* ── Boss 自动开聊 ──────────────────────────────── */}
       <section className="apply-panel apply-panel--inline">
         <div className="apply-panel__header" onClick={() => setApplyMode((m) => !m)}>
           <div className="apply-panel__title-row">
-            <PaperPlaneTilt size={22} weight="bold" />
-            <h2>Boss 对话发送测试</h2>
+            <Lightning size={22} weight="bold" />
+            <h2>Boss 自动开聊</h2>
           </div>
           <span className="apply-panel__toggle">{applyMode ? "收起 ▲" : "展开 ▼"}</span>
         </div>
 
         {applyMode && (
           <div className="apply-panel__body">
-            <div className="apply-result">
-              <span>
-                这里是“模拟 HR，但真实调用 Boss 对话发送能力”的测试区。
-                只需要可用 `security_id`，不需要填写岗位或走 `/api/boss/apply` 投递链路。
-              </span>
+            <div className="apply-search__inputs">
+              <input
+                className="apply-input"
+                placeholder="关键词"
+                value={bossSearchForm.query}
+                onChange={(event) => updateBossSearchForm("query", event.target.value)}
+              />
+              <select
+                className="apply-input apply-input--city"
+                value={bossSearchForm.city}
+                onChange={(event) => updateBossSearchForm("city", event.target.value)}
+              >
+                {bossCityOptions.map((city) => (
+                  <option key={city} value={city}>{city}</option>
+                ))}
+              </select>
+              <select
+                className="apply-input apply-input--salary"
+                value={bossSearchForm.salary}
+                onChange={(event) => updateBossSearchForm("salary", event.target.value)}
+              >
+                {bossSalaryOptions.map((salary) => (
+                  <option key={salary || "none"} value={salary}>
+                    {salary || "薪资不限"}
+                  </option>
+                ))}
+              </select>
+              <select
+                className="apply-input apply-input--count"
+                value={bossSearchForm.count}
+                onChange={(event) => updateBossSearchForm("count", event.target.value)}
+              >
+                {["1", "2", "3", "5", "8", "10"].map((count) => (
+                  <option key={count} value={count}>{count} 个</option>
+                ))}
+              </select>
+              <button
+                type="button"
+                className="apply-btn apply-btn--search"
+                onClick={handleBossSearchPreview}
+                disabled={isBossSearching || !bossSearchForm.query.trim()}
+              >
+                <MagnifyingGlass size={16} />
+                {isBossSearching ? "搜索中..." : "预览"}
+              </button>
+              <button
+                type="button"
+                className="apply-btn apply-btn--send apply-btn--compact"
+                onClick={handleBossAutoGreet}
+                disabled={isBossAutoRunning || !bossSearchForm.query.trim()}
+              >
+                <PaperPlaneTilt size={16} weight="fill" />
+                {isBossAutoRunning ? "运行中..." : "Agent 全自动"}
+              </button>
             </div>
+
+            {bossAutomationError ? (
+              <div className="apply-result apply-result--error">
+                <WarningCircle size={18} weight="fill" />
+                <span>{bossAutomationError}</span>
+              </div>
+            ) : null}
+
+            {bossAutomationResult ? (
+              <div className="apply-result apply-result--ok">
+                <CheckCircle size={18} weight="fill" />
+                <span>
+                  已开聊 {bossAutomationResult.total_greeted || 0} 个，
+                  失败 {bossAutomationResult.total_failed || 0} 个
+                  {bossAutomationResult.stopped_reason ? `，停止原因：${bossAutomationResult.stopped_reason}` : ""}
+                </span>
+              </div>
+            ) : null}
+
+            {normalizedBossJobs.length ? (
+              <div className="apply-job-list">
+                {normalizedBossJobs.slice(0, 6).map((job, index) => (
+                  <button
+                    type="button"
+                    className="apply-job-item"
+                    key={`${job.security_id || job.job_id}-${index}`}
+                    onClick={() => {
+                      if (job.security_id) {
+                        setApplyForm({ security_id: job.security_id });
+                        setSelectedTargetValue("");
+                      }
+                    }}
+                  >
+                    <span className="apply-job-item__main">
+                      <strong>{job.title}</strong>
+                      <span>{job.company}</span>
+                    </span>
+                    <span className="apply-job-item__meta">
+                      {[job.city, job.salary, job.experience].filter(Boolean).join(" · ")}
+                    </span>
+                  </button>
+                ))}
+              </div>
+            ) : null}
+
             <div className="apply-form">
               {chatTargets.length ? (
                 <div className="apply-form__row">
