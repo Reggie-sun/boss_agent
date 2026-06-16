@@ -181,6 +181,14 @@ class BossRagReplyService:
 			)
 		)
 		if not rag_result.ok:
+			if classification.intent == "salary_or_offer":
+				return self._build_salary_handoff_draft(
+					message=message,
+					classification=classification,
+					decision=decision,
+					rag_session_id=rag_session_id,
+					rag_error_message=rag_result.error_message,
+				)
 			fallback_draft = self._build_fallback_draft(
 				message=message,
 				classification=classification,
@@ -358,6 +366,32 @@ class BossRagReplyService:
 				"rag_error_message": rag_error_message,
 				"reasoning_summary": agent_result.reasoning_summary,
 				"raw_response": agent_result.raw_response,
+			},
+			approval_required=decision.approval_required,
+			send_allowed=False,
+			audit_status="draft_created",
+			rag_session_id=rag_session_id,
+		)
+
+	def _build_salary_handoff_draft(
+		self,
+		*,
+		message: MessageRecord,
+		classification: ClassificationResult,
+		decision: ApprovalDecision,
+		rag_session_id: str,
+		rag_error_message: str | None,
+	) -> DraftRecord:
+		return DraftRecord.new(
+			conversation_id=message.conversation_id,
+			source_message_id=message.message_id,
+			draft_text=salary_handoff_reply(),
+			intent=classification.intent,
+			risk_labels=decision.risk_labels,
+			evidence={
+				"source": "local_policy",
+				"fallback_from": "enterprise_rag",
+				"rag_error_message": rag_error_message,
 			},
 			approval_required=decision.approval_required,
 			send_allowed=False,

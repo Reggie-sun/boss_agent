@@ -125,6 +125,17 @@ def test_contact_exchange_uses_fixed_contact_reply(tmp_path):
     assert action.kind == "send_text"
 
 
+def test_salary_or_offer_sends_rag_draft_when_available(tmp_path):
+    action = build_action_for_draft(
+        _draft("salary_or_offer", "当前薪资是已上传材料里的 X，期望薪资是 Y。"),
+        _config(tmp_path),
+    )
+
+    assert action.kind == "send_text"
+    assert action.message == "当前薪资是已上传材料里的 X，期望薪资是 Y。"
+    assert action.status_after_send == "sent"
+
+
 def test_salary_or_offer_sends_handoff_and_blocks_after_send(tmp_path):
     action = build_action_for_draft(_draft("salary_or_offer", ""), _config(tmp_path))
 

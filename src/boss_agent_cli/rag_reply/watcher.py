@@ -75,6 +75,8 @@ def build_action_for_draft(draft: DraftRecord, config: WatcherConfig) -> Watcher
     if intent == "contact_exchange":
         return WatcherAction(kind="send_text", message=build_contact_reply(config))
     if intent == "salary_or_offer":
+        if draft_text and draft_text != salary_handoff_reply():
+            return WatcherAction(kind="send_text", message=draft_text)
         return WatcherAction(
             kind="send_text",
             message=salary_handoff_reply(),

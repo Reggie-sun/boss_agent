@@ -369,7 +369,7 @@ def test_resume_share_request_generates_local_approval_draft(tmp_path):
 	assert rag_adapter.calls == []
 
 
-def test_salary_question_generates_agent_handoff_draft(tmp_path):
+def test_salary_question_uses_rag_answer_when_available(tmp_path):
 	store = RagReplyStore(tmp_path / "boss-rag.sqlite3")
 	store.initialize()
 	store.save_conversation(ConversationRecord(conversation_id="conv_001", source="manual_import"))
@@ -381,7 +381,46 @@ def test_salary_question_generates_agent_handoff_draft(tmp_path):
 			direction="inbound",
 		)
 	)
-	rag_adapter = _FakeRagAdapter(_FakeRagResult(ok=True, answer="unused", citations=[]))
+	rag_adapter = _FakeRagAdapter(
+		_FakeRagResult(ok=True, answer="当前薪资是已上传材料里的 X，期望薪资是 Y。", citations=[])
+	)
+	service = BossRagReplyService(
+		store=store,
+		rag_adapter=rag_adapter,
+	)
+
+	draft = service.create_draft_for_message("msg_001")
+
+	assert draft.intent == "salary_or_offer"
+	assert draft.draft_text == "当前薪资是已上传材料里的 X，期望薪资是 Y。"
+	assert draft.evidence["source"] == "enterprise_rag"
+	assert draft.send_allowed is False
+	assert draft.approval_required is True
+	assert len(rag_adapter.calls) == 1
+	assert "当前薪资和期望薪资" in rag_adapter.calls[0]["rag_question"]
+
+
+def test_salary_question_falls_back_to_agent_handoff_when_rag_fails(tmp_path):
+	store = RagReplyStore(tmp_path / "boss-rag.sqlite3")
+	store.initialize()
+	store.save_conversation(ConversationRecord(conversation_id="conv_001", source="manual_import"))
+	store.save_message(
+		MessageRecord(
+			message_id="msg_001",
+			conversation_id="conv_001",
+			message_text="期望薪资多少？",
+			direction="inbound",
+		)
+	)
+	rag_adapter = _FakeRagAdapter(
+		_FakeRagResult(
+			ok=False,
+			answer="",
+			citations=[],
+			error_message="salary facts not available",
+			audit_status="rag_failed",
+		)
+	)
 	service = BossRagReplyService(
 		store=store,
 		rag_adapter=rag_adapter,
@@ -392,9 +431,11 @@ def test_salary_question_generates_agent_handoff_draft(tmp_path):
 	assert draft.intent == "salary_or_offer"
 	assert "我是候选人的求职助理 Agent" in draft.draft_text
 	assert "薪资相关问题需要候选人本人确认后回复" in draft.draft_text
+	assert draft.evidence["fallback_from"] == "enterprise_rag"
+	assert draft.evidence["rag_error_message"] == "salary facts not available"
 	assert draft.send_allowed is False
 	assert draft.approval_required is True
-	assert rag_adapter.calls == []
+	assert len(rag_adapter.calls) == 1
 
 
 def test_job_location_question_generates_safe_local_draft(tmp_path):
