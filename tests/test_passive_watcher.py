@@ -233,6 +233,41 @@ def test_run_once_sends_contact_reply_and_writes_audit(tmp_path):
     assert audit.payload["status"] == "sent"
 
 
+def test_run_once_dry_run_records_task_without_delivery(tmp_path):
+    store = _store(tmp_path)
+    store.save_conversation(
+        ConversationRecord(
+            conversation_id="conv_001",
+            source="test",
+            state={"security_id": "sec_001"},
+        )
+    )
+    store.save_message(
+        MessageRecord(
+            message_id="msg_001",
+            conversation_id="conv_001",
+            message_text="方便给个联系方式吗",
+            direction="inbound",
+        )
+    )
+    config = _config(tmp_path)
+    config.dry_run = True
+    delivery = _RecordingDelivery()
+    watcher = BossPassiveWatcher(
+        store=store, service=_service(store), config=config, delivery=delivery
+    )
+
+    result = watcher.run_once()
+
+    assert result.processed == 1
+    assert delivery.calls == []
+    assert result.tasks[0]["dry_run"] is True
+    assert result.tasks[0]["delivery"]["status"] == "dry_run"
+    audit = store.list_audit_logs("conv_001")[-1]
+    assert audit.payload["dry_run"] is True
+    assert audit.payload["delivery"]["status"] == "dry_run"
+
+
 def test_run_once_skips_already_processed_message(tmp_path):
     store = _store(tmp_path)
     store.save_conversation(
