@@ -6,6 +6,7 @@ from boss_agent_cli.rag_reply.watcher_config import (
     build_contact_reply,
     build_interview_window_reply,
     salary_handoff_reply,
+    salary_preset_reply,
 )
 
 
@@ -58,6 +59,16 @@ def test_salary_handoff_reply_is_fixed_agent_message():
         "我是候选人的求职助理 Agent，薪资相关问题需要候选人本人确认后回复。"
         "我已经记录下来，会提醒本人尽快处理。"
     )
+
+
+def test_salary_preset_reply_uses_configured_value():
+    assert salary_preset_reply(" 当前薪资和期望薪资按候选人预设回复。 ") == (
+        "当前薪资和期望薪资按候选人预设回复。"
+    )
+
+
+def test_salary_preset_reply_falls_back_to_handoff_when_empty():
+    assert salary_preset_reply(" ") == salary_handoff_reply()
 
 
 def test_interview_window_reply_uses_configured_windows():

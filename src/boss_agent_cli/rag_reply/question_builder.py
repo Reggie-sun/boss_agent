@@ -18,8 +18,6 @@ def build_answer_objective(intent: str, message_text: str = "") -> str:
 		if any(keyword in lower_text for keyword in ("适合", "匹配", "胜任")):
 			return "优先回答我的相关经验、核心优势，以及我为什么适合这个岗位。"
 		return "优先回答我的相关经验、技术栈和可落地能力。"
-	if intent == "salary_or_offer":
-		return "优先回答已上传材料中明确记录的本人当前薪资和期望薪资；不要推测、承诺或谈判薪资。"
 	return "请直接回答问题，并保持候选人本人沟通口吻。"
 
 

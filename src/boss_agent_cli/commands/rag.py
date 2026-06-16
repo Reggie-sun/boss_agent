@@ -7,7 +7,7 @@ from pathlib import Path
 
 import click
 
-from boss_agent_cli.ai.config import AIConfigStore, PROVIDER_BASE_URLS
+from boss_agent_cli.ai.config import AIConfigStore
 from boss_agent_cli.ai.service import AIService
 from boss_agent_cli.auth.manager import AuthManager
 from boss_agent_cli.commands._platform import get_platform_instance
@@ -153,6 +153,7 @@ def _build_service(ctx: click.Context) -> BossRagReplyService:
 		rag_adapter=rag_adapter,
 		fallback_adapter=_build_ai_fallback_adapter(ctx),
 		agent_answer_adapter=_build_agent_answer_adapter(ctx),
+		salary_reply=str(config.get("boss_rag_salary_reply") or ""),
 	)
 
 

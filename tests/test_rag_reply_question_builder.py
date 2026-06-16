@@ -13,10 +13,3 @@ def test_question_builder_excludes_full_boss_context():
 	assert "raw_json" not in question
 	assert "完整职位详情" not in question
 	assert "recruiter profile" not in question.lower()
-
-
-def test_salary_objective_asks_rag_for_uploaded_salary_facts():
-	objective = build_answer_objective("salary_or_offer", "本人薪资和期望薪资是多少？")
-
-	assert "当前薪资和期望薪资" in objective
-	assert "不要推测" in objective

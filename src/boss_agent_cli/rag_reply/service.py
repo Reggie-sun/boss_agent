@@ -18,7 +18,7 @@ from boss_agent_cli.rag_reply.models import (
 from boss_agent_cli.rag_reply.policy import ApprovalDecision, build_approval_decision
 from boss_agent_cli.rag_reply.question_builder import build_answer_objective, build_rag_question
 from boss_agent_cli.rag_reply.store import RagReplyStore
-from boss_agent_cli.rag_reply.watcher_config import salary_handoff_reply
+from boss_agent_cli.rag_reply.watcher_config import salary_preset_reply
 
 
 class RagAnswerProtocol(Protocol):
@@ -80,11 +80,13 @@ class BossRagReplyService:
 		rag_adapter: RagAdapterProtocol,
 		fallback_adapter: FallbackAdapterProtocol | None = None,
 		agent_answer_adapter: AgentAnswerAdapterProtocol | None = None,
+		salary_reply: str = "",
 	) -> None:
 		self.store = store
 		self.rag_adapter = rag_adapter
 		self.fallback_adapter = fallback_adapter
 		self.agent_answer_adapter = agent_answer_adapter
+		self.salary_reply = salary_reply.strip()
 
 	def create_draft_for_message(self, message_id: str) -> DraftRecord:
 		message = self.store.get_message(message_id)
@@ -142,6 +144,12 @@ class BossRagReplyService:
 	) -> DraftRecord:
 		if classification.requires_rag:
 			return self._build_rag_backed_draft(message, classification, decision)
+		if classification.intent == "salary_or_offer":
+			return self._build_salary_preset_draft(
+				message=message,
+				classification=classification,
+				decision=decision,
+			)
 		return DraftRecord.new(
 			conversation_id=message.conversation_id,
 			source_message_id=message.message_id,
@@ -181,14 +189,6 @@ class BossRagReplyService:
 			)
 		)
 		if not rag_result.ok:
-			if classification.intent == "salary_or_offer":
-				return self._build_salary_handoff_draft(
-					message=message,
-					classification=classification,
-					decision=decision,
-					rag_session_id=rag_session_id,
-					rag_error_message=rag_result.error_message,
-				)
 			fallback_draft = self._build_fallback_draft(
 				message=message,
 				classification=classification,
@@ -373,30 +373,27 @@ class BossRagReplyService:
 			rag_session_id=rag_session_id,
 		)
 
-	def _build_salary_handoff_draft(
+	def _build_salary_preset_draft(
 		self,
 		*,
 		message: MessageRecord,
 		classification: ClassificationResult,
 		decision: ApprovalDecision,
-		rag_session_id: str,
-		rag_error_message: str | None,
 	) -> DraftRecord:
+		draft_text = salary_preset_reply(self.salary_reply)
 		return DraftRecord.new(
 			conversation_id=message.conversation_id,
 			source_message_id=message.message_id,
-			draft_text=salary_handoff_reply(),
+			draft_text=draft_text,
 			intent=classification.intent,
 			risk_labels=decision.risk_labels,
 			evidence={
 				"source": "local_policy",
-				"fallback_from": "enterprise_rag",
-				"rag_error_message": rag_error_message,
+				"reason": "salary_preset" if self.salary_reply else "salary_handoff",
 			},
 			approval_required=decision.approval_required,
 			send_allowed=False,
 			audit_status="draft_created",
-			rag_session_id=rag_session_id,
 		)
 
 	def _resolve_job_summary(self, message: MessageRecord) -> str | None:
@@ -467,7 +464,7 @@ class BossRagReplyService:
 		if intent == "interview_time":
 			return "可以的，我这边可以配合面试安排。您方便给我几个可选时间吗？我确认后会尽快回复。"
 		if intent == "salary_or_offer":
-			return salary_handoff_reply()
+			return salary_preset_reply("")
 		if intent in {"contact_exchange", "unsafe_or_unclear"}:
 			return ""
 		return message.message_text

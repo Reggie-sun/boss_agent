@@ -25,6 +25,7 @@ DEFAULTS: dict[str, Any] = {
 	"boss_rag_rag_auth_mode": "none",
 	"boss_rag_allow_message_read": False,
 	"boss_rag_send_enabled": False,
+	"boss_rag_salary_reply": None,
 	"boss_apply_auto_enabled": True,
 }
 
@@ -35,6 +36,7 @@ ENV_ALIASES: dict[str, tuple[str, ...]] = {
 	"boss_rag_rag_auth_mode": ("BOSS_RAG_RAG_AUTH_MODE",),
 	"boss_rag_allow_message_read": ("BOSS_RAG_ALLOW_MESSAGE_READ",),
 	"boss_rag_send_enabled": ("BOSS_RAG_SEND_ENABLED",),
+	"boss_rag_salary_reply": ("BOSS_RAG_SALARY_REPLY",),
 	"boss_apply_auto_enabled": ("BOSS_APPLY_AUTO_ENABLED",),
 }
 

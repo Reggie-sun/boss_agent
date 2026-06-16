@@ -69,6 +69,11 @@ def salary_handoff_reply() -> str:
     )
 
 
+def salary_preset_reply(value: str) -> str:
+    normalized = value.strip()
+    return normalized or salary_handoff_reply()
+
+
 def build_interview_window_reply(config: WatcherConfig) -> str:
     windows = _require_present(config.interview_windows, "boss_rag_interview_windows")
     return (

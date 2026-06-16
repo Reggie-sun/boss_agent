@@ -92,7 +92,7 @@ class ClassificationResult:
 
 	@property
 	def requires_rag(self) -> bool:
-		return self.intent in {"project_question", "resume_question", "salary_or_offer"}
+		return self.intent in {"project_question", "resume_question"}
 
 
 def classify_message(message_text: str) -> ClassificationResult:
