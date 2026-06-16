@@ -267,6 +267,55 @@ class SearchPipelinePlatformError(Exception):
 
 # ── List-page prefilter ─────────────────────────────────────────────
 
+def _extract_filter_values(raw_item: dict[str, Any], keys: tuple[str, ...]) -> list[str]:
+	values: list[str] = []
+	for key in keys:
+		raw_value = raw_item.get(key)
+		if isinstance(raw_value, list):
+			values.extend(str(item).strip() for item in raw_value if str(item).strip())
+		elif raw_value is not None:
+			value = str(raw_value).strip()
+			if value:
+				values.append(value)
+	return values
+
+
+def _filter_tokens(value: str | None, lookup: dict[str, str] | None = None) -> list[str]:
+	tokens: list[str] = []
+	for part in _split_multi_value(value or ""):
+		tokens.append(part)
+		if lookup and part in lookup:
+			tokens.append(lookup[part])
+	return tokens
+
+
+def _matches_filter_values(item_values: list[str], required: str | None, lookup: dict[str, str] | None = None) -> bool:
+	if not item_values:
+		return True
+	required_tokens = _filter_tokens(required, lookup)
+	if not required_tokens:
+		return True
+	for item_value in item_values:
+		for expected in required_tokens:
+			if expected == item_value or expected in item_value or item_value in expected:
+				return True
+	return False
+
+
+def _append_filter_reason(
+	reasons: list[str],
+	raw_item: dict[str, Any],
+	*,
+	criteria_value: str | None,
+	fields: tuple[str, ...],
+	label: str,
+	lookup: dict[str, str] | None = None,
+) -> None:
+	item_values = _extract_filter_values(raw_item, fields)
+	if item_values and not _matches_filter_values(item_values, criteria_value, lookup):
+		reasons.append(f"{label}不匹配: {', '.join(item_values)} != {criteria_value}")
+
+
 def prefilter_job(raw_item: dict[str, Any], criteria: SearchFilterCriteria) -> tuple[bool, list[str]]:
 	"""Fast prefilter using list-page fields only. Returns (pass, rejection_reasons)."""
 	reasons: list[str] = []
@@ -296,6 +345,46 @@ def prefilter_job(raw_item: dict[str, Any], criteria: SearchFilterCriteria) -> t
 		item_edu = raw_item.get("jobDegree", "")
 		if not meets_education_threshold(item_edu, criteria.education):
 			reasons.append(f"学历不足: {item_edu} < {criteria.education}")
+
+	if criteria.industry:
+		_append_filter_reason(
+			reasons,
+			raw_item,
+			criteria_value=criteria.industry,
+			fields=("brandIndustry", "industryName", "industry"),
+			label="行业",
+			lookup=endpoints.INDUSTRY_CODES,
+		)
+
+	if criteria.scale:
+		_append_filter_reason(
+			reasons,
+			raw_item,
+			criteria_value=criteria.scale,
+			fields=("brandScaleName", "brandScale", "scaleName", "scale"),
+			label="规模",
+			lookup=endpoints.SCALE_CODES,
+		)
+
+	if criteria.stage:
+		_append_filter_reason(
+			reasons,
+			raw_item,
+			criteria_value=criteria.stage,
+			fields=("brandStageName", "financeStageName", "stageName", "stage"),
+			label="融资",
+			lookup=endpoints.STAGE_CODES,
+		)
+
+	if criteria.job_type:
+		_append_filter_reason(
+			reasons,
+			raw_item,
+			criteria_value=criteria.job_type,
+			fields=("jobTypeName", "jobType", "job_type", "jobTypeDesc"),
+			label="职位类型",
+			lookup=endpoints.JOB_TYPE_CODES,
+		)
 
 	return (len(reasons) == 0, reasons)
 

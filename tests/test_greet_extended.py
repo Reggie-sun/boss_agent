@@ -362,3 +362,52 @@ def test_batch_greet_custom_salary_range_uses_local_filter(mock_cache_cls, mock_
 	assert parsed["ok"] is True
 	assert parsed["data"]["count"] == 1
 	assert parsed["data"]["candidates"][0]["security_id"] == "sec_high"
+
+
+@patch("boss_agent_cli.commands.greet.get_platform_instance")
+@patch("boss_agent_cli.commands.greet.AuthManager")
+@patch("boss_agent_cli.commands.greet.CacheStore")
+def test_batch_greet_applies_company_and_job_type_filters(mock_cache_cls, mock_auth_cls, mock_client_cls):
+	"""batch-greet 普通筛选也要复用本地预筛，避免直接开聊不匹配职位。"""
+	mock_cache = _ctx_mock(mock_cache_cls)
+	mock_cache.is_greeted.return_value = False
+	mock_client = _ctx_mock(mock_client_cls)
+	mismatch = _make_raw_job("不匹配", "sec_bad")
+	mismatch["brandIndustry"] = "金融"
+	mismatch["brandScaleName"] = "20-99人"
+	mismatch["brandStageName"] = "未融资"
+	mismatch["jobTypeName"] = "实习"
+	match = _make_raw_job("匹配", "sec_good")
+	match["jobTypeName"] = "全职"
+	mock_client.search_jobs.return_value = {
+		"zpData": {
+			"hasMore": False,
+			"jobList": [mismatch, match],
+		},
+	}
+	mock_client.is_success.return_value = True
+
+	runner = CliRunner()
+	result = runner.invoke(
+		cli,
+		[
+			"batch-greet",
+			"golang",
+			"--industry",
+			"互联网",
+			"--scale",
+			"100-499人",
+			"--stage",
+			"A轮",
+			"--job-type",
+			"全职",
+			"--count",
+			"2",
+			"--dry-run",
+		],
+	)
+	assert result.exit_code == 0
+	parsed = json.loads(result.output)
+	assert parsed["ok"] is True
+	assert parsed["data"]["count"] == 1
+	assert parsed["data"]["candidates"][0]["security_id"] == "sec_good"

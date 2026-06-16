@@ -123,12 +123,20 @@ def _make_raw(
 	city="广州",
 	experience="3-5年",
 	education="本科",
+	industry="互联网",
+	scale="100-499人",
+	stage="A轮",
+	job_type="全职",
 ):
 	return {
 		"salaryDesc": salary,
 		"cityName": city,
 		"jobExperience": experience,
 		"jobDegree": education,
+		"brandIndustry": industry,
+		"brandScaleName": scale,
+		"brandStageName": stage,
+		"jobTypeName": job_type,
 	}
 
 
@@ -180,6 +188,37 @@ class TestPrefilterJob:
 		ok, reasons = prefilter_job(raw, criteria)
 		assert ok is False
 		assert any("经验" in r for r in reasons)
+
+	def test_company_and_job_type_mismatch(self):
+		raw = _make_raw(industry="金融", scale="20-99人", stage="未融资", job_type="实习")
+		criteria = SearchFilterCriteria(
+			query="go",
+			industry="互联网",
+			scale="100-499人",
+			stage="A轮",
+			job_type="全职",
+		)
+		ok, reasons = prefilter_job(raw, criteria)
+		assert ok is False
+		assert any("行业" in r for r in reasons)
+		assert any("规模" in r for r in reasons)
+		assert any("融资" in r for r in reasons)
+		assert any("职位类型" in r for r in reasons)
+
+	def test_missing_company_filter_fields_pass(self):
+		raw = _make_raw()
+		for key in ("brandIndustry", "brandScaleName", "brandStageName", "jobTypeName"):
+			raw.pop(key)
+		criteria = SearchFilterCriteria(
+			query="go",
+			industry="互联网",
+			scale="100-499人",
+			stage="A轮",
+			job_type="全职",
+		)
+		ok, reasons = prefilter_job(raw, criteria)
+		assert ok is True
+		assert reasons == []
 
 	def test_no_criteria_all_pass(self):
 		"""No filter criteria means everything passes"""

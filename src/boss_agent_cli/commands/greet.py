@@ -9,7 +9,6 @@ from boss_agent_cli.api.endpoints import (
 	SCALE_CODES,
 	STAGE_CODES,
 )
-from boss_agent_cli.api.models import JobItem
 from boss_agent_cli.auth.manager import AuthManager
 from boss_agent_cli.cache.store import CacheStore
 from boss_agent_cli.compliance import require_compliance_allowed
@@ -160,56 +159,30 @@ def batch_greet_cmd(ctx: click.Context, query: str, city: str | None, salary: st
 				handle_error_output(ctx, "batch-greet", code="INVALID_PARAM", message=str(exc))
 				return
 
-			if welfare_conditions or salary_requires_local_filter:
-				criteria = SearchFilterCriteria(
-					query=query, city=city, salary=salary, experience=experience,
-					education=education, industry=industry, scale=scale,
-					stage=stage, job_type=job_type,
+			criteria = SearchFilterCriteria(
+				query=query, city=city, salary=salary, experience=experience,
+				education=education, industry=industry, scale=scale,
+				stage=stage, job_type=job_type,
+			)
+			try:
+				pipeline_result = run_search_pipeline(
+					platform, cache, logger,
+					criteria=criteria,
+					max_pages=5 if welfare_conditions or salary_requires_local_filter else 1,
+					limit=count,
+					welfare_conditions=welfare_conditions,
+					skip_greeted=True,
 				)
-				try:
-					pipeline_result = run_search_pipeline(
-						platform, cache, logger,
-						criteria=criteria,
-						max_pages=5,
-						limit=count,
-						welfare_conditions=welfare_conditions,
-						skip_greeted=True,
-					)
-				except SearchPipelinePlatformError as exc:
-					handle_error_output(
-						ctx, "batch-greet",
-						code=exc.code,
-						message=exc.message or "搜索结果获取失败",
-						recoverable=False,
-						details=exc.details,
-					)
-					return
-				candidates = pipeline_result.items
-			else:
-				raw = platform.search_jobs(
-					query, city=city, salary=salary, experience=experience,
-					education=education, industry=industry, scale=scale,
-					stage=stage, job_type=job_type,
+			except SearchPipelinePlatformError as exc:
+				handle_error_output(
+					ctx, "batch-greet",
+					code=exc.code,
+					message=exc.message or "搜索结果获取失败",
+					recoverable=False,
+					details=exc.details,
 				)
-				if not platform.is_success(raw):
-					code, message = platform.parse_error(raw)
-					handle_error_output(
-						ctx, "batch-greet",
-						code=code,
-						message=message or "搜索结果获取失败",
-						recoverable=False,
-					)
-					return
-				platform_data = platform.unwrap_data(raw) or {}
-				job_list = platform_data.get("jobList", [])
-
-				candidates = []
-				for raw_item in job_list:
-					item = JobItem.from_api(raw_item)
-					if not cache.is_greeted(item.security_id):
-						candidates.append(item.to_dict())
-					if len(candidates) >= count:
-						break
+				return
+			candidates = pipeline_result.items
 
 			if dry_run:
 				handle_output(
