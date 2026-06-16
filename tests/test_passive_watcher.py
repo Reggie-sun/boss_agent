@@ -1,8 +1,10 @@
 from pathlib import Path
 
+import pytest
+
 from boss_agent_cli.rag_reply.models import DraftRecord
 from boss_agent_cli.rag_reply.watcher import WatcherAction, build_action_for_draft
-from boss_agent_cli.rag_reply.watcher_config import WatcherConfig
+from boss_agent_cli.rag_reply.watcher_config import WatcherConfig, WatcherConfigError
 
 
 def _config(tmp_path: Path) -> WatcherConfig:
@@ -53,6 +55,22 @@ def test_resume_share_request_sends_text_and_attachment(tmp_path):
     assert action.kind == "send_text"
     assert action.send_attachment_resume is True
     assert action.resume_file.endswith("resume.pdf")
+
+
+def test_resume_share_request_rejects_pdf_directory(tmp_path):
+    resume_dir = tmp_path / "resume.pdf"
+    resume_dir.mkdir()
+    config = WatcherConfig(
+        enabled=True,
+        dry_run=False,
+        contact_phone="13800138000",
+        contact_wechat="reggie-ai",
+        interview_windows="工作日 20:00 后，周末全天",
+        resume_attachment_path=str(resume_dir),
+    )
+
+    with pytest.raises(WatcherConfigError, match="existing PDF file"):
+        build_action_for_draft(_draft("resume_share_request"), config)
 
 
 def test_contact_exchange_uses_fixed_contact_reply(tmp_path):

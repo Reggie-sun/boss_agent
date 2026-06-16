@@ -85,7 +85,7 @@ def build_action_for_draft(draft: DraftRecord, config: WatcherConfig) -> Watcher
 
 def _require_resume_file(value: str) -> str:
     path = Path(value).expanduser()
-    if not value.strip() or not path.exists():
+    if not value.strip() or not path.is_file():
         raise WatcherConfigError(
             "boss_rag_resume_attachment_path must point to an existing PDF file."
         )
