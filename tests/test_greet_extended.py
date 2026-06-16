@@ -333,3 +333,32 @@ def test_batch_greet_welfare_filter_dry_run(mock_cache_cls, mock_auth_cls, mock_
 	assert parsed["data"]["count"] == 1
 	assert parsed["data"]["candidates"][0]["security_id"] == "sec_1"
 	assert "welfare_match" in parsed["data"]["candidates"][0]
+
+
+@patch("boss_agent_cli.commands.greet.get_platform_instance")
+@patch("boss_agent_cli.commands.greet.AuthManager")
+@patch("boss_agent_cli.commands.greet.CacheStore")
+def test_batch_greet_custom_salary_range_uses_local_filter(mock_cache_cls, mock_auth_cls, mock_client_cls):
+	"""BOSS 未映射的新薪资范围走本地预筛，避免未知 code 直接打空。"""
+	mock_cache = _ctx_mock(mock_cache_cls)
+	mock_cache.is_greeted.return_value = False
+	mock_client = _ctx_mock(mock_client_cls)
+	low_salary = _make_raw_job("低薪", "sec_low")
+	low_salary["salaryDesc"] = "5-7K"
+	high_salary = _make_raw_job("匹配", "sec_high")
+	high_salary["salaryDesc"] = "12-18K"
+	mock_client.search_jobs.return_value = {
+		"zpData": {
+			"hasMore": False,
+			"jobList": [low_salary, high_salary],
+		},
+	}
+	mock_client.is_success.return_value = True
+
+	runner = CliRunner()
+	result = runner.invoke(cli, ["batch-greet", "golang", "--salary", "9-12K", "--count", "2", "--dry-run"])
+	assert result.exit_code == 0
+	parsed = json.loads(result.output)
+	assert parsed["ok"] is True
+	assert parsed["data"]["count"] == 1
+	assert parsed["data"]["candidates"][0]["security_id"] == "sec_high"

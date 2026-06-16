@@ -58,6 +58,7 @@ const defaultBrowserChannel = {
 };
 
 const bossCityOptions = ["北京", "上海", "广州", "深圳", "杭州", "成都", "武汉", "南京", "苏州"];
+const bossSalaryOptions = ["", "3-5K", "3K以下", "5-7K", "7-9K", "9-12K", "10-15K", "11-22K", "12-24K", "13-26K"];
 const bossExperienceOptions = ["", "应届", "1年以内", "1-3年", "3-5年", "5-10年", "10年以上"];
 const bossEducationOptions = ["", "大专", "本科", "硕士", "博士"];
 const bossIndustryOptions = ["", "人工智能", "互联网", "软件/信息服务", "大数据", "云计算", "电子商务", "游戏", "金融", "教育培训", "医疗健康", "制造业"];
@@ -1312,12 +1313,17 @@ export function App() {
                   <option key={city} value={city}>{city}</option>
                 ))}
               </select>
-              <input
+              <select
                 className="apply-input apply-input--salary"
-                placeholder="薪资不限"
                 value={bossSearchForm.salary}
                 onChange={(event) => updateBossSearchForm("salary", event.target.value)}
-              />
+              >
+                {bossSalaryOptions.map((salary) => (
+                  <option key={salary || "none"} value={salary}>
+                    {salary || "薪资不限"}
+                  </option>
+                ))}
+              </select>
               <select
                 className="apply-input apply-input--experience"
                 value={bossSearchForm.experience}

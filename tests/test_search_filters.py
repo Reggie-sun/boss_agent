@@ -68,6 +68,10 @@ class TestSearchUrlParsing:
 		assert params["degree"] == "203,204"
 		assert params["jobType"] == "1901,1903"
 
+	def test_resolve_search_code_params_allows_custom_salary_ranges(self):
+		params = resolve_search_code_params(salary="5-7K")
+		assert "salary" not in params
+
 
 # ── Experience threshold ────────────────────────────────────────────
 

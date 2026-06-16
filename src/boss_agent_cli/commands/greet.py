@@ -24,6 +24,7 @@ from boss_agent_cli.display import (
 from boss_agent_cli.search_filters import (
 	SearchFilterCriteria,
 	SearchPipelinePlatformError,
+	resolve_salary_code_param,
 	resolve_welfare_keywords,
 	run_search_pipeline,
 )
@@ -153,7 +154,13 @@ def batch_greet_cmd(ctx: click.Context, query: str, city: str | None, salary: st
 				labels = [w.strip() for w in welfare.split(",") if w.strip()]
 				welfare_conditions = [(label, resolve_welfare_keywords(label)) for label in labels]
 
-			if welfare_conditions:
+			try:
+				salary_requires_local_filter = bool(salary and not resolve_salary_code_param(salary))
+			except ValueError as exc:
+				handle_error_output(ctx, "batch-greet", code="INVALID_PARAM", message=str(exc))
+				return
+
+			if welfare_conditions or salary_requires_local_filter:
 				criteria = SearchFilterCriteria(
 					query=query, city=city, salary=salary, experience=experience,
 					education=education, industry=industry, scale=scale,

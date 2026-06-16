@@ -134,6 +134,18 @@ def resolve_lookup_codes(value: str | None, lookup: dict[str, str], label: str) 
 	return ",".join(codes) if codes else None
 
 
+def resolve_salary_code_param(value: str | None) -> str | None:
+	"""Resolve salary to a BOSS code when known; parseable custom ranges stay local-only."""
+	if not value:
+		return None
+	try:
+		return resolve_lookup_codes(value, endpoints.SALARY_CODES, "薪资范围")
+	except ValueError:
+		if all(parse_salary_range(part) for part in _split_multi_value(value)):
+			return None
+		raise
+
+
 def resolve_search_code_params(
 	*,
 	salary: str | None = None,
@@ -146,7 +158,7 @@ def resolve_search_code_params(
 ) -> dict[str, str]:
 	"""Resolve user-facing search filters into BOSS API parameter codes."""
 	params: dict[str, str] = {}
-	if code := resolve_lookup_codes(salary, endpoints.SALARY_CODES, "薪资范围"):
+	if code := resolve_salary_code_param(salary):
 		params["salary"] = code
 	if code := resolve_lookup_codes(experience, endpoints.EXPERIENCE_CODES, "经验要求"):
 		params["experience"] = code
