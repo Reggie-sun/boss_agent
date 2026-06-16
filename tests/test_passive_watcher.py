@@ -24,6 +24,7 @@ DRAFT_TEXT_INTENTS = [
     "smalltalk",
     "resignation_status",
     "personal_status",
+    "job_location_acceptance",
 ]
 
 

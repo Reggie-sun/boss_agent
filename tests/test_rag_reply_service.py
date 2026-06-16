@@ -363,7 +363,62 @@ def test_resume_share_request_generates_local_approval_draft(tmp_path):
 	draft = service.create_draft_for_message("msg_001")
 
 	assert draft.intent == "resume_share_request"
-	assert "官方页面发送在线简历" in draft.draft_text
+	assert "附件简历" in draft.draft_text
+	assert draft.send_allowed is False
+	assert draft.approval_required is True
+	assert rag_adapter.calls == []
+
+
+def test_salary_question_generates_agent_handoff_draft(tmp_path):
+	store = RagReplyStore(tmp_path / "boss-rag.sqlite3")
+	store.initialize()
+	store.save_conversation(ConversationRecord(conversation_id="conv_001", source="manual_import"))
+	store.save_message(
+		MessageRecord(
+			message_id="msg_001",
+			conversation_id="conv_001",
+			message_text="为什么离职，期望薪资多少。",
+			direction="inbound",
+		)
+	)
+	rag_adapter = _FakeRagAdapter(_FakeRagResult(ok=True, answer="unused", citations=[]))
+	service = BossRagReplyService(
+		store=store,
+		rag_adapter=rag_adapter,
+	)
+
+	draft = service.create_draft_for_message("msg_001")
+
+	assert draft.intent == "salary_or_offer"
+	assert "我是候选人的求职助理 Agent" in draft.draft_text
+	assert "薪资相关问题需要候选人本人确认后回复" in draft.draft_text
+	assert draft.send_allowed is False
+	assert draft.approval_required is True
+	assert rag_adapter.calls == []
+
+
+def test_job_location_question_generates_safe_local_draft(tmp_path):
+	store = RagReplyStore(tmp_path / "boss-rag.sqlite3")
+	store.initialize()
+	store.save_conversation(ConversationRecord(conversation_id="conv_001", source="manual_import"))
+	store.save_message(
+		MessageRecord(
+			message_id="msg_001",
+			conversation_id="conv_001",
+			message_text="这个工作地点可以接受吗。",
+			direction="inbound",
+		)
+	)
+	rag_adapter = _FakeRagAdapter(_FakeRagResult(ok=True, answer="unused", citations=[]))
+	service = BossRagReplyService(
+		store=store,
+		rag_adapter=rag_adapter,
+	)
+
+	draft = service.create_draft_for_message("msg_001")
+
+	assert draft.intent == "job_location_acceptance"
+	assert "这个工作地点可以接受" in draft.draft_text
 	assert draft.send_allowed is False
 	assert draft.approval_required is True
 	assert rag_adapter.calls == []

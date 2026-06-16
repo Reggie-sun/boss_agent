@@ -52,6 +52,7 @@ def build_action_for_draft(draft: DraftRecord, config: WatcherConfig) -> Watcher
         "smalltalk",
         "resignation_status",
         "personal_status",
+        "job_location_acceptance",
     }:
         if not draft_text:
             return WatcherAction(

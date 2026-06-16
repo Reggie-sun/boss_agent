@@ -11,6 +11,7 @@ from boss_agent_cli.rag_reply.classifier import classify_message
 		("什么时候方便面试？", "interview_time"),
 		("现在是在职吗？", "personal_status"),
 		("为什么离职？", "resignation_status"),
+		("这个工作地点可以接受吗？", "job_location_acceptance"),
 		("方便加微信吗？", "contact_exchange"),
 		("把手机号发我", "contact_exchange"),
 		("邮箱给我一下", "contact_exchange"),

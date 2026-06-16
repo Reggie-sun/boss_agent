@@ -12,6 +12,7 @@ INTENTS = {
 	"resume_share_request",
 	"availability_or_schedule",
 	"personal_status",
+	"job_location_acceptance",
 	"interview_time",
 	"resignation_status",
 	"job_detail_question",
@@ -25,6 +26,7 @@ SENSITIVE_INTENTS = {
 	"resume_share_request",
 	"availability_or_schedule",
 	"personal_status",
+	"job_location_acceptance",
 	"interview_time",
 	"resignation_status",
 	"contact_exchange",
@@ -39,6 +41,7 @@ SENSITIVE_RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
 	("availability_or_schedule", (r"方便", r"有空", r"可约", r"什么时候方便", r"时间安排")),
 	("resignation_status", (r"离职", r"离岗", r"离职时间", r"什么时候离")),
 	("personal_status", (r"在职", r"目前状态", r"当前状态", r"现在还在职", r"是否在职")),
+	("job_location_acceptance", (r"工作地点", r"办公地点", r"这个地点", r"地点.*接受", r"通勤")),
 )
 
 PROJECT_PATTERNS = (
