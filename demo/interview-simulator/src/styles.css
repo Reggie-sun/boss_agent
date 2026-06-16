@@ -184,6 +184,137 @@ button {
   color: var(--muted);
 }
 
+.watcher-console {
+  display: grid;
+  gap: 12px;
+}
+
+.watcher-console__summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.watcher-console__summary strong {
+  padding: 6px 10px;
+  border-radius: 999px;
+  background: var(--warning-soft);
+  color: #8f5a20;
+  font-size: 0.78rem;
+  font-family: var(--font-mono);
+}
+
+.watcher-console__summary span {
+  color: var(--muted);
+  font-size: 0.82rem;
+  font-weight: 700;
+}
+
+.watcher-console__actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.watcher-console__button,
+.watcher-task__pause {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid rgba(47, 128, 237, 0.14);
+  background: rgba(255, 255, 255, 0.66);
+  color: var(--accent);
+  cursor: pointer;
+  transition: background 160ms ease, border-color 160ms ease, transform 160ms ease;
+}
+
+.watcher-console__button {
+  min-height: 34px;
+  gap: 6px;
+  padding: 8px 9px;
+  border-radius: 12px;
+  font-size: 0.82rem;
+  font-weight: 700;
+}
+
+.watcher-console__button:hover:not(:disabled),
+.watcher-task__pause:hover:not(:disabled) {
+  border-color: rgba(47, 128, 237, 0.28);
+  background: rgba(47, 128, 237, 0.08);
+  transform: translateY(-1px);
+}
+
+.watcher-console__button:disabled,
+.watcher-task__pause:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.watcher-console__error {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 10px;
+  border-radius: 12px;
+  background: rgba(212, 132, 47, 0.1);
+  color: #8f5a20;
+  font-size: 0.82rem;
+  line-height: 1.5;
+}
+
+.watcher-task-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 8px;
+}
+
+.watcher-task {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 10px;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.58);
+  border: 1px solid rgba(43, 58, 78, 0.08);
+}
+
+.watcher-task__main {
+  min-width: 0;
+  display: grid;
+  gap: 5px;
+}
+
+.watcher-task__main strong {
+  font-size: 0.84rem;
+  line-height: 1.35;
+}
+
+.watcher-task__main span {
+  color: var(--muted);
+  font-size: 0.78rem;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.watcher-task__main em {
+  color: var(--accent);
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  font-style: normal;
+  overflow-wrap: anywhere;
+}
+
+.watcher-task__pause {
+  width: 28px;
+  height: 28px;
+  border-radius: 10px;
+  flex-shrink: 0;
+}
+
 .progress-card,
 .category-card,
 .hint-card,

@@ -7,6 +7,7 @@ import {
   FileText,
   Lightning,
   MagnifyingGlass,
+  PauseCircle,
   PaperPlaneTilt,
   PlayCircle,
   Quotes,
@@ -233,6 +234,13 @@ export function App() {
   const [selectedTargetValue, setSelectedTargetValue] = useState("");
   const [isSendingToBoss, setIsSendingToBoss] = useState(false);
   const [sendResumeWithDraft, setSendResumeWithDraft] = useState(false);
+  const [watcherState, setWatcherState] = useState({
+    running: false,
+    dry_run: true,
+    tasks: [],
+    errorMessage: "",
+  });
+  const [isWatcherBusy, setIsWatcherBusy] = useState(false);
 
   const reasoningItems = useMemo(
     () => normalizeReasoningSummary(result.reasoningSummary),
@@ -246,6 +254,10 @@ export function App() {
   );
   const selectedCitation = result.citations[selectedCitationIndex] ?? null;
   const questionLength = question.replace(/\s/g, "").length;
+  const recentWatcherTasks = useMemo(
+    () => watcherState.tasks.slice().reverse().slice(0, 6),
+    [watcherState.tasks],
+  );
 
   async function loadChatTargets() {
     setChatTargetsLoading(true);
@@ -272,6 +284,71 @@ export function App() {
       setChatTargetsError(error instanceof Error ? error.message : "读取 Boss 对话目标失败。");
     } finally {
       setChatTargetsLoading(false);
+    }
+  }
+
+  async function refreshWatcherStatus() {
+    try {
+      const response = await fetch("/api/agent/watcher/status");
+      const payload = await response.json();
+      if (!response.ok || !payload.ok) {
+        throw new Error(payload.errorMessage || "读取 watcher 状态失败。");
+      }
+      setWatcherState({
+        running: Boolean(payload.data?.running),
+        dry_run: Boolean(payload.data?.dry_run),
+        tasks: Array.isArray(payload.data?.tasks) ? payload.data.tasks : [],
+        errorMessage: "",
+      });
+    } catch (error) {
+      setWatcherState((current) => ({
+        ...current,
+        errorMessage:
+          error instanceof Error ? error.message : "读取 watcher 状态失败。",
+      }));
+    }
+  }
+
+  async function runWatcherOnce() {
+    setIsWatcherBusy(true);
+    try {
+      const response = await fetch("/api/agent/watcher/run", { method: "POST" });
+      const payload = await response.json();
+      if (!response.ok || !payload.ok) {
+        throw new Error(payload.errorMessage || "运行 watcher 失败。");
+      }
+      await refreshWatcherStatus();
+    } catch (error) {
+      setWatcherState((current) => ({
+        ...current,
+        errorMessage: error instanceof Error ? error.message : "运行 watcher 失败。",
+      }));
+    } finally {
+      setIsWatcherBusy(false);
+    }
+  }
+
+  async function controlWatcher(action, conversationId = "") {
+    setIsWatcherBusy(true);
+    try {
+      const response = await fetch("/api/agent/watcher/control", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action, conversation_id: conversationId }),
+      });
+      const payload = await response.json();
+      if (!response.ok || !payload.ok) {
+        throw new Error(payload.errorMessage || "更新 watcher 控制状态失败。");
+      }
+      await refreshWatcherStatus();
+    } catch (error) {
+      setWatcherState((current) => ({
+        ...current,
+        errorMessage:
+          error instanceof Error ? error.message : "更新 watcher 控制状态失败。",
+      }));
+    } finally {
+      setIsWatcherBusy(false);
     }
   }
 
@@ -308,6 +385,7 @@ export function App() {
     }
     loadBridgeState();
     loadChatTargets();
+    void refreshWatcherStatus();
     return () => {
       cancelled = true;
     };
@@ -646,6 +724,107 @@ export function App() {
                 ? " 未就绪"
                 : " 未检查"}
           </p>
+        </section>
+
+        <section className="session-card watcher-console">
+          <div className="session-card__header">
+            <span>Watcher Console</span>
+            <span
+              className={`live-dot ${watcherState.running ? "is-success" : "is-muted"}`}
+            >
+              <span className="live-dot__point" />
+              {watcherState.running ? "enabled" : "paused"}
+            </span>
+          </div>
+          <div className="watcher-console__summary">
+            <strong>{watcherState.dry_run ? "dry-run" : "live-send"}</strong>
+            <span>{watcherState.tasks.length} recent tasks</span>
+          </div>
+          <div className="watcher-console__actions">
+            <button
+              type="button"
+              className="watcher-console__button"
+              onClick={refreshWatcherStatus}
+              disabled={isWatcherBusy}
+            >
+              <ArrowClockwise size={15} />
+              刷新
+            </button>
+            <button
+              type="button"
+              className="watcher-console__button"
+              onClick={runWatcherOnce}
+              disabled={isWatcherBusy}
+            >
+              <Lightning size={15} />
+              单轮
+            </button>
+            <button
+              type="button"
+              className="watcher-console__button"
+              onClick={() => controlWatcher("pause")}
+              disabled={isWatcherBusy}
+            >
+              <PauseCircle size={15} />
+              暂停
+            </button>
+            <button
+              type="button"
+              className="watcher-console__button"
+              onClick={() => controlWatcher("resume")}
+              disabled={isWatcherBusy}
+            >
+              <PlayCircle size={15} />
+              恢复
+            </button>
+          </div>
+          {watcherState.errorMessage ? (
+            <div className="watcher-console__error">
+              <WarningCircle size={16} />
+              <span>{watcherState.errorMessage}</span>
+            </div>
+          ) : null}
+          <ul className="watcher-task-list">
+            {recentWatcherTasks.length ? (
+              recentWatcherTasks.map((task, index) => {
+                const conversationId = String(task.conversation_id || "").trim();
+                const messageId = String(task.message_id || "").trim();
+                const detail =
+                  task.error_message ||
+                  task.action?.message ||
+                  "未返回执行说明。";
+                return (
+                  <li key={`${task.log_id || conversationId || messageId || index}`}>
+                    <div className="watcher-task">
+                      <div className="watcher-task__main">
+                        <strong>
+                          {task.intent || "unknown_intent"} / {task.status || "unknown_status"}
+                        </strong>
+                        <span>{detail}</span>
+                        <em>
+                          {conversationId || "no conversation"}
+                          {messageId ? ` · ${messageId}` : ""}
+                        </em>
+                      </div>
+                      {conversationId ? (
+                        <button
+                          type="button"
+                          className="watcher-task__pause"
+                          onClick={() => controlWatcher("pause", conversationId)}
+                          disabled={isWatcherBusy}
+                          title="暂停此对话"
+                        >
+                          <PauseCircle size={14} />
+                        </button>
+                      ) : null}
+                    </div>
+                  </li>
+                );
+              })
+            ) : (
+              <li className="history-list__empty">暂无 watcher task。</li>
+            )}
+          </ul>
         </section>
 
         <section className="progress-card">
