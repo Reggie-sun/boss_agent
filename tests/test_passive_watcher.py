@@ -7,6 +7,15 @@ from boss_agent_cli.rag_reply.watcher import WatcherAction, build_action_for_dra
 from boss_agent_cli.rag_reply.watcher_config import WatcherConfig, WatcherConfigError
 
 
+DRAFT_TEXT_INTENTS = [
+    "project_question",
+    "resume_question",
+    "smalltalk",
+    "resignation_status",
+    "personal_status",
+]
+
+
 def _config(tmp_path: Path) -> WatcherConfig:
     resume = tmp_path / "resume.pdf"
     resume.write_bytes(b"%PDF-1.4\n")
@@ -33,10 +42,9 @@ def _draft(intent: str, text: str = "草稿") -> DraftRecord:
     )
 
 
-def test_project_question_sends_draft_text(tmp_path):
-    action = build_action_for_draft(
-        _draft("project_question", "我是项目回答"), _config(tmp_path)
-    )
+@pytest.mark.parametrize("intent", DRAFT_TEXT_INTENTS)
+def test_draft_text_intents_send_non_empty_draft_text(tmp_path, intent):
+    action = build_action_for_draft(_draft(intent, "我是项目回答"), _config(tmp_path))
 
     assert action == WatcherAction(
         kind="send_text",
@@ -47,14 +55,26 @@ def test_project_question_sends_draft_text(tmp_path):
     )
 
 
+@pytest.mark.parametrize("intent", DRAFT_TEXT_INTENTS)
+def test_draft_text_intents_block_empty_drafts(tmp_path, intent):
+    action = build_action_for_draft(_draft(intent, "  "), _config(tmp_path))
+
+    assert action == WatcherAction(
+        kind="block",
+        status_after_send="rag_failed",
+        blocked_reason="empty_draft",
+    )
+
+
 def test_resume_share_request_sends_text_and_attachment(tmp_path):
+    config = _config(tmp_path)
     action = build_action_for_draft(
-        _draft("resume_share_request", "可以的，我发您附件简历。"), _config(tmp_path)
+        _draft("resume_share_request", "可以的，我发您附件简历。"), config
     )
 
     assert action.kind == "send_text"
     assert action.send_attachment_resume is True
-    assert action.resume_file.endswith("resume.pdf")
+    assert action.resume_file == config.resume_attachment_path
 
 
 def test_resume_share_request_rejects_pdf_directory(tmp_path):
@@ -71,6 +91,19 @@ def test_resume_share_request_rejects_pdf_directory(tmp_path):
 
     with pytest.raises(WatcherConfigError, match="existing PDF file"):
         build_action_for_draft(_draft("resume_share_request"), config)
+
+
+@pytest.mark.parametrize("intent", ["interview_time", "availability_or_schedule"])
+def test_interview_intents_use_configured_window_reply(tmp_path, intent):
+    action = build_action_for_draft(_draft(intent, ""), _config(tmp_path))
+
+    assert action == WatcherAction(
+        kind="send_text",
+        message=(
+            "可以的，我这边通常工作日 20:00 后，周末全天方便面试。"
+            "您可以发几个可选时间，我确认后会尽快回复。"
+        ),
+    )
 
 
 def test_contact_exchange_uses_fixed_contact_reply(tmp_path):
