@@ -52,6 +52,7 @@ def test_config_list_returns_all_defaults(monkeypatch, tmp_path):
 		"BOSS_RAG_RAG_API_KEY",
 		"RAG_API_KEY",
 		"RAG_AUTH_API_KEY",
+		"BOSS_BATCH_GREET_AUTO_ENABLED",
 	):
 		os.environ.pop(env_name, None)
 	monkeypatch.chdir(tmp_path)
@@ -119,6 +120,21 @@ def test_config_list_loads_dotenv_from_cwd(monkeypatch, tmp_path):
 	assert auth_mode_item["source"] == "环境变量:BOSS_RAG_RAG_AUTH_MODE"
 	assert api_key_item["value"] == "test-dotenv-key"
 	assert api_key_item["source"] == "环境变量:RAG_AUTH_API_KEY"
+
+
+def test_config_list_loads_batch_greet_auto_opt_in_from_dotenv(monkeypatch, tmp_path):
+	"""显式 .env opt-in 后，批量开聊自动化开关应进入运行时 config。"""
+	monkeypatch.delenv("BOSS_BATCH_GREET_AUTO_ENABLED", raising=False)
+	monkeypatch.chdir(tmp_path)
+	(tmp_path / ".env").write_text(
+		"BOSS_BATCH_GREET_AUTO_ENABLED=true\n",
+		encoding="utf-8",
+	)
+	code, parsed = _invoke("config", "list", tmp_path=tmp_path)
+	assert code == 0
+	item = next(i for i in parsed["data"]["items"] if i["key"] == "boss_batch_greet_auto_enabled")
+	assert item["value"] is True
+	assert item["source"] == "环境变量:BOSS_BATCH_GREET_AUTO_ENABLED"
 
 
 def test_config_without_subcommand_shows_list(tmp_path):

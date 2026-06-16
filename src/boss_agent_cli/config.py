@@ -27,6 +27,7 @@ DEFAULTS: dict[str, Any] = {
 	"boss_rag_send_enabled": False,
 	"boss_rag_salary_reply": None,
 	"boss_apply_auto_enabled": True,
+	"boss_batch_greet_auto_enabled": False,
 }
 
 ENV_ALIASES: dict[str, tuple[str, ...]] = {
@@ -38,6 +39,7 @@ ENV_ALIASES: dict[str, tuple[str, ...]] = {
 	"boss_rag_send_enabled": ("BOSS_RAG_SEND_ENABLED",),
 	"boss_rag_salary_reply": ("BOSS_RAG_SALARY_REPLY",),
 	"boss_apply_auto_enabled": ("BOSS_APPLY_AUTO_ENABLED",),
+	"boss_batch_greet_auto_enabled": ("BOSS_BATCH_GREET_AUTO_ENABLED",),
 }
 
 

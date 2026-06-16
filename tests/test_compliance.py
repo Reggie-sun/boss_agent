@@ -1,10 +1,11 @@
 import ast
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 from click.testing import CliRunner
 
-from boss_agent_cli.compliance import low_risk_blocked_commands
+from boss_agent_cli.compliance import low_risk_blocked_commands, require_compliance_allowed
 from boss_agent_cli.main import cli
 
 
@@ -31,6 +32,19 @@ def test_default_low_risk_mode_blocks_outbound_greet():
 	assert parsed["error"]["recoverable"] is False
 	assert "平台官网" in parsed["error"]["recovery_action"]
 	_assert_compliance_block_hints(parsed)
+
+
+def test_batch_greet_can_be_explicitly_enabled_without_disabling_low_risk_mode():
+	ctx = SimpleNamespace(
+		obj={
+			"config": {
+				"low_risk_mode": True,
+				"boss_batch_greet_auto_enabled": True,
+			}
+		}
+	)
+
+	assert require_compliance_allowed(ctx, "batch-greet") is True
 
 
 def test_default_low_risk_mode_blocks_platform_data_aggregation():

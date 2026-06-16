@@ -875,7 +875,12 @@ function createRagBridgePlugin() {
           return true;
         }
 
-        const args = ["batch-greet", query, "--count", String(Number.isFinite(count) ? Math.min(Math.max(count, 1), 10) : 3)];
+        const args = [
+          "batch-greet",
+          query,
+          "--count",
+          String(Number.isFinite(count) ? Math.min(Math.max(count, 1), 10) : 3),
+        ];
         if (city) args.push("--city", city);
         if (salary) args.push("--salary", salary);
 

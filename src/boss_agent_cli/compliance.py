@@ -75,6 +75,10 @@ def require_compliance_allowed(ctx: click.Context, command: str) -> bool:
 		config = ctx.obj.get("config", {}) if ctx and ctx.obj else {}
 		if config.get("boss_apply_auto_enabled", False):
 			return True
+	if command == "batch-greet":
+		config = ctx.obj.get("config", {}) if ctx and ctx.obj else {}
+		if config.get("boss_batch_greet_auto_enabled", False):
+			return True
 
 	handle_error_output(
 		ctx,
