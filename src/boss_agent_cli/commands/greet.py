@@ -21,6 +21,12 @@ from boss_agent_cli.display import (
 	render_batch_operation_summary,
 	render_message_panel,
 )
+from boss_agent_cli.search_filters import (
+	SearchFilterCriteria,
+	SearchPipelinePlatformError,
+	resolve_welfare_keywords,
+	run_search_pipeline,
+)
 
 
 @click.command("greet")
@@ -117,11 +123,12 @@ def greet_cmd(ctx: click.Context, security_id: str, job_id: str, message: str) -
 @click.option("--scale", default=None, type=click.Choice(list(SCALE_CODES.keys()), case_sensitive=False), help="公司规模（如 100-499人）")
 @click.option("--stage", default=None, type=click.Choice(list(STAGE_CODES.keys()), case_sensitive=False), help="融资阶段（如 已上市、A轮）")
 @click.option("--job-type", default=None, type=click.Choice(list(JOB_TYPE_CODES.keys()), case_sensitive=False), help="职位类型（全职/兼职/实习）")
+@click.option("--welfare", default=None, help="福利筛选（如 双休、五险一金），逗号分隔时按 AND 匹配")
 @click.option("--count", default=10, help="打招呼数量上限（最大 10）")
 @click.option("--dry-run", is_flag=True, default=False, help="仅模拟执行，不实际打招呼")
 @click.pass_context
 @handle_auth_errors("batch-greet")
-def batch_greet_cmd(ctx: click.Context, query: str, city: str | None, salary: str | None, experience: str | None, education: str | None, industry: str | None, scale: str | None, stage: str | None, job_type: str | None, count: int, dry_run: bool) -> None:
+def batch_greet_cmd(ctx: click.Context, query: str, city: str | None, salary: str | None, experience: str | None, education: str | None, industry: str | None, scale: str | None, stage: str | None, job_type: str | None, welfare: str | None, count: int, dry_run: bool) -> None:
 	"""搜索后批量打招呼（上限 10）"""
 	if not require_compliance_allowed(ctx, "batch-greet"):
 		return
@@ -134,38 +141,68 @@ def batch_greet_cmd(ctx: click.Context, query: str, city: str | None, salary: st
 	with CacheStore(data_dir / "cache" / "boss_agent.db") as cache:
 		auth = AuthManager(data_dir, logger=logger, platform=ctx.obj.get("platform", "zhipin"))
 		with get_platform_instance(ctx, auth) as platform:
-			raw = platform.search_jobs(
-				query, city=city, salary=salary, experience=experience,
-				education=education, industry=industry, scale=scale,
-				stage=stage, job_type=job_type,
-			)
-			if not platform.is_success(raw):
-				code, message = platform.parse_error(raw)
-				handle_error_output(
-					ctx, "batch-greet",
-					code=code,
-					message=message or "搜索结果获取失败",
-					recoverable=False,
-				)
-				return
-			platform_data = platform.unwrap_data(raw) or {}
-			job_list = platform_data.get("jobList", [])
+			welfare_conditions = None
+			if welfare:
+				labels = [w.strip() for w in welfare.split(",") if w.strip()]
+				welfare_conditions = [(label, resolve_welfare_keywords(label)) for label in labels]
 
-			candidates = []
-			for raw_item in job_list:
-				item = JobItem.from_api(raw_item)
-				if not cache.is_greeted(item.security_id):
-					candidates.append(item)
-				if len(candidates) >= count:
-					break
+			if welfare_conditions:
+				criteria = SearchFilterCriteria(
+					query=query, city=city, salary=salary, experience=experience,
+					education=education, industry=industry, scale=scale,
+					stage=stage, job_type=job_type,
+				)
+				try:
+					pipeline_result = run_search_pipeline(
+						platform, cache, logger,
+						criteria=criteria,
+						max_pages=5,
+						limit=count,
+						welfare_conditions=welfare_conditions,
+						skip_greeted=True,
+					)
+				except SearchPipelinePlatformError as exc:
+					handle_error_output(
+						ctx, "batch-greet",
+						code=exc.code,
+						message=exc.message or "搜索结果获取失败",
+						recoverable=False,
+						details=exc.details,
+					)
+					return
+				candidates = pipeline_result.items
+			else:
+				raw = platform.search_jobs(
+					query, city=city, salary=salary, experience=experience,
+					education=education, industry=industry, scale=scale,
+					stage=stage, job_type=job_type,
+				)
+				if not platform.is_success(raw):
+					code, message = platform.parse_error(raw)
+					handle_error_output(
+						ctx, "batch-greet",
+						code=code,
+						message=message or "搜索结果获取失败",
+						recoverable=False,
+					)
+					return
+				platform_data = platform.unwrap_data(raw) or {}
+				job_list = platform_data.get("jobList", [])
+
+				candidates = []
+				for raw_item in job_list:
+					item = JobItem.from_api(raw_item)
+					if not cache.is_greeted(item.security_id):
+						candidates.append(item.to_dict())
+					if len(candidates) >= count:
+						break
 
 			if dry_run:
-				items = [item.to_dict() for item in candidates]
 				handle_output(
 					ctx, "batch-greet", {
 						"dry_run": True,
-						"candidates": items,
-						"count": len(items),
+						"candidates": candidates,
+						"count": len(candidates),
 					},
 					render=lambda d: render_batch_operation_summary(d, title="batch-greet"),
 				)
@@ -180,20 +217,20 @@ def batch_greet_cmd(ctx: click.Context, query: str, city: str | None, salary: st
 
 				while retry_count <= 1:
 					try:
-						resp = platform.greet(item.security_id, item.job_id)
+						resp = platform.greet(item["security_id"], item["job_id"])
 						if not platform.is_success(resp):
 							error_code, _ = platform.parse_error(resp)
 							raise RuntimeError(error_code if error_code != "UNKNOWN" else (resp.get("message") or "greet failed"))
-						cache.record_greet(item.security_id, item.job_id)
+						cache.record_greet(item["security_id"], item["job_id"])
 						results.append({
-							"security_id": item.security_id,
-							"job_id": item.job_id,
-							"title": item.title,
-							"company": item.company,
+							"security_id": item["security_id"],
+							"job_id": item["job_id"],
+							"title": item["title"],
+							"company": item["company"],
 							"status": "success",
 						})
 						success = True
-						logger.info(f"打招呼成功: {item.title} @ {item.company}")
+						logger.info(f"打招呼成功: {item['title']} @ {item['company']}")
 						break
 					except Exception as e:
 						error_msg = str(e)
@@ -204,15 +241,15 @@ def batch_greet_cmd(ctx: click.Context, query: str, city: str | None, salary: st
 							stopped_reason = "GREET_LIMIT"
 							break
 						if retry_count == 0:
-							logger.warning(f"打招呼失败，重试中: {item.title}")
+							logger.warning(f"打招呼失败，重试中: {item['title']}")
 							retry_count += 1
 							time.sleep(random.uniform(1.0, 2.0))
 						else:
 							results.append({
-								"security_id": item.security_id,
-								"job_id": item.job_id,
-								"title": item.title,
-								"company": item.company,
+								"security_id": item["security_id"],
+								"job_id": item["job_id"],
+								"title": item["title"],
+								"company": item["company"],
 								"status": "failed",
 								"error": error_msg,
 							})

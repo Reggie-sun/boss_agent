@@ -542,6 +542,12 @@ SCHEMA_DATA = {
 					"description": "职位类型（全职/兼职/实习）",
 					"choices": ["全职", "兼职", "实习"],
 				},
+				"--welfare": {
+					"type": "string",
+					"default": None,
+					"description": "福利筛选关键词（如 双休、五险一金）。启用后会逐个检查职位详情",
+					"examples": ["双休", "五险一金", "年终奖", "餐补", "住房补贴"],
+				},
 				"--count": {
 					"type": "int",
 					"default": 10,

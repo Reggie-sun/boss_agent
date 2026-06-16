@@ -19,7 +19,7 @@ def _ctx_mock(mock_cls):
 	return instance
 
 
-def _make_raw_job(name: str = "Go 开发", security_id: str = "sec_x") -> dict:
+def _make_raw_job(name: str = "Go 开发", security_id: str = "sec_x", welfare: list[str] | None = None) -> dict:
 	return {
 		"encryptJobId": f"job_{security_id}",
 		"jobName": name,
@@ -30,7 +30,7 @@ def _make_raw_job(name: str = "Go 开发", security_id: str = "sec_x") -> dict:
 		"jobExperience": "3-5年",
 		"jobDegree": "本科",
 		"skills": ["Golang"],
-		"welfareList": [],
+		"welfareList": welfare or [],
 		"brandIndustry": "互联网",
 		"brandScaleName": "100-499人",
 		"brandStageName": "A轮",
@@ -279,3 +279,32 @@ def test_batch_greet_respects_count_cap(mock_cache_cls, mock_auth_cls, mock_clie
 	parsed = json.loads(result.output)
 	# --count 会被 cap 到 10
 	assert parsed["data"]["count"] == 10
+
+
+@patch("boss_agent_cli.commands.greet.get_platform_instance")
+@patch("boss_agent_cli.commands.greet.AuthManager")
+@patch("boss_agent_cli.commands.greet.CacheStore")
+def test_batch_greet_welfare_filter_dry_run(mock_cache_cls, mock_auth_cls, mock_client_cls):
+	"""batch-greet 支持复用福利筛选 pipeline。"""
+	mock_cache = _ctx_mock(mock_cache_cls)
+	mock_cache.is_greeted.return_value = False
+	mock_client = _ctx_mock(mock_client_cls)
+	mock_client.search_jobs.return_value = {
+		"zpData": {
+			"hasMore": False,
+			"jobList": [
+				_make_raw_job("Go 双休", "sec_1", welfare=["双休"]),
+				_make_raw_job("Go 单休", "sec_2", welfare=["五险一金"]),
+			],
+		},
+	}
+	mock_client.is_success.return_value = True
+
+	runner = CliRunner()
+	result = runner.invoke(cli, ["batch-greet", "golang", "--welfare", "双休", "--count", "2", "--dry-run"])
+	assert result.exit_code == 0
+	parsed = json.loads(result.output)
+	assert parsed["ok"] is True
+	assert parsed["data"]["count"] == 1
+	assert parsed["data"]["candidates"][0]["security_id"] == "sec_1"
+	assert "welfare_match" in parsed["data"]["candidates"][0]

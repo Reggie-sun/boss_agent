@@ -138,6 +138,10 @@ TOOLS = [
 				"salary": {"type": "string", "description": "薪资范围（如 20-50K）"},
 				"experience": {"type": "string", "description": "经验要求（如 3-5年）"},
 				"education": {"type": "string", "description": "学历要求（如 本科）"},
+				"industry": {"type": "string", "description": "行业类型，支持逗号分隔多选"},
+				"scale": {"type": "string", "description": "公司规模，支持逗号分隔多选"},
+				"stage": {"type": "string", "description": "融资阶段，支持逗号分隔多选"},
+				"job_type": {"type": "string", "description": "职位类型（全职/兼职/实习），支持逗号分隔多选"},
 				"welfare": {"type": "string", "description": "福利筛选，逗号分隔 AND 逻辑（如 双休,五险一金）"},
 				"page": {"type": "integer", "description": "页码", "default": 1},
 			},
@@ -291,6 +295,14 @@ TOOLS = [
 			"properties": {
 				"query": {"type": "string", "description": "搜索关键词"},
 				"city": {"type": "string", "description": "城市名称"},
+				"salary": {"type": "string", "description": "薪资范围（如 20-50K）"},
+				"experience": {"type": "string", "description": "经验要求（如 3-5年）"},
+				"education": {"type": "string", "description": "学历要求（如 本科）"},
+				"industry": {"type": "string", "description": "行业类型，支持逗号分隔多选"},
+				"scale": {"type": "string", "description": "公司规模，支持逗号分隔多选"},
+				"stage": {"type": "string", "description": "融资阶段，支持逗号分隔多选"},
+				"job_type": {"type": "string", "description": "职位类型（全职/兼职/实习），支持逗号分隔多选"},
+				"welfare": {"type": "string", "description": "福利筛选，逗号分隔 AND 逻辑（如 双休,五险一金）"},
 				"limit": {"type": "integer", "description": "最大打招呼数量", "default": 5},
 				"dry_run": {"type": "boolean", "description": "预览模式", "default": False},
 			},
@@ -972,9 +984,9 @@ def _build_args(tool_name: str, arguments: dict) -> list[str]:
 
 	if name == "search":
 		args = [name, arguments["query"]]
-		for opt in ("city", "salary", "experience", "education", "welfare"):
+		for opt in ("city", "salary", "experience", "education", "industry", "scale", "stage", "job_type", "welfare"):
 			if opt in arguments and arguments[opt]:
-				args.extend([f"--{opt}", str(arguments[opt])])
+				args.extend([f"--{opt.replace('_', '-')}", str(arguments[opt])])
 		if "page" in arguments:
 			args.extend(["--page", str(arguments["page"])])
 		return args
@@ -1037,10 +1049,13 @@ def _build_args(tool_name: str, arguments: dict) -> list[str]:
 
 	if name == "batch_greet":
 		args = ["batch-greet", arguments["query"]]
-		if "city" in arguments and arguments["city"]:
-			args.extend(["--city", arguments["city"]])
+		for opt in ("city", "salary", "experience", "education", "industry", "scale", "stage", "job_type", "welfare"):
+			if arguments.get(opt):
+				args.extend([f"--{opt.replace('_', '-')}", str(arguments[opt])])
 		if "limit" in arguments:
-			args.extend(["--limit", str(arguments["limit"])])
+			args.extend(["--count", str(arguments["limit"])])
+		if "count" in arguments:
+			args.extend(["--count", str(arguments["count"])])
 		if arguments.get("dry_run"):
 			args.append("--dry-run")
 		return args

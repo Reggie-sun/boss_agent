@@ -830,6 +830,13 @@ function createRagBridgePlugin() {
         const query = String(body.query || "").trim();
         const city = String(body.city || "北京").trim();
         const salary = String(body.salary || "").trim();
+        const experience = String(body.experience || "").trim();
+        const education = String(body.education || "").trim();
+        const industry = String(body.industry || "").trim();
+        const scale = String(body.scale || "").trim();
+        const stage = String(body.stage || "").trim();
+        const jobType = String(body.jobType || body.job_type || "").trim();
+        const welfare = String(body.welfare || "").trim();
 
         if (!query) {
           res.statusCode = 400;
@@ -840,6 +847,13 @@ function createRagBridgePlugin() {
         const args = ["search", query];
         if (city) args.push("--city", city);
         if (salary) args.push("--salary", salary);
+        if (experience) args.push("--experience", experience);
+        if (education) args.push("--education", education);
+        if (industry) args.push("--industry", industry);
+        if (scale) args.push("--scale", scale);
+        if (stage) args.push("--stage", stage);
+        if (jobType) args.push("--job-type", jobType);
+        if (welfare) args.push("--welfare", welfare);
 
         const payload = runBossJsonCommand(bridgeConfig, args);
         res.end(JSON.stringify({
@@ -867,6 +881,13 @@ function createRagBridgePlugin() {
         const query = String(body.query || "").trim();
         const city = String(body.city || "北京").trim();
         const salary = String(body.salary || "").trim();
+        const experience = String(body.experience || "").trim();
+        const education = String(body.education || "").trim();
+        const industry = String(body.industry || "").trim();
+        const scale = String(body.scale || "").trim();
+        const stage = String(body.stage || "").trim();
+        const jobType = String(body.jobType || body.job_type || "").trim();
+        const welfare = String(body.welfare || "").trim();
         const count = Number.parseInt(String(body.count || "3"), 10);
 
         if (!query) {
@@ -883,6 +904,13 @@ function createRagBridgePlugin() {
         ];
         if (city) args.push("--city", city);
         if (salary) args.push("--salary", salary);
+        if (experience) args.push("--experience", experience);
+        if (education) args.push("--education", education);
+        if (industry) args.push("--industry", industry);
+        if (scale) args.push("--scale", scale);
+        if (stage) args.push("--stage", stage);
+        if (jobType) args.push("--job-type", jobType);
+        if (welfare) args.push("--welfare", welfare);
 
         const payload = runBossJsonCommand(bridgeConfig, args);
         res.end(JSON.stringify({

@@ -314,10 +314,32 @@ def test_build_args_apply():
 
 
 def test_build_args_batch_greet():
-	args = _build_args("boss_batch_greet", {"query": "python", "limit": 3, "dry_run": True})
+	args = _build_args("boss_batch_greet", {
+		"query": "python",
+		"city": "杭州",
+		"salary": "20-50K",
+		"experience": "3-5年",
+		"education": "本科",
+		"industry": "人工智能",
+		"scale": "100-499人",
+		"stage": "A轮",
+		"job_type": "全职",
+		"welfare": "双休",
+		"limit": 3,
+		"dry_run": True,
+	})
 	assert "batch-greet" in args
 	assert "python" in args
-	assert "--limit" in args
+	assert "--count" in args and "3" in args
+	assert "--city" in args and "杭州" in args
+	assert "--salary" in args and "20-50K" in args
+	assert "--experience" in args and "3-5年" in args
+	assert "--education" in args and "本科" in args
+	assert "--industry" in args and "人工智能" in args
+	assert "--scale" in args and "100-499人" in args
+	assert "--stage" in args and "A轮" in args
+	assert "--job-type" in args and "全职" in args
+	assert "--welfare" in args and "双休" in args
 	assert "--dry-run" in args
 
 

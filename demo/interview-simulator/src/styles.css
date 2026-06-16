@@ -1540,6 +1540,27 @@ button {
   min-width: 110px;
 }
 
+.apply-input--experience,
+.apply-input--education,
+.apply-input--industry,
+.apply-input--scale,
+.apply-input--stage,
+.apply-input--job-type {
+  flex: 0 0 130px;
+  min-width: 112px;
+}
+
+.apply-input--industry,
+.apply-input--scale,
+.apply-input--stage {
+  flex-basis: 150px;
+}
+
+.apply-input--welfare {
+  flex: 1 1 180px;
+  min-width: 150px;
+}
+
 .apply-input--count {
   flex: 0 0 92px;
   min-width: 84px;

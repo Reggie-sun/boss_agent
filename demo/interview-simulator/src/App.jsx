@@ -59,10 +59,23 @@ const defaultBrowserChannel = {
 
 const bossCityOptions = ["北京", "上海", "广州", "深圳", "杭州", "成都", "武汉", "南京", "苏州"];
 const bossSalaryOptions = ["", "3K以下", "3-5K", "5-10K", "10-15K", "10-20K", "20-50K", "50K以上"];
+const bossExperienceOptions = ["", "应届", "1年以内", "1-3年", "3-5年", "5-10年", "10年以上"];
+const bossEducationOptions = ["", "大专", "本科", "硕士", "博士"];
+const bossIndustryOptions = ["", "人工智能", "互联网", "软件/信息服务", "大数据", "云计算", "电子商务", "游戏", "金融", "教育培训", "医疗健康", "制造业"];
+const bossScaleOptions = ["", "0-20人", "20-99人", "100-499人", "500-999人", "1000-9999人", "10000人以上"];
+const bossStageOptions = ["", "未融资", "天使轮", "A轮", "B轮", "C轮", "D轮及以上", "已上市", "不需要融资"];
+const bossJobTypeOptions = ["", "全职", "兼职", "实习"];
 const defaultBossSearchForm = {
   query: "AI Agent",
   city: "广州",
   salary: "20-50K",
+  experience: "",
+  education: "",
+  industry: "人工智能",
+  scale: "",
+  stage: "",
+  jobType: "全职",
+  welfare: "",
   count: "3",
 };
 
@@ -404,6 +417,13 @@ export function App() {
           query,
           city: bossSearchForm.city,
           salary: bossSearchForm.salary,
+          experience: bossSearchForm.experience,
+          education: bossSearchForm.education,
+          industry: bossSearchForm.industry,
+          scale: bossSearchForm.scale,
+          stage: bossSearchForm.stage,
+          jobType: bossSearchForm.jobType,
+          welfare: bossSearchForm.welfare,
         }),
       });
       const payload = await response.json();
@@ -433,6 +453,13 @@ export function App() {
           query,
           city: bossSearchForm.city,
           salary: bossSearchForm.salary,
+          experience: bossSearchForm.experience,
+          education: bossSearchForm.education,
+          industry: bossSearchForm.industry,
+          scale: bossSearchForm.scale,
+          stage: bossSearchForm.stage,
+          jobType: bossSearchForm.jobType,
+          welfare: bossSearchForm.welfare,
           count: bossSearchForm.count,
         }),
       });
@@ -1293,6 +1320,78 @@ export function App() {
                   </option>
                 ))}
               </select>
+              <select
+                className="apply-input apply-input--experience"
+                value={bossSearchForm.experience}
+                onChange={(event) => updateBossSearchForm("experience", event.target.value)}
+              >
+                {bossExperienceOptions.map((experience) => (
+                  <option key={experience || "none"} value={experience}>
+                    {experience || "经验不限"}
+                  </option>
+                ))}
+              </select>
+              <select
+                className="apply-input apply-input--education"
+                value={bossSearchForm.education}
+                onChange={(event) => updateBossSearchForm("education", event.target.value)}
+              >
+                {bossEducationOptions.map((education) => (
+                  <option key={education || "none"} value={education}>
+                    {education || "学历不限"}
+                  </option>
+                ))}
+              </select>
+              <select
+                className="apply-input apply-input--industry"
+                value={bossSearchForm.industry}
+                onChange={(event) => updateBossSearchForm("industry", event.target.value)}
+              >
+                {bossIndustryOptions.map((industry) => (
+                  <option key={industry || "none"} value={industry}>
+                    {industry || "行业不限"}
+                  </option>
+                ))}
+              </select>
+              <select
+                className="apply-input apply-input--scale"
+                value={bossSearchForm.scale}
+                onChange={(event) => updateBossSearchForm("scale", event.target.value)}
+              >
+                {bossScaleOptions.map((scale) => (
+                  <option key={scale || "none"} value={scale}>
+                    {scale || "规模不限"}
+                  </option>
+                ))}
+              </select>
+              <select
+                className="apply-input apply-input--stage"
+                value={bossSearchForm.stage}
+                onChange={(event) => updateBossSearchForm("stage", event.target.value)}
+              >
+                {bossStageOptions.map((stage) => (
+                  <option key={stage || "none"} value={stage}>
+                    {stage || "融资不限"}
+                  </option>
+                ))}
+              </select>
+              <select
+                className="apply-input apply-input--job-type"
+                value={bossSearchForm.jobType}
+                onChange={(event) => updateBossSearchForm("jobType", event.target.value)}
+              >
+                {bossJobTypeOptions.map((jobType) => (
+                  <option key={jobType || "none"} value={jobType}>
+                    {jobType || "类型不限"}
+                  </option>
+                ))}
+              </select>
+              <input
+                className="apply-input apply-input--welfare"
+                placeholder="福利关键词"
+                value={bossSearchForm.welfare}
+                onChange={(event) => updateBossSearchForm("welfare", event.target.value)}
+              />
               <select
                 className="apply-input apply-input--count"
                 value={bossSearchForm.count}
