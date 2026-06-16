@@ -623,6 +623,110 @@ def test_rag_targets_uses_boss_adapter_after_opt_in(monkeypatch, tmp_path: Path)
 	assert parsed["data"]["targets"][0]["security_id"] == "sec_001"
 
 
+def test_agent_watcher_status_returns_recent_tasks(tmp_path: Path):
+	runner = CliRunner()
+	result = runner.invoke(
+		cli,
+		["--json", "--data-dir", str(tmp_path), "agent", "watcher-status"],
+	)
+
+	assert result.exit_code == 0
+	payload = json.loads(result.output)
+	assert payload["ok"] is True
+	assert payload["command"] == "agent-watcher-status"
+	assert payload["data"]["running"] is False
+	assert payload["data"]["tasks"] == []
+
+
+def test_agent_watcher_run_disabled_by_default(tmp_path: Path):
+	runner = CliRunner()
+	result = runner.invoke(
+		cli,
+		["--json", "--data-dir", str(tmp_path), "agent", "watcher-run", "--once"],
+	)
+
+	assert result.exit_code == 0
+	payload = json.loads(result.output)
+	assert payload["ok"] is True
+	assert payload["command"] == "agent-watcher-run"
+	assert payload["data"]["status"] == "paused"
+	assert payload["data"]["reason"] == "watcher_disabled"
+	assert payload["data"]["tasks"] == []
+
+
+def test_agent_watcher_run_once_enabled_returns_run_counts(monkeypatch, tmp_path: Path):
+	(tmp_path / "config.json").write_text(
+		json.dumps({"boss_rag_watcher_enabled": True}),
+		encoding="utf-8",
+	)
+	called = {"run_once": False}
+
+	class _FakeWatcher:
+		def run_once(self):
+			called["run_once"] = True
+			return rag_commands.WatcherRunResult(
+				processed=1,
+				skipped=2,
+				blocked=3,
+				tasks=[{"message_id": "msg_001", "status": "sent"}],
+			)
+
+	monkeypatch.setattr(rag_commands, "_build_passive_watcher", lambda ctx: _FakeWatcher())
+	runner = CliRunner()
+	result = runner.invoke(
+		cli,
+		["--json", "--data-dir", str(tmp_path), "agent", "watcher-run", "--once"],
+	)
+
+	assert result.exit_code == 0
+	assert called["run_once"] is True
+	payload = json.loads(result.output)
+	assert payload["ok"] is True
+	assert payload["command"] == "agent-watcher-run"
+	assert payload["data"]["processed"] == 1
+	assert payload["data"]["skipped"] == 2
+	assert payload["data"]["blocked"] == 3
+	assert payload["data"]["tasks"] == [{"message_id": "msg_001", "status": "sent"}]
+
+
+def test_agent_watcher_pause_and_resume_write_control_audit(tmp_path: Path):
+	runner = CliRunner()
+	pause = runner.invoke(
+		cli,
+		[
+			"--json",
+			"--data-dir",
+			str(tmp_path),
+			"agent",
+			"watcher-pause",
+			"--conversation-id",
+			"conv_001",
+		],
+	)
+	resume = runner.invoke(
+		cli,
+		[
+			"--json",
+			"--data-dir",
+			str(tmp_path),
+			"agent",
+			"watcher-resume",
+			"--conversation-id",
+			"conv_001",
+		],
+	)
+
+	assert pause.exit_code == 0
+	assert resume.exit_code == 0
+	store = RagReplyStore(tmp_path / "boss-rag.sqlite3")
+	logs = [
+		entry
+		for entry in store.list_audit_logs("conv_001")
+		if entry.event_type == "watcher_control"
+	]
+	assert [entry.payload["action"] for entry in logs] == ["pause", "resume"]
+
+
 def test_rag_targets_falls_back_to_cached_targets_when_live_read_disabled(tmp_path: Path):
 	store = RagReplyStore(tmp_path / "boss-rag.sqlite3")
 	store.initialize()

@@ -29,6 +29,8 @@ from boss_agent_cli.rag_reply.models import AuditLogRecord, ConversationRecord, 
 from boss_agent_cli.rag_reply.review import draft_to_payload
 from boss_agent_cli.rag_reply.service import BossRagReplyService
 from boss_agent_cli.rag_reply.store import RagReplyStore
+from boss_agent_cli.rag_reply.watcher import BossPassiveWatcher, WatcherRunResult
+from boss_agent_cli.rag_reply.watcher_config import WatcherConfig
 
 
 @dataclass(slots=True)
@@ -40,6 +42,45 @@ class ResumeSendResult:
 	messages: list[str]
 	error_message: str = ""
 	security_id: str = ""
+
+
+class _CliWatcherDelivery:
+	"""Send watcher replies through the existing chat-reply delivery path."""
+
+	def __init__(self, ctx: click.Context) -> None:
+		self.ctx = ctx
+
+	def send(
+		self,
+		*,
+		security_id: str,
+		message: str,
+		send_attachment_resume: bool = False,
+		resume_file: str = "",
+		target: dict[str, str] | None = None,
+	) -> dict[str, object]:
+		target = target or {}
+		result = execute_chat_reply(
+			self.ctx,
+			security_id=security_id,
+			message=message,
+			send_resume=False,
+			send_attachment_resume=send_attachment_resume,
+			resume_file_path=resume_file or None,
+			target_recruiter_name=str(target.get("recruiter_name") or ""),
+			target_company=str(target.get("company") or ""),
+			target_title=str(target.get("title") or ""),
+		)
+		ok = result.message_sent or (send_attachment_resume and result.resume_sent)
+		return {
+			"ok": ok,
+			"status": "sent" if ok else "send_failed",
+			"message_sent": result.message_sent,
+			"resume_sent": result.resume_sent,
+			"error_message": result.error_message,
+			"results": result.results,
+			"resume_file": result.resume_file_path,
+		}
 
 
 def _workflow_name(ctx: click.Context) -> str:
@@ -113,6 +154,46 @@ def _build_service(ctx: click.Context) -> BossRagReplyService:
 		fallback_adapter=_build_ai_fallback_adapter(ctx),
 		agent_answer_adapter=_build_agent_answer_adapter(ctx),
 	)
+
+
+def _build_watcher_config(ctx: click.Context) -> WatcherConfig:
+	"""Build passive watcher config from the loaded Boss config mapping."""
+	config = ctx.obj.get("config", {}) if ctx and ctx.obj else {}
+	return WatcherConfig.from_mapping(config)
+
+
+def _build_passive_watcher(ctx: click.Context) -> BossPassiveWatcher:
+	"""Construct the passive watcher using the shared RAG service and CLI delivery."""
+	service = _build_service(ctx)
+	return BossPassiveWatcher(
+		store=service.store,
+		service=service,
+		config=_build_watcher_config(ctx),
+		delivery=_CliWatcherDelivery(ctx),
+	)
+
+
+def _watcher_result_payload(result: WatcherRunResult) -> dict[str, object]:
+	"""Serialize a watcher run result for the CLI JSON envelope."""
+	return {
+		"status": "completed",
+		"processed": result.processed,
+		"skipped": result.skipped,
+		"blocked": result.blocked,
+		"tasks": result.tasks,
+	}
+
+
+def _watcher_audit_payload(entry: AuditLogRecord) -> dict[str, object]:
+	"""Serialize watcher audit entries for status/control commands."""
+	return {
+		"log_id": entry.log_id,
+		"event_type": entry.event_type,
+		"entity_type": entry.entity_type,
+		"entity_id": entry.entity_id,
+		"payload": entry.payload,
+		"created_at": entry.created_at,
+	}
 
 
 def _build_boss_adapter(ctx: click.Context) -> BossAutomationAdapter:
@@ -845,6 +926,127 @@ def rag_send_cmd(
 			f"Sent draft {data['draft']['draft_id']} to {data['security_id']}.",
 			err=True,
 		),
+	)
+
+
+@rag_group.command("watcher-status")
+@click.option("--limit", default=10, type=int, show_default=True)
+@click.pass_context
+def rag_watcher_status_cmd(ctx: click.Context, limit: int) -> None:
+	store = _resolve_store(ctx)
+	config = _build_watcher_config(ctx)
+	safe_limit = max(1, min(limit, 50))
+	task_entries = [
+		entry
+		for entry in store.list_audit_logs()
+		if entry.event_type == "watcher_task"
+	]
+	recent_tasks = task_entries[-safe_limit:]
+	handle_output(
+		ctx,
+		_workflow_command(ctx, "watcher-status"),
+		{
+			"running": config.enabled,
+			"dry_run": config.dry_run,
+			"tasks": [_watcher_audit_payload(entry) for entry in recent_tasks],
+		},
+		render=lambda data: click.echo(
+			f"Watcher is {'enabled' if data['running'] else 'paused'}; {len(data['tasks'])} recent task(s).",
+			err=True,
+		),
+	)
+
+
+@rag_group.command("watcher-run")
+@click.option("--once", is_flag=True, default=False)
+@click.pass_context
+def rag_watcher_run_cmd(ctx: click.Context, once: bool) -> None:
+	if not once:
+		handle_error_output(
+			ctx,
+			_workflow_command(ctx, "watcher-run"),
+			code="INVALID_PARAM",
+			message="watcher-run currently requires --once.",
+			recoverable=True,
+			recovery_action="Run agent watcher-run --once.",
+		)
+		return
+	config = _build_watcher_config(ctx)
+	if not config.enabled:
+		handle_output(
+			ctx,
+			_workflow_command(ctx, "watcher-run"),
+			{
+				"status": "paused",
+				"reason": "watcher_disabled",
+				"processed": 0,
+				"skipped": 0,
+				"blocked": 0,
+				"tasks": [],
+			},
+			render=lambda data: click.echo("Watcher is disabled; no tasks processed.", err=True),
+		)
+		return
+	watcher = _build_passive_watcher(ctx)
+	payload = _watcher_result_payload(watcher.run_once())
+	handle_output(
+		ctx,
+		_workflow_command(ctx, "watcher-run"),
+		payload,
+		render=lambda data: click.echo(
+			f"Watcher processed {data['processed']} task(s), skipped {data['skipped']}, blocked {data['blocked']}.",
+			err=True,
+		),
+	)
+
+
+def _write_watcher_control(ctx: click.Context, *, action: str, conversation_id: str | None) -> dict[str, object]:
+	store = _resolve_store(ctx)
+	target = str(conversation_id or "").strip()
+	entity_type = "conversation" if target else "watcher"
+	entity_id = target or "global"
+	store.append_audit_log(
+		AuditLogRecord.new(
+			event_type="watcher_control",
+			entity_type=entity_type,
+			entity_id=entity_id,
+			payload={
+				"action": action,
+				"conversation_id": target,
+				"scope": "conversation" if target else "global",
+			},
+		)
+	)
+	return {
+		"action": action,
+		"conversation_id": target,
+		"scope": "conversation" if target else "global",
+	}
+
+
+@rag_group.command("watcher-pause")
+@click.option("--conversation-id", default=None)
+@click.pass_context
+def rag_watcher_pause_cmd(ctx: click.Context, conversation_id: str | None) -> None:
+	payload = _write_watcher_control(ctx, action="pause", conversation_id=conversation_id)
+	handle_output(
+		ctx,
+		_workflow_command(ctx, "watcher-pause"),
+		payload,
+		render=lambda data: click.echo(f"Watcher pause recorded for {data['scope']}.", err=True),
+	)
+
+
+@rag_group.command("watcher-resume")
+@click.option("--conversation-id", default=None)
+@click.pass_context
+def rag_watcher_resume_cmd(ctx: click.Context, conversation_id: str | None) -> None:
+	payload = _write_watcher_control(ctx, action="resume", conversation_id=conversation_id)
+	handle_output(
+		ctx,
+		_workflow_command(ctx, "watcher-resume"),
+		payload,
+		render=lambda data: click.echo(f"Watcher resume recorded for {data['scope']}.", err=True),
 	)
 
 
