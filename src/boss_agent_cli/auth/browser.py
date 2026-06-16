@@ -28,6 +28,11 @@ _PLATFORM_BROWSER_CONFIG: dict[str, dict[str, str]] = {
 	},
 }
 
+_RAW_CDP_TARGET_PATTERNS: dict[str, tuple[str, ...]] = {
+	"zhipin": ("/web/geek/chat", "/web/geek", "www.zhipin.com"),
+	"zhilian": ("zhaopin.com",),
+}
+
 
 def _sync_playwright() -> Any:
 	try:
@@ -100,13 +105,33 @@ def login_via_cdp(*, cdp_url: str | None = None, timeout: int = 120, platform: s
 	if not ws_url:
 		raise ConnectionError("CDP 不可用，请先运行 boss-chrome 启动带调试端口的 Chrome")
 
-	print("[boss] 正在 CDP Chrome 中打开登录页...", file=sys.stderr)
+	existing_token = _extract_existing_token_via_raw_cdp(cdp_url=cdp_url, platform=platform)
+	if existing_token is not None:
+		print("[boss] 复用当前 CDP 页面中的有效登录态。", file=sys.stderr)
+		return existing_token
+
 	pw = _sync_playwright()().start()
 	browser = pw.chromium.connect_over_cdp(ws_url)
 	ctx = browser.contexts[0] if browser.contexts else browser.new_context()
 	page = ctx.new_page()
 
 	try:
+		all_cookies = {c["name"]: c["value"] for c in ctx.cookies() if cookie_domain in c.get("domain", "")}
+		if platform == "zhipin" and all_cookies.get(success_cookie):
+			ua = page.evaluate("navigator.userAgent")
+			stoken = str(all_cookies.get("__zp_stoken__", "") or "")
+			if stoken:
+				print("[boss] 复用当前 CDP profile 中的有效登录 cookie。", file=sys.stderr)
+				return {"cookies": all_cookies, "stoken": stoken, "user_agent": ua}
+			try:
+				_warm_home_for_runtime(page, home_url, stage="CDP 已有登录 cookie，补全 stoken")
+			except Exception:
+				pass
+			all_cookies = {c["name"]: c["value"] for c in ctx.cookies() if cookie_domain in c.get("domain", "")}
+			stoken = _extract_stoken(page) or str(all_cookies.get("__zp_stoken__", "") or "")
+			return {"cookies": all_cookies, "stoken": stoken, "user_agent": ua}
+
+		print("[boss] 正在 CDP Chrome 中打开登录页...", file=sys.stderr)
 		try:
 			page.goto(
 				login_page_url,
@@ -228,6 +253,10 @@ def login_via_browser(*, timeout: int = 120, platform: str = "zhipin") -> dict[s
 
 def refresh_stoken_via_cdp(cdp_url: str | None = None) -> str:
 	"""通过 CDP Chrome 刷新 stoken（指纹一致，不会被拒）。"""
+	existing_token = _extract_existing_token_via_raw_cdp(cdp_url=cdp_url, platform="zhipin")
+	if existing_token is not None and existing_token.get("stoken"):
+		return cast("str", existing_token["stoken"])
+
 	ws_url = probe_cdp(cdp_url)
 	if not ws_url:
 		raise ConnectionError("CDP 不可用")
@@ -282,3 +311,144 @@ def _extract_stoken(page: Any) -> str:
 		return cast("str", stoken)
 	except Exception:
 		return ""
+
+
+def _extract_existing_token_via_raw_cdp(*, cdp_url: str | None = None, platform: str = "zhipin") -> dict[str, Any] | None:
+	"""Best-effort: directly read credentials from an already-open user tab via raw CDP.
+
+	This avoids `patchright.connect_over_cdp()` in environments where attach is
+	flaky, while still reusing the exact Chrome profile the user is actively using.
+	"""
+	config = _get_platform_config(platform)
+	target_ws = _pick_existing_platform_tab_ws(cdp_url or _DEFAULT_CDP_URL, platform=platform)
+	if not target_ws:
+		return None
+
+	try:
+		payload = _read_platform_token_via_cdp(target_ws, platform=platform)
+	except Exception:
+		return None
+
+	cookies = payload.get("cookies", {})
+	if not isinstance(cookies, dict) or not cookies.get(config["success_cookie"]):
+		return None
+
+	result: dict[str, Any] = {
+		"cookies": cookies,
+		"user_agent": str(payload.get("user_agent") or ""),
+		"stoken": str(payload.get("stoken") or ""),
+	}
+	if platform == "zhilian":
+		client_id = str(payload.get("x_zp_client_id") or "")
+		if client_id:
+			result["x_zp_client_id"] = client_id
+	return result
+
+
+def _pick_existing_platform_tab_ws(cdp_http_url: str, *, platform: str) -> str | None:
+	import json as _json
+	import urllib.request
+
+	list_url = cdp_http_url.rstrip("/") + "/json"
+	patterns = _RAW_CDP_TARGET_PATTERNS.get(platform, ())
+	try:
+		with urllib.request.urlopen(list_url, timeout=_CDP_PROBE_TIMEOUT) as resp:
+			tabs = _json.load(resp)
+	except Exception:
+		return None
+
+	for pattern in patterns:
+		for tab in tabs:
+			if tab.get("type") != "page":
+				continue
+			url = str(tab.get("url") or "")
+			if pattern in url and tab.get("webSocketDebuggerUrl"):
+				return cast("str", tab["webSocketDebuggerUrl"])
+	return None
+
+
+def _read_platform_token_via_cdp(target_ws: str, *, platform: str) -> dict[str, Any]:
+	import json as _json
+
+	import websockets.sync.client as _ws_client
+
+	config = _get_platform_config(platform)
+	domain_fragment = config["cookie_domain"]
+	urls = [config["home_url"], config["login_page_url"]]
+	if platform == "zhipin":
+		urls.append("https://www.zhipin.com/web/geek/chat")
+
+	with _ws_client.connect(target_ws, max_size=4 * 1024 * 1024) as ws:
+		requests = [
+			{"id": 1, "method": "Network.enable"},
+			{"id": 2, "method": "Runtime.enable"},
+			{"id": 3, "method": "Network.getCookies", "params": {"urls": urls}},
+			{
+				"id": 4,
+				"method": "Runtime.evaluate",
+				"params": {
+					"expression": """
+						(() => JSON.stringify({
+							userAgent: navigator.userAgent || '',
+							stoken: window.__zp_stoken__ || '',
+							clientId:
+								window.localStorage.getItem('x-zp-client-id') ||
+								window.localStorage.getItem('x_zp_client_id') ||
+								window.localStorage.getItem('clientId') ||
+								window.sessionStorage.getItem('x-zp-client-id') ||
+								window.sessionStorage.getItem('x_zp_client_id') ||
+								window.sessionStorage.getItem('clientId') ||
+								''
+						}))()
+					""",
+					"returnByValue": True,
+					"awaitPromise": True,
+				},
+			},
+		]
+		for request in requests:
+			ws.send(_json.dumps(request))
+
+		deadline = time.time() + 10.0
+		cookies: dict[str, Any] = {}
+		user_agent = ""
+		stoken = ""
+		client_id = ""
+		pending = {1, 2, 3, 4}
+
+		while pending and time.time() < deadline:
+			raw = ws.recv(timeout=max(0.1, deadline - time.time()))
+			msg = _json.loads(raw)
+			msg_id = msg.get("id")
+			if msg_id not in pending:
+				continue
+			if msg.get("error"):
+				raise RuntimeError(f"CDP request failed: {msg['error']}")
+			pending.remove(msg_id)
+
+			if msg_id == 3:
+				cookies = {
+					item["name"]: item["value"]
+					for item in msg.get("result", {}).get("cookies", [])
+					if domain_fragment in str(item.get("domain") or "")
+				}
+				continue
+
+			if msg_id == 4:
+				try:
+					payload = _json.loads(msg.get("result", {}).get("result", {}).get("value") or "{}")
+				except Exception:
+					payload = {}
+				user_agent = str(payload.get("userAgent") or "")
+				stoken = str(payload.get("stoken") or "")
+				client_id = str(payload.get("clientId") or "")
+
+		if pending:
+			raise RuntimeError("CDP credential extraction timed out")
+
+	return {
+		"cookies": cookies,
+		"user_agent": user_agent,
+		"stoken": stoken or str(cookies.get("__zp_stoken__", "") or ""),
+		"x_zp_client_id": client_id,
+	}
