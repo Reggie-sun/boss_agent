@@ -108,6 +108,14 @@ def test_search_jobs_unknown_salary_does_not_crash():
 	assert "salary" not in params
 
 
+def test_search_jobs_raw_salary_code_is_applied():
+	"""允许从 BOSS URL 或前端高级输入透传原始 salary code。"""
+	client = _make_client()
+	client.search_jobs("python", salary="406")
+	params = client._browser_request.call_args.kwargs["params"]
+	assert params["salary"] == "406"
+
+
 def test_recommend_jobs_default_page():
 	client = _make_client()
 	client.recommend_jobs()

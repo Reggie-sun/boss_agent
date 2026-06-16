@@ -179,7 +179,9 @@ class BossClient:
 				raise ValueError(f"未知城市: {city}")
 			params["city"] = code
 		if salary := filters.get("salary"):
-			code = filters.get("salary_code") or endpoints.SALARY_CODES.get(salary)
+			code = filters.get("salary_code") or (
+				salary if str(salary).isdigit() else endpoints.SALARY_CODES.get(salary)
+			)
 			if code:
 				params["salary"] = code
 		if exp := filters.get("experience"):
