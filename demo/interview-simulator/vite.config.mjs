@@ -867,7 +867,7 @@ function createRagBridgePlugin() {
           return true;
         }
 
-        const args = ["search", query];
+        const args = ["search", query, "--no-cache"];
         if (city) args.push("--city", city);
         if (salary) args.push("--salary", salary);
         if (experience) args.push("--experience", experience);
@@ -885,7 +885,7 @@ function createRagBridgePlugin() {
         }));
       } catch (error) {
         const p = error?.commandPayload;
-        res.statusCode = 500;
+        res.statusCode = p?.error?.recoverable ? 400 : 500;
         res.end(JSON.stringify({
           ok: false,
           errorMessage: error instanceof Error ? error.message : "搜索失败",

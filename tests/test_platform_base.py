@@ -87,6 +87,11 @@ class TestBossEnvelopeAdapter:
 		code, _ = self.plat.parse_error({"code": "ERR", "message": "request timeout"})
 		assert code == "NETWORK_ERROR"
 
+	def test_parse_error_failed_fetch_as_network_error(self) -> None:
+		code, msg = self.plat.parse_error({"code": -1, "message": "Failed to fetch"})
+		assert code == "NETWORK_ERROR"
+		assert "平台请求失败" in msg
+
 
 class TestBossPlatformDelegation:
 	"""BossPlatform 委托给底层 BossClient。"""

@@ -454,3 +454,58 @@ def test_batch_greet_applies_company_and_job_type_filters(mock_cache_cls, mock_a
 	assert parsed["ok"] is True
 	assert parsed["data"]["count"] == 1
 	assert parsed["data"]["candidates"][0]["security_id"] == "sec_good"
+
+
+@patch("boss_agent_cli.commands.greet.get_platform_instance")
+@patch("boss_agent_cli.commands.greet.AuthManager")
+@patch("boss_agent_cli.commands.greet.CacheStore")
+def test_batch_greet_scans_more_pages_for_company_filters(mock_cache_cls, mock_auth_cls, mock_client_cls):
+	"""本地公司筛选可能筛空第一页，应继续翻页寻找可开聊候选。"""
+	mock_cache = _ctx_mock(mock_cache_cls)
+	mock_cache.is_greeted.return_value = False
+	mock_client = _ctx_mock(mock_client_cls)
+	mismatch = _make_raw_job("第一页不匹配", "sec_bad")
+	mismatch["cityName"] = "广州"
+	mismatch["brandIndustry"] = "金融"
+	match = _make_raw_job("第二页匹配", "sec_good")
+	match["cityName"] = "广州"
+	match["brandIndustry"] = "人工智能"
+	mock_client.search_jobs.side_effect = [
+		{
+			"zpData": {
+				"hasMore": True,
+				"jobList": [mismatch],
+			},
+		},
+		{
+			"zpData": {
+				"hasMore": False,
+				"jobList": [match],
+			},
+		},
+	]
+	mock_client.is_success.return_value = True
+
+	runner = CliRunner()
+	result = runner.invoke(
+		cli,
+		[
+			"batch-greet",
+			"AI Agent",
+			"--city",
+			"广州",
+			"--industry",
+			"人工智能",
+			"--job-type",
+			"全职",
+			"--count",
+			"3",
+			"--dry-run",
+		],
+	)
+	assert result.exit_code == 0, result.output
+	parsed = json.loads(result.output)
+	assert parsed["ok"] is True
+	assert parsed["data"]["count"] == 1
+	assert parsed["data"]["candidates"][0]["security_id"] == "sec_good"
+	assert mock_client.search_jobs.call_count == 2

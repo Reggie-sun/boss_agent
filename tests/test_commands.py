@@ -562,6 +562,64 @@ def test_search_supports_url_and_multiselect_filters(mock_client_cls, mock_auth_
 	}
 
 
+@patch("boss_agent_cli.commands.search.run_search_pipeline")
+@patch("boss_agent_cli.commands.search.CacheStore")
+@patch("boss_agent_cli.commands.search.AuthManager")
+@patch("boss_agent_cli.commands.search.get_platform_instance")
+def test_search_scans_more_pages_for_local_company_filters(mock_client_cls, mock_auth_cls, mock_cache_cls, mock_pipeline):
+	mock_cache = _ctx_mock(mock_cache_cls)
+	mock_cache.get_search.return_value = None
+	_ctx_mock(mock_client_cls)
+	mock_pipeline.return_value = SimpleNamespace(
+		items=[],
+		has_more=False,
+		total=0,
+		stats=SimpleNamespace(
+			pages_scanned=2,
+			jobs_seen=20,
+			jobs_prefiltered=20,
+			detail_checks=0,
+		),
+	)
+
+	runner = CliRunner()
+	result = runner.invoke(cli, ["search", "AI Agent", "--city", "广州", "--industry", "人工智能", "--job-type", "全职"])
+
+	assert result.exit_code == 0
+	criteria = mock_pipeline.call_args.kwargs["criteria"]
+	assert criteria.industry == "人工智能"
+	assert criteria.job_type == "全职"
+	assert criteria.raw_params == {}
+	assert mock_pipeline.call_args.kwargs["max_pages"] == 5
+
+
+@patch("boss_agent_cli.commands.search.run_search_pipeline")
+@patch("boss_agent_cli.commands.search.CacheStore")
+@patch("boss_agent_cli.commands.search.AuthManager")
+@patch("boss_agent_cli.commands.search.get_platform_instance")
+def test_search_no_cache_still_runs_pipeline(mock_client_cls, mock_auth_cls, mock_cache_cls, mock_pipeline):
+	mock_cache = _ctx_mock(mock_cache_cls)
+	_ctx_mock(mock_client_cls)
+	mock_pipeline.return_value = SimpleNamespace(
+		items=[],
+		has_more=False,
+		total=0,
+		stats=SimpleNamespace(
+			pages_scanned=1,
+			jobs_seen=0,
+			jobs_prefiltered=0,
+			detail_checks=0,
+		),
+	)
+
+	runner = CliRunner()
+	result = runner.invoke(cli, ["search", "AI Agent", "--no-cache"])
+
+	assert result.exit_code == 0
+	mock_cache.get_search.assert_not_called()
+	mock_pipeline.assert_called_once()
+
+
 def test_search_rejects_non_boss_url():
 	runner = CliRunner()
 	result = runner.invoke(cli, ["search", "--url", "https://example.com/jobs?query=Python"])
@@ -1608,6 +1666,26 @@ def test_search_reports_pipeline_platform_error(mock_client_cls, mock_auth_cls, 
 	assert parsed["ok"] is False
 	assert parsed["error"]["code"] == "UPSTREAM_ERROR"
 	assert parsed["error"]["message"] == "service unavailable"
+
+
+@patch("boss_agent_cli.commands.search.run_search_pipeline")
+@patch("boss_agent_cli.commands.search.CacheStore")
+@patch("boss_agent_cli.commands.search.AuthManager")
+@patch("boss_agent_cli.commands.search.get_platform_instance")
+def test_search_reports_pipeline_network_error_recoverable(mock_client_cls, mock_auth_cls, mock_cache_cls, mock_pipeline):
+	mock_cache = _ctx_mock(mock_cache_cls)
+	mock_cache.get_search.return_value = None
+	_ctx_mock(mock_client_cls)
+	mock_pipeline.side_effect = SearchPipelinePlatformError("NETWORK_ERROR", "平台请求失败：浏览器 fetch 未完成，请重试。")
+
+	runner = CliRunner()
+	result = runner.invoke(cli, ["search", "golang"])
+
+	assert result.exit_code == 1
+	parsed = json.loads(result.output)
+	assert parsed["error"]["code"] == "NETWORK_ERROR"
+	assert parsed["error"]["recoverable"] is True
+	assert parsed["error"]["recovery_action"] == "重试"
 
 
 @patch("boss_agent_cli.commands.search.CacheStore")

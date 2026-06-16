@@ -102,6 +102,8 @@ class Platform(ABC):
 			return "RATE_LIMITED", message
 		if any(token in lower_msg for token in ("risk", "forbidden", "风控", "安全验证", "异常访问")):
 			return "ACCOUNT_RISK", message
+		if "failed to fetch" in lower_msg:
+			return "NETWORK_ERROR", "平台请求失败：浏览器 fetch 未完成，请重试；如果连续失败，请刷新登录状态。"
 		if any(token in lower_msg for token in ("timeout", "timed out", "network", "connection", "网络", "连接")):
 			return "NETWORK_ERROR", message
 

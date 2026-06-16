@@ -226,6 +226,13 @@ class TestPrefilterJob:
 		assert any("融资" in r for r in reasons)
 		assert any("职位类型" in r for r in reasons)
 
+	def test_narrow_industry_allows_broad_card_label(self):
+		raw = _make_raw(industry="互联网")
+		criteria = SearchFilterCriteria(query="AI Agent", industry="人工智能")
+		ok, reasons = prefilter_job(raw, criteria)
+		assert ok is True
+		assert reasons == []
+
 	def test_missing_company_filter_fields_pass(self):
 		raw = _make_raw()
 		for key in ("brandIndustry", "brandScaleName", "brandStageName", "jobTypeName"):

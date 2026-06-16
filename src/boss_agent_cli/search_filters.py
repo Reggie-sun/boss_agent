@@ -36,6 +36,14 @@ WELFARE_KEYWORDS: dict[str, list[str]] = {
 	"加班补助": ["加班补助"],
 }
 
+_INDUSTRY_CARD_COMPATIBLE_LABELS: dict[str, set[str]] = {
+	"人工智能": {"互联网", "软件/信息服务"},
+	"大数据": {"互联网", "软件/信息服务"},
+	"云计算": {"互联网", "软件/信息服务"},
+	"电子商务": {"互联网"},
+	"游戏": {"互联网", "软件/信息服务"},
+}
+
 _MAX_FILTER_PAGES = 5
 _WELFARE_WORKERS = 3
 
@@ -265,6 +273,18 @@ class SearchPipelinePlatformError(Exception):
 		super().__init__(message)
 
 
+def requires_extended_prefilter_scan(
+	criteria: SearchFilterCriteria,
+	welfare_conditions: list[tuple[str, list[str]]] | None = None,
+) -> bool:
+	"""Return True when local filters can empty early pages after remote search."""
+	if welfare_conditions:
+		return True
+	if criteria.salary and not resolve_salary_code_param(criteria.salary):
+		return True
+	return any((criteria.industry, criteria.scale, criteria.stage, criteria.job_type))
+
+
 # ── List-page prefilter ─────────────────────────────────────────────
 
 def _extract_filter_values(raw_item: dict[str, Any], keys: tuple[str, ...]) -> list[str]:
@@ -289,6 +309,18 @@ def _filter_tokens(value: str | None, lookup: dict[str, str] | None = None) -> l
 	return tokens
 
 
+def _lookup_labels(values: list[str], lookup: dict[str, str]) -> set[str]:
+	reverse_lookup = {code: label for label, code in lookup.items()}
+	labels: set[str] = set()
+	for value in values:
+		if value in reverse_lookup:
+			labels.add(reverse_lookup[value])
+		for label in lookup:
+			if value == label or label in value or value in label:
+				labels.add(label)
+	return labels
+
+
 def _matches_filter_values(item_values: list[str], required: str | None, lookup: dict[str, str] | None = None) -> bool:
 	if not item_values:
 		return True
@@ -299,6 +331,17 @@ def _matches_filter_values(item_values: list[str], required: str | None, lookup:
 		for expected in required_tokens:
 			if expected == item_value or expected in item_value or item_value in expected:
 				return True
+	return False
+
+
+def _matches_industry_values(item_values: list[str], required: str | None) -> bool:
+	if _matches_filter_values(item_values, required, endpoints.INDUSTRY_CODES):
+		return True
+	required_labels = _lookup_labels(_split_multi_value(required or ""), endpoints.INDUSTRY_CODES)
+	item_labels = _lookup_labels(item_values, endpoints.INDUSTRY_CODES)
+	for required_label in required_labels:
+		if item_labels & _INDUSTRY_CARD_COMPATIBLE_LABELS.get(required_label, set()):
+			return True
 	return False
 
 
@@ -347,14 +390,9 @@ def prefilter_job(raw_item: dict[str, Any], criteria: SearchFilterCriteria) -> t
 			reasons.append(f"学历不足: {item_edu} < {criteria.education}")
 
 	if criteria.industry:
-		_append_filter_reason(
-			reasons,
-			raw_item,
-			criteria_value=criteria.industry,
-			fields=("brandIndustry", "industryName", "industry"),
-			label="行业",
-			lookup=endpoints.INDUSTRY_CODES,
-		)
+		item_values = _extract_filter_values(raw_item, ("brandIndustry", "industryName", "industry"))
+		if item_values and not _matches_industry_values(item_values, criteria.industry):
+			reasons.append(f"行业不匹配: {', '.join(item_values)} != {criteria.industry}")
 
 	if criteria.scale:
 		_append_filter_reason(
@@ -515,10 +553,6 @@ def run_search_pipeline(
 			"salary": criteria.salary,
 			"experience": criteria.experience,
 			"education": criteria.education,
-			"industry": criteria.industry,
-			"scale": criteria.scale,
-			"stage": criteria.stage,
-			"job_type": criteria.job_type,
 			"page": current_page,
 		}
 		if criteria.raw_params:

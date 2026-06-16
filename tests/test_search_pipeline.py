@@ -118,14 +118,38 @@ def test_pipeline_passes_raw_params_to_search_client():
 			"salary": None,
 			"experience": None,
 			"education": None,
-			"industry": None,
-			"scale": None,
-			"stage": None,
-			"job_type": None,
 			"page": 1,
 			"raw_params": {"city": "101280100", "experience": "108,104"},
 		},
 	}
+
+
+def test_pipeline_keeps_company_filters_local():
+	client = FakeClient(
+		pages=[{"zpData": {"hasMore": False, "jobList": [_make_job_raw(security_id="sec-1", job_id="job-1")]}}],
+		descriptions={},
+	)
+
+	run_search_pipeline(
+		client,
+		FakeCache(),
+		FakeLogger(),
+		criteria=SearchFilterCriteria(
+			query="AI Agent",
+			city="广州",
+			industry="人工智能",
+			scale="100-499人",
+			stage="A轮",
+			job_type="全职",
+		),
+	)
+
+	filters = client.search_calls[0]["filters"]
+	assert filters["city"] == "广州"
+	assert "industry" not in filters
+	assert "scale" not in filters
+	assert "stage" not in filters
+	assert "job_type" not in filters
 
 
 def test_pipeline_detail_exception_does_not_abort_other_matches():

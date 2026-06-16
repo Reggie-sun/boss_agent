@@ -18,6 +18,7 @@ from boss_agent_cli.search_filters import (
 	parse_boss_search_url,
 	resolve_search_code_params,
 	resolve_welfare_keywords,
+	requires_extended_prefilter_scan,
 	run_search_pipeline,
 )
 
@@ -101,7 +102,8 @@ def search_cmd(ctx: click.Context, query: str | None, search_url: str | None, pr
 	except ValueError as exc:
 		handle_error_output(ctx, "search", code="INVALID_PARAM", message=str(exc))
 		return
-	raw_params.update({key: value for key, value in code_params.items() if value})
+	local_prefilter_params = {"industry", "scale", "stage", "jobType"}
+	raw_params.update({key: value for key, value in code_params.items() if value and key not in local_prefilter_params})
 
 	# 解析福利关键词（支持逗号分隔的多条件组合）
 	welfare_conditions = None
@@ -139,7 +141,7 @@ def search_cmd(ctx: click.Context, query: str | None, search_url: str | None, pr
 
 		auth = AuthManager(data_dir, logger=logger, platform=ctx.obj.get("platform", "zhipin"))
 		with get_platform_instance(ctx, auth) as platform:
-			max_pages = 5 if welfare_conditions else 1
+			max_pages = 5 if requires_extended_prefilter_scan(criteria, welfare_conditions) else 1
 			try:
 				pipeline_result = run_search_pipeline(
 					platform, cache, logger,
@@ -149,70 +151,72 @@ def search_cmd(ctx: click.Context, query: str | None, search_url: str | None, pr
 					welfare_conditions=welfare_conditions,
 				)
 			except SearchPipelinePlatformError as exc:
+				recoverable = exc.code == "NETWORK_ERROR"
 				handle_error_output(
 					ctx, "search",
 					code=exc.code,
 					message=exc.message or "搜索结果获取失败",
-					recoverable=False,
+					recoverable=recoverable,
+					recovery_action="重试" if recoverable else None,
 					details=exc.details,
 				)
 				return
-			items = pipeline_result.items
-			if with_score:
-				items = [score_job_dict(item, criteria=criteria, expect_data=None) for item in items]
-			try_save_index(data_dir, items, source=f"search:{query}", logger=logger)
+		items = pipeline_result.items
+		if with_score:
+			items = [score_job_dict(item, criteria=criteria, expect_data=None) for item in items]
+		try_save_index(data_dir, items, source=f"search:{query}", logger=logger)
 
-			# Emit search_completed hook
-			hooks = ctx.obj.get("hooks")
-			if hooks:
-				hooks.search_completed.call({
-					"query": query,
-					"url": search_url,
-					"page": page,
-					"result_count": len(items),
-					"stats": {
-						"pages_scanned": pipeline_result.stats.pages_scanned,
-						"jobs_seen": pipeline_result.stats.jobs_seen,
-						"jobs_prefiltered": pipeline_result.stats.jobs_prefiltered,
-						"detail_checks": pipeline_result.stats.detail_checks,
-					},
-					"source": "search",
-				})
-
-			pagination = {
+		# Emit search_completed hook
+		hooks = ctx.obj.get("hooks")
+		if hooks:
+			hooks.search_completed.call({
+				"query": query,
+				"url": search_url,
 				"page": page,
-				"has_more": pipeline_result.has_more,
-				"total": pipeline_result.total or len(items),
-			}
-			hints = {
-				"next_actions": [
-					"使用 boss detail <security_id> 查看职位详情",
-					"如需投递或沟通，请回到平台官网由用户手动完成",
-				],
-			}
-			if pipeline_result.has_more and not welfare_conditions:
-				hints["next_actions"].append(
-					f"使用 boss search <query> --page {page + 1} 查看下一页"
-				)
+				"result_count": len(items),
+				"stats": {
+					"pages_scanned": pipeline_result.stats.pages_scanned,
+					"jobs_seen": pipeline_result.stats.jobs_seen,
+					"jobs_prefiltered": pipeline_result.stats.jobs_prefiltered,
+					"detail_checks": pipeline_result.stats.detail_checks,
+				},
+				"source": "search",
+			})
 
-			# 缓存普通搜索结果
-			if not welfare_conditions and not with_score:
-				search_params = {
-					"query": query, "city": city, "salary": salary,
-					"experience": experience, "education": education,
-					"industry": industry, "scale": scale, "stage": stage,
-					"job_type": job_type, "url": search_url, "raw_params": raw_params, "page": page,
-				}
-				cache_data = {"data": items, "pagination": pagination, "hints": hints}
-				cache.put_search(search_params, json.dumps(cache_data, ensure_ascii=False))
-
-			title_suffix = " (welfare filter)" if welfare_conditions else ""
-			handle_output(
-				ctx, "search", items,
-				render=lambda data: render_job_table(
-					data, f"search: {query}{title_suffix}",
-					page=page,
-					hint_next=f"more: boss search \"{query}\" --page {page + 1}" if pipeline_result.has_more and not welfare_conditions else "",
-				),
-				pagination=pagination, hints=hints,
+		pagination = {
+			"page": page,
+			"has_more": pipeline_result.has_more,
+			"total": pipeline_result.total or len(items),
+		}
+		hints = {
+			"next_actions": [
+				"使用 boss detail <security_id> 查看职位详情",
+				"如需投递或沟通，请回到平台官网由用户手动完成",
+			],
+		}
+		if pipeline_result.has_more and not welfare_conditions:
+			hints["next_actions"].append(
+				f"使用 boss search <query> --page {page + 1} 查看下一页"
 			)
+
+		# 缓存普通搜索结果
+		if not welfare_conditions and not with_score:
+			search_params = {
+				"query": query, "city": city, "salary": salary,
+				"experience": experience, "education": education,
+				"industry": industry, "scale": scale, "stage": stage,
+				"job_type": job_type, "url": search_url, "raw_params": raw_params, "page": page,
+			}
+			cache_data = {"data": items, "pagination": pagination, "hints": hints}
+			cache.put_search(search_params, json.dumps(cache_data, ensure_ascii=False))
+
+		title_suffix = " (welfare filter)" if welfare_conditions else ""
+		handle_output(
+			ctx, "search", items,
+			render=lambda data: render_job_table(
+				data, f"search: {query}{title_suffix}",
+				page=page,
+				hint_next=f"more: boss search \"{query}\" --page {page + 1}" if pipeline_result.has_more and not welfare_conditions else "",
+			),
+			pagination=pagination, hints=hints,
+		)

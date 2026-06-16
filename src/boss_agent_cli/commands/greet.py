@@ -23,7 +23,7 @@ from boss_agent_cli.display import (
 from boss_agent_cli.search_filters import (
 	SearchFilterCriteria,
 	SearchPipelinePlatformError,
-	resolve_salary_code_param,
+	requires_extended_prefilter_scan,
 	resolve_welfare_keywords,
 	run_search_pipeline,
 )
@@ -228,12 +228,6 @@ def batch_greet_cmd(
 				labels = [w.strip() for w in welfare.split(",") if w.strip()]
 				welfare_conditions = [(label, resolve_welfare_keywords(label)) for label in labels]
 
-			try:
-				salary_requires_local_filter = bool(salary and not resolve_salary_code_param(salary))
-			except ValueError as exc:
-				handle_error_output(ctx, "batch-greet", code="INVALID_PARAM", message=str(exc))
-				return
-
 			criteria = SearchFilterCriteria(
 				query=query,
 				city=city,
@@ -246,23 +240,30 @@ def batch_greet_cmd(
 				job_type=job_type,
 			)
 			try:
+				max_pages = 5 if requires_extended_prefilter_scan(criteria, welfare_conditions) else 1
+			except ValueError as exc:
+				handle_error_output(ctx, "batch-greet", code="INVALID_PARAM", message=str(exc))
+				return
+			try:
 				pipeline_result = run_search_pipeline(
 					platform,
 					cache,
 					logger,
 					criteria=criteria,
-					max_pages=5 if welfare_conditions or salary_requires_local_filter else 1,
+					max_pages=max_pages,
 					limit=count,
 					welfare_conditions=welfare_conditions,
 					skip_greeted=True,
 				)
 			except SearchPipelinePlatformError as exc:
+				recoverable = exc.code == "NETWORK_ERROR"
 				handle_error_output(
 					ctx,
 					"batch-greet",
 					code=exc.code,
 					message=exc.message or "搜索结果获取失败",
-					recoverable=False,
+					recoverable=recoverable,
+					recovery_action="重试" if recoverable else None,
 					details=exc.details,
 				)
 				return
