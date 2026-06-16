@@ -186,13 +186,14 @@ def _watcher_result_payload(result: WatcherRunResult) -> dict[str, object]:
 
 def _watcher_audit_payload(entry: AuditLogRecord) -> dict[str, object]:
 	"""Serialize watcher audit entries for status/control commands."""
+	payload = dict(entry.payload) if isinstance(entry.payload, dict) else {}
 	return {
 		"log_id": entry.log_id,
 		"event_type": entry.event_type,
 		"entity_type": entry.entity_type,
 		"entity_id": entry.entity_id,
-		"payload": entry.payload,
 		"created_at": entry.created_at,
+		**payload,
 	}
 
 

@@ -9,7 +9,7 @@ from boss_agent_cli.commands.chat_reply import ChatReplyExecutionResult
 from boss_agent_cli.ai.config import AIConfigStore
 from boss_agent_cli.main import cli
 from boss_agent_cli.rag_reply.adapters.boss_automation import SyncJobsResult, SyncMessagesResult
-from boss_agent_cli.rag_reply.models import ConversationRecord, DraftRecord, MessageRecord, RecruiterRecord
+from boss_agent_cli.rag_reply.models import AuditLogRecord, ConversationRecord, DraftRecord, MessageRecord, RecruiterRecord
 from boss_agent_cli.rag_reply.service import BossRagReplyService
 from boss_agent_cli.rag_reply.store import RagReplyStore
 
@@ -636,6 +636,37 @@ def test_agent_watcher_status_returns_recent_tasks(tmp_path: Path):
 	assert payload["command"] == "agent-watcher-status"
 	assert payload["data"]["running"] is False
 	assert payload["data"]["tasks"] == []
+
+
+def test_agent_watcher_status_returns_flattened_recent_tasks(tmp_path: Path):
+	store = RagReplyStore(tmp_path / "boss-rag.sqlite3")
+	store.initialize()
+	store.append_audit_log(
+		AuditLogRecord.new(
+			event_type="watcher_task",
+			entity_type="conversation",
+			entity_id="conv_001",
+			payload={
+				"conversation_id": "conv_001",
+				"message_id": "msg_001",
+				"intent": "project_question",
+				"status": "sent",
+			},
+		)
+	)
+	runner = CliRunner()
+	result = runner.invoke(
+		cli,
+		["--json", "--data-dir", str(tmp_path), "agent", "watcher-status"],
+	)
+
+	assert result.exit_code == 0
+	payload = json.loads(result.output)
+	task = payload["data"]["tasks"][0]
+	assert task["conversation_id"] == "conv_001"
+	assert task["message_id"] == "msg_001"
+	assert task["intent"] == "project_question"
+	assert task["status"] == "sent"
 
 
 def test_agent_watcher_run_disabled_by_default(tmp_path: Path):
