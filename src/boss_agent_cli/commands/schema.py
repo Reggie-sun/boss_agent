@@ -551,7 +551,7 @@ SCHEMA_DATA = {
 				"--count": {
 					"type": "int",
 					"default": 10,
-					"description": "打招呼数量上限（最大 10）",
+					"description": "打招呼数量上限（最大 150）",
 				},
 				"--dry-run": {
 					"type": "bool",

@@ -608,8 +608,8 @@ boss config reset           # 恢复默认
   "default_city": null,
   "default_salary": null,
   "request_delay": [1.5, 3.0],
-  "batch_greet_delay": [2.0, 5.0],
-  "batch_greet_max": 10,
+  "batch_greet_delay": [1.0, 10.0],
+  "batch_greet_max": 150,
   "log_level": "error",
   "login_timeout": 120,
   "cdp_url": null,
@@ -631,8 +631,8 @@ boss config reset           # 恢复默认
 | `default_city` | 默认城市 |
 | `default_salary` | 默认薪资范围 |
 | `request_delay` | 请求间隔（秒），`[min, max]` |
-| `batch_greet_delay` | 批量打招呼间隔 |
-| `batch_greet_max` | 批量打招呼上限 |
+| `batch_greet_delay` | 批量打招呼随机间隔（秒），默认 `[1.0, 10.0]` |
+| `batch_greet_max` | 批量打招呼上限，最大 150 |
 | `log_level` | 日志级别（error/warning/info/debug） |
 | `login_timeout` | 登录超时（秒） |
 | `cdp_url` | CDP 地址 |

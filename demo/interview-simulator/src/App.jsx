@@ -1397,7 +1397,7 @@ export function App() {
                 value={bossSearchForm.count}
                 onChange={(event) => updateBossSearchForm("count", event.target.value)}
               >
-                {["1", "2", "3", "5", "8", "10"].map((count) => (
+                {["1", "2", "3", "5", "10", "20", "50", "100", "150"].map((count) => (
                   <option key={count} value={count}>{count} 个</option>
                 ))}
               </select>

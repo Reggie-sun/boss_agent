@@ -101,6 +101,7 @@ def test_batch_greet_success_all(mock_cache_cls, mock_auth_cls, mock_client_cls,
 	# 应调用 2 次 greet + 2 次 record_greet
 	assert mock_client.greet.call_count == 2
 	assert mock_cache.record_greet.call_count == 2
+	mock_time.sleep.assert_called_once()
 
 
 @patch("boss_agent_cli.commands.greet.time")
@@ -263,22 +264,46 @@ def test_batch_greet_skips_already_greeted(mock_cache_cls, mock_auth_cls, mock_c
 @patch("boss_agent_cli.commands.greet.AuthManager")
 @patch("boss_agent_cli.commands.greet.CacheStore")
 def test_batch_greet_respects_count_cap(mock_cache_cls, mock_auth_cls, mock_client_cls, mock_time):
-	"""--count 最大 10，即使搜出 15 条也只处理 10 条。"""
+	"""--count 最大 150，即使搜出 160 条也只处理 150 条。"""
 	mock_cache = _ctx_mock(mock_cache_cls)
 	mock_cache.is_greeted.return_value = False
 	mock_client = _ctx_mock(mock_client_cls)
 	mock_client.search_jobs.return_value = {
-		"zpData": {"jobList": [_make_raw_job(f"Job {i}", f"s{i}") for i in range(15)]}
+		"zpData": {"jobList": [_make_raw_job(f"Job {i}", f"s{i}") for i in range(160)]}
 	}
 	mock_client.greet.return_value = None
 	mock_time.sleep = MagicMock()
 
 	runner = CliRunner()
-	result = runner.invoke(cli, ["batch-greet", "test", "--count", "99", "--dry-run"])
+	result = runner.invoke(cli, ["batch-greet", "test", "--count", "999", "--dry-run"])
 	assert result.exit_code == 0
 	parsed = json.loads(result.output)
-	# --count 会被 cap 到 10
-	assert parsed["data"]["count"] == 10
+	# --count 会被 cap 到 150
+	assert parsed["data"]["count"] == 150
+
+
+@patch("boss_agent_cli.commands.greet.random.uniform", return_value=1.0)
+@patch("boss_agent_cli.commands.greet.time")
+@patch("boss_agent_cli.commands.greet.get_platform_instance")
+@patch("boss_agent_cli.commands.greet.AuthManager")
+@patch("boss_agent_cli.commands.greet.CacheStore")
+def test_batch_greet_uses_random_delay_between_successes(mock_cache_cls, mock_auth_cls, mock_client_cls, mock_time, mock_uniform):
+	"""每条成功开聊之间使用 1~10s 随机间隔。"""
+	mock_cache = _ctx_mock(mock_cache_cls)
+	mock_cache.is_greeted.return_value = False
+	mock_client = _ctx_mock(mock_client_cls)
+	mock_client.search_jobs.return_value = {
+		"zpData": {"jobList": [_make_raw_job("Go 1", "sec_1"), _make_raw_job("Go 2", "sec_2")]}
+	}
+	mock_client.greet.return_value = {"code": 0, "zpData": {}}
+	mock_client.is_success.return_value = True
+	mock_time.sleep = MagicMock()
+
+	runner = CliRunner()
+	result = runner.invoke(cli, ["batch-greet", "golang", "--count", "2"])
+	assert result.exit_code == 0
+	mock_uniform.assert_called_with(1.0, 10.0)
+	mock_time.sleep.assert_called_with(1.0)
 
 
 @patch("boss_agent_cli.commands.greet.get_platform_instance")

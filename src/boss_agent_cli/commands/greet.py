@@ -124,19 +124,26 @@ def greet_cmd(ctx: click.Context, security_id: str, job_id: str, message: str) -
 @click.option("--stage", default=None, type=click.Choice(list(STAGE_CODES.keys()), case_sensitive=False), help="融资阶段（如 已上市、A轮）")
 @click.option("--job-type", default=None, type=click.Choice(list(JOB_TYPE_CODES.keys()), case_sensitive=False), help="职位类型（全职/兼职/实习）")
 @click.option("--welfare", default=None, help="福利筛选（如 双休、五险一金），逗号分隔时按 AND 匹配")
-@click.option("--count", default=10, help="打招呼数量上限（最大 10）")
+@click.option("--count", default=10, help="打招呼数量上限（最大 150）")
 @click.option("--dry-run", is_flag=True, default=False, help="仅模拟执行，不实际打招呼")
 @click.pass_context
 @handle_auth_errors("batch-greet")
 def batch_greet_cmd(ctx: click.Context, query: str, city: str | None, salary: str | None, experience: str | None, education: str | None, industry: str | None, scale: str | None, stage: str | None, job_type: str | None, welfare: str | None, count: int, dry_run: bool) -> None:
-	"""搜索后批量打招呼（上限 10）"""
+	"""搜索后批量打招呼（上限 150）"""
 	if not require_compliance_allowed(ctx, "batch-greet"):
 		return
 
 	data_dir = ctx.obj["data_dir"]
 	logger = ctx.obj["logger"]
 
-	count = min(count, 10)
+	config = ctx.obj.get("config", {})
+	configured_max = config.get("batch_greet_max", 150)
+	try:
+		max_count = int(configured_max)
+	except (TypeError, ValueError):
+		max_count = 150
+	max_count = min(max(max_count, 1), 150)
+	count = min(max(count, 1), max_count)
 
 	with CacheStore(data_dir / "cache" / "boss_agent.db") as cache:
 		auth = AuthManager(data_dir, logger=logger, platform=ctx.obj.get("platform", "zhipin"))
@@ -259,7 +266,7 @@ def batch_greet_cmd(ctx: click.Context, query: str, city: str | None, salary: st
 					break
 
 				if success and idx < len(candidates) - 1:
-					bg_delay = ctx.obj.get("config", {}).get("batch_greet_delay", [2.0, 5.0])
+					bg_delay = config.get("batch_greet_delay", [1.0, 10.0])
 					time.sleep(random.uniform(bg_delay[0], bg_delay[1]))
 
 			data = {

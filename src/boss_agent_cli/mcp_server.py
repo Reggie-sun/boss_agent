@@ -289,7 +289,7 @@ TOOLS = [
 	),
 	Tool(
 		name="boss_batch_greet",
-		description="搜索后批量打招呼（上限 10）",
+		description="搜索后批量打招呼（上限 150）",
 		inputSchema={
 			"type": "object",
 			"properties": {
@@ -303,7 +303,7 @@ TOOLS = [
 				"stage": {"type": "string", "description": "融资阶段，支持逗号分隔多选"},
 				"job_type": {"type": "string", "description": "职位类型（全职/兼职/实习），支持逗号分隔多选"},
 				"welfare": {"type": "string", "description": "福利筛选，逗号分隔 AND 逻辑（如 双休,五险一金）"},
-				"limit": {"type": "integer", "description": "最大打招呼数量", "default": 5},
+				"limit": {"type": "integer", "description": "最大打招呼数量（最大 150）", "default": 5},
 				"dry_run": {"type": "boolean", "description": "预览模式", "default": False},
 			},
 			"required": ["query"],

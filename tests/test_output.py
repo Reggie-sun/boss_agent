@@ -160,7 +160,8 @@ def test_config_defaults():
 	from boss_agent_cli.config import load_config
 	cfg = load_config(None)
 	assert cfg["request_delay"] == [1.5, 3.0]
-	assert cfg["batch_greet_max"] == 10
+	assert cfg["batch_greet_delay"] == [1.0, 10.0]
+	assert cfg["batch_greet_max"] == 150
 	assert cfg["log_level"] == "error"
 
 
@@ -172,7 +173,7 @@ def test_config_from_file(tmp_path):
 	cfg = load_config(cfg_file)
 	assert cfg["default_city"] == "杭州"
 	assert cfg["log_level"] == "debug"
-	assert cfg["batch_greet_max"] == 10
+	assert cfg["batch_greet_max"] == 150
 
 
 def test_config_env_override_for_rag_api_key(monkeypatch, tmp_path):

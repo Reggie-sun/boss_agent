@@ -900,7 +900,7 @@ function createRagBridgePlugin() {
           "batch-greet",
           query,
           "--count",
-          String(Number.isFinite(count) ? Math.min(Math.max(count, 1), 10) : 3),
+          String(Number.isFinite(count) ? Math.min(Math.max(count, 1), 150) : 3),
         ];
         if (city) args.push("--city", city);
         if (salary) args.push("--salary", salary);
