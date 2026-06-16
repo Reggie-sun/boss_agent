@@ -421,7 +421,7 @@ class BossRagReplyService:
 		if intent == "smalltalk":
 			return "您好，已收到您的消息，感谢联系。"
 		if intent == "resume_share_request":
-			return "可以的，我现在通过 BOSS 直聘官方页面发送在线简历；如果您希望我补充特定项目经历或作品，也欢迎告诉我。"
+			return "可以的，我可以通过 BOSS 直聘官方页面发送在线简历；如果您希望我补充特定项目经历或作品，也欢迎告诉我。"
 		if intent == "resignation_status":
 			return "我目前主要是希望寻找更聚焦 AI 应用落地、RAG、Agent 或 LLM 工程化方向的机会。当前项目让我积累了企业级 RAG 从架构到落地的完整经验，下一步希望进入更成熟的 AI 团队或更有 AI 产品化空间的环境，把这类系统继续做深。"
 		if intent == "personal_status":

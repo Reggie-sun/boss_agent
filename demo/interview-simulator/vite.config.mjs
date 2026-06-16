@@ -25,11 +25,22 @@ function loadBridgeConfig() {
   const repoEnv = parseEnvFile(path.join(repoRoot, ".env"));
   const get = (key, fallback = "") =>
     process.env[key] || repoEnv[key] || fallback;
+  const parsedCommandTimeout = Number.parseInt(
+    get("BOSS_RAG_COMMAND_TIMEOUT_SECONDS", "45"),
+    10,
+  );
 
   return {
     repoRoot,
     dataDir: get("BOSS_RAG_DATA_DIR", "~/.boss-agent"),
     pythonBin: get("BOSS_RAG_PYTHON_BIN", get("PYTHON", "python")),
+    resumeAttachmentPath: get(
+      "BOSS_RAG_RESUME_ATTACHMENT_PATH",
+      path.join(repoRoot, "孙瑞杰的简历.pdf"),
+    ),
+    commandTimeoutMs: Number.isFinite(parsedCommandTimeout)
+      ? Math.max(parsedCommandTimeout, 5) * 1000
+      : 45_000,
     baseUrl: get("BOSS_RAG_RAG_BASE_URL", "").replace(/\/$/, ""),
     cdpUrl: get("BOSS_RAG_CDP_URL", get("BOSS_CDP_URL", "http://localhost:9222")).replace(/\/$/, ""),
     bridgeUrl: get("BOSS_RAG_BRIDGE_URL", "http://127.0.0.1:19826").replace(/\/$/, ""),
@@ -400,6 +411,8 @@ function runBossJsonCommand(config, args) {
     {
       cwd: config.repoRoot,
       encoding: "utf8",
+      timeout: config.commandTimeoutMs,
+      killSignal: "SIGTERM",
       env: {
         ...process.env,
         PYTHONPATH: process.env.PYTHONPATH
@@ -410,6 +423,10 @@ function runBossJsonCommand(config, args) {
   );
 
   if (child.error) {
+    if (child.error.code === "ETIMEDOUT") {
+      const seconds = Math.round(config.commandTimeoutMs / 1000);
+      throw new Error(`boss-agent-cli 执行超过 ${seconds}s，已停止本次请求。请检查 CDP 发送链路或稍后重试。`);
+    }
     throw child.error;
   }
   if (child.status !== 0 && !child.stdout.trim()) {
@@ -578,6 +595,14 @@ function createRagBridgePlugin() {
         const draftId = String(parsed.draftId || "").trim();
         const securityId = String(parsed.security_id || "").trim();
         const sendResume = Boolean(parsed.send_resume);
+        const sendAttachmentResume = Boolean(parsed.send_attachment_resume);
+        const resumeFile = String(parsed.resume_file || bridgeConfig.resumeAttachmentPath || "").trim();
+        const target = parsed.target && typeof parsed.target === "object" ? parsed.target : {};
+        const targetRecruiterName = String(
+          parsed.target_recruiter_name || target.recruiter_name || "",
+        ).trim();
+        const targetCompany = String(parsed.target_company || target.company || "").trim();
+        const targetTitle = String(parsed.target_title || target.title || "").trim();
 
         if (!draftId) {
           res.statusCode = 400;
@@ -607,14 +632,21 @@ function createRagBridgePlugin() {
         const args = ["agent", "send", draftId];
         if (securityId) args.push("--security-id", securityId);
         if (sendResume) args.push("--send-resume");
+        if (sendAttachmentResume) args.push("--send-attachment-resume");
+        if (sendAttachmentResume && resumeFile) args.push("--resume-file", resumeFile);
+        if (targetRecruiterName) args.push("--target-recruiter-name", targetRecruiterName);
+        if (targetCompany) args.push("--target-company", targetCompany);
+        if (targetTitle) args.push("--target-title", targetTitle);
 
         const payload = runBossJsonCommand(bridgeConfig, args);
         const data = payload.data || {};
-        const deliveryStatus = !data.message_sent
-          ? "message_failed"
-          : sendResume && !data.resume_sent
-            ? "resume_failed"
-            : "sent";
+        const deliveryStatus = sendAttachmentResume
+          ? (data.resume_sent ? "sent" : "resume_failed")
+          : !data.message_sent
+            ? "message_failed"
+            : sendResume && !data.resume_sent
+              ? "resume_failed"
+              : "sent";
 
         res.end(
           JSON.stringify({
@@ -625,7 +657,14 @@ function createRagBridgePlugin() {
               message_sent: Boolean(data.message_sent),
               resume_sent: Boolean(data.resume_sent),
               send_resume: Boolean(data.send_resume),
+              send_attachment_resume: Boolean(data.send_attachment_resume),
+              resume_file: String(data.resume_file || resumeFile),
               security_id: String(data.security_id || securityId),
+              target: data.target || {
+                recruiter_name: targetRecruiterName,
+                company: targetCompany,
+                title: targetTitle,
+              },
               results: Array.isArray(data.results) ? data.results : [],
               error_message: String(data.error_message || ""),
             },

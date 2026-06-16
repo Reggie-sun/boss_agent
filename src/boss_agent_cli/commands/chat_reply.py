@@ -1,6 +1,7 @@
 """boss chat-reply — 候选人自动回复聊天消息。"""
 
 from dataclasses import dataclass
+from pathlib import Path
 
 import click
 
@@ -18,6 +19,7 @@ class ChatReplyExecutionResult:
 	resume_sent: bool
 	results: list[str]
 	error_message: str = ""
+	resume_file_path: str = ""
 
 
 def execute_chat_reply(
@@ -26,6 +28,11 @@ def execute_chat_reply(
 	security_id: str,
 	message: str,
 	send_resume: bool = False,
+	send_attachment_resume: bool = False,
+	resume_file_path: str | None = None,
+	target_recruiter_name: str = "",
+	target_company: str = "",
+	target_title: str = "",
 ) -> ChatReplyExecutionResult:
 	"""Send a chat reply and optionally the online resume through the existing CDP path."""
 	data_dir = ctx.obj["data_dir"]
@@ -34,6 +41,57 @@ def execute_chat_reply(
 	auth = AuthManager(data_dir, logger=logger, platform=ctx.obj.get("platform", "zhipin"))
 	with get_platform_instance(ctx, auth) as platform:
 		client = platform._client
+		if send_attachment_resume:
+			if not resume_file_path:
+				return ChatReplyExecutionResult(
+					security_id=security_id,
+					message=message,
+					send_resume=send_resume,
+					message_sent=False,
+					resume_sent=False,
+					results=[],
+					error_message="缺少附件简历文件路径",
+				)
+			attachment_path = Path(resume_file_path).expanduser()
+			if not attachment_path.exists():
+				return ChatReplyExecutionResult(
+					security_id=security_id,
+					message=message,
+					send_resume=send_resume,
+					message_sent=False,
+					resume_sent=False,
+					results=[],
+					error_message=f"附件简历不存在: {attachment_path}",
+					resume_file_path=str(attachment_path),
+				)
+			resume_response = client.send_resume_attachment(
+				security_id,
+				str(attachment_path),
+				target_recruiter_name=target_recruiter_name,
+				target_company=target_company,
+				target_title=target_title,
+			)
+			if resume_response.get("code") == 0:
+				return ChatReplyExecutionResult(
+					security_id=security_id,
+					message=message,
+					send_resume=send_resume,
+					message_sent=False,
+					resume_sent=True,
+					results=[f"附件简历已发送: {attachment_path.name}"],
+					resume_file_path=str(attachment_path),
+				)
+			return ChatReplyExecutionResult(
+				security_id=security_id,
+				message=message,
+				send_resume=send_resume,
+				message_sent=False,
+				resume_sent=False,
+				results=[],
+				error_message=str(resume_response.get("message") or "附件简历发送失败"),
+				resume_file_path=str(attachment_path),
+			)
+
 		message_response = client.send_chat_message(security_id, message)
 		if message_response.get("code") != 0:
 			return ChatReplyExecutionResult(

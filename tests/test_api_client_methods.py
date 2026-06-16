@@ -351,6 +351,130 @@ def test_send_resume_reports_login_redirect_before_dom_send():
 	fake_page.evaluate.assert_called()
 
 
+def test_send_resume_attachment_recovers_from_open_navigation(tmp_path):
+	client = BossClient(_StubAuth())
+	client._navigate_to_chat = MagicMock(return_value={"ok": True, "url": "https://www.zhipin.com/web/geek/chat"})
+	resume_file = tmp_path / "resume.pdf"
+	resume_file.write_bytes(b"%PDF-1.4\n")
+
+	fake_file_input = MagicMock()
+	fake_locator = MagicMock()
+	fake_locator.first = fake_file_input
+	fake_page = MagicMock()
+	fake_page.evaluate.side_effect = [
+		Exception("Page.evaluate: Execution context was destroyed, most likely because of a navigation"),
+		{"ok": True, "nameMatch": True},
+		0,
+		{"ok": False, "reason": "resume request agree button not found"},
+		{"ok": True, "method": "resume-toolbar-open"},
+		{"ok": True, "method": "resume-toolbar-upload"},
+		{"ok": True, "method": "resume-toolbar-upload", "buttonText": "发送"},
+		{"seenFileName": True, "hasResumeFileInput": True},
+	]
+	fake_page.locator.return_value = fake_locator
+	fake_browser = MagicMock()
+	fake_browser._page = fake_page
+	client._get_browser = MagicMock(return_value=fake_browser)
+
+	result = client.send_resume_attachment(
+		"sid",
+		str(resume_file),
+		target_recruiter_name="蔡欣",
+		target_company="光昱智能",
+		target_title="招聘经理",
+	)
+
+	assert result["code"] == 0
+	assert result["method"] == "resume-toolbar-upload"
+	fake_page.wait_for_selector.assert_called_once_with('.chat-input[contenteditable="true"]', timeout=12000)
+	fake_file_input.set_input_files.assert_called_once_with(str(resume_file.resolve()))
+
+
+def test_send_resume_attachment_prefers_resume_request_agree_button(tmp_path):
+	client = BossClient(_StubAuth())
+	client._navigate_to_chat = MagicMock(return_value={"ok": True, "url": "https://www.zhipin.com/web/geek/chat"})
+	resume_file = tmp_path / "resume.pdf"
+	resume_file.write_bytes(b"%PDF-1.4\n")
+
+	fake_file_input = MagicMock()
+	fake_locator = MagicMock()
+	fake_locator.first = fake_file_input
+	fake_page = MagicMock()
+	fake_page.evaluate.side_effect = [
+		{"ok": True, "method": "dom"},
+		{"ok": True, "nameMatch": True},
+		0,
+		{"ok": True, "method": "resume-request-agree", "agreeButtonCount": 1},
+		{"seenFileName": False, "fileNameCount": 0, "beforeCount": 0, "agreeButtonCount": 0},
+	]
+	fake_page.locator.return_value = fake_locator
+	fake_browser = MagicMock()
+	fake_browser._page = fake_page
+	client._get_browser = MagicMock(return_value=fake_browser)
+
+	result = client.send_resume_attachment(
+		"sid",
+		str(resume_file),
+		target_recruiter_name="蔡欣",
+		target_company="光昱智能",
+		target_title="招聘经理",
+	)
+
+	assert result["code"] == 0
+	assert result["method"] == "resume-request-agree"
+	fake_file_input.set_input_files.assert_not_called()
+	fake_file_input.click.assert_not_called()
+
+
+def test_send_resume_attachment_falls_back_to_resume_toolbar_upload(tmp_path):
+	client = BossClient(_StubAuth())
+	client._navigate_to_chat = MagicMock(return_value={"ok": True, "url": "https://www.zhipin.com/web/geek/chat"})
+	resume_file = tmp_path / "resume.pdf"
+	resume_file.write_bytes(b"%PDF-1.4\n")
+
+	fake_file_input = MagicMock()
+	fake_input_locator = MagicMock()
+	fake_input_locator.first = fake_file_input
+	fake_send_button = MagicMock()
+	fake_send_button.click.side_effect = AssertionError("chat text send button must not be used for resume uploads")
+	fake_send_locator = MagicMock()
+	fake_send_locator.first = fake_send_button
+
+	def locator(selector):
+		if selector == ".btn-send:not(.disabled)":
+			return fake_send_locator
+		return fake_input_locator
+
+	fake_page = MagicMock()
+	fake_page.evaluate.side_effect = [
+		{"ok": True, "method": "dom"},
+		{"ok": True, "nameMatch": True},
+		0,
+		{"ok": False, "reason": "resume request agree button not found"},
+		{"ok": True, "method": "resume-toolbar-open"},
+		{"ok": True, "method": "resume-toolbar-upload"},
+		{"ok": True, "method": "resume-toolbar-upload", "buttonText": "发送"},
+		{"seenFileName": True, "fileNameCount": 1, "beforeCount": 0},
+	]
+	fake_page.locator.side_effect = locator
+	fake_browser = MagicMock()
+	fake_browser._page = fake_page
+	client._get_browser = MagicMock(return_value=fake_browser)
+
+	result = client.send_resume_attachment(
+		"sid",
+		str(resume_file),
+		target_recruiter_name="蔡欣",
+		target_company="光昱智能",
+		target_title="招聘经理",
+	)
+
+	assert result["code"] == 0
+	assert result["method"] == "resume-toolbar-upload"
+	fake_file_input.set_input_files.assert_called_once_with(str(resume_file.resolve()))
+	fake_send_button.click.assert_not_called()
+
+
 # ── 生命周期 / close 等 ─────────────────────────────────────────────────
 
 

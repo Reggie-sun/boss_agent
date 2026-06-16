@@ -252,6 +252,12 @@ button {
   cursor: pointer;
 }
 
+.history-list li button.is-selected {
+  border-color: rgba(47, 128, 237, 0.36);
+  background: rgba(47, 128, 237, 0.1);
+  box-shadow: 0 10px 24px rgba(47, 128, 237, 0.12);
+}
+
 .thread-item {
   display: grid;
   gap: 6px;
@@ -475,6 +481,55 @@ button {
 .question-panel--input {
   display: grid;
   gap: 18px;
+}
+
+.target-picker {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px 16px;
+  border: 1px solid rgba(47, 128, 237, 0.16);
+  border-radius: 18px;
+  background:
+    linear-gradient(135deg, rgba(47, 128, 237, 0.08), rgba(255, 255, 255, 0.72));
+}
+
+.target-picker__summary {
+  display: grid;
+  gap: 4px;
+  min-width: 190px;
+}
+
+.target-picker__summary strong {
+  font-size: 0.92rem;
+}
+
+.target-picker__summary span,
+.target-picker__empty {
+  color: var(--muted);
+  font-size: 0.84rem;
+  line-height: 1.45;
+}
+
+.target-picker__controls {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  flex: 1;
+  flex-wrap: wrap;
+}
+
+.target-picker__select {
+  min-width: min(100%, 360px);
+  flex: 1;
+  padding: 10px 12px;
+  border: 1px solid rgba(47, 128, 237, 0.22);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.92);
+  color: var(--text);
+  font-size: 0.9rem;
 }
 
 .input-headline {

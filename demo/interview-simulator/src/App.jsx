@@ -116,6 +116,25 @@ function resolveSecurityId({ manualSecurityId = "", selectedChatTarget = null, c
   return fallbackTarget?.security_id ? String(fallbackTarget.security_id).trim() : "";
 }
 
+function resolveTargetIdentity({ selectedChatTarget = null, chatTargets = [], securityId = "" }) {
+  const normalizedSecurityId = String(securityId || "").trim();
+  const target =
+    selectedChatTarget ||
+    (normalizedSecurityId
+      ? chatTargets.find(
+          (item) => String(item?.security_id || "").trim() === normalizedSecurityId,
+        )
+      : null);
+  if (!target) return null;
+
+  const identity = {
+    recruiter_name: String(target.recruiter_name || target.name || "").trim(),
+    company: String(target.company || target.brand_name || "").trim(),
+    title: String(target.title || target.job_title || "").trim(),
+  };
+  return Object.values(identity).some(Boolean) ? identity : null;
+}
+
 function shouldSendResumeByDefault({ question = "", draftIntent = "", securityId = "" }) {
   const normalizedQuestion = String(question).toLowerCase();
   const normalizedIntent = String(draftIntent);
@@ -304,6 +323,10 @@ export function App() {
 
   function handleTargetSelection(value) {
     setSelectedTargetValue(value);
+    if (!value) {
+      setApplyForm({ security_id: "" });
+      return;
+    }
     const target = chatTargets.find((item) => targetOptionValue(item) === value);
     if (target) {
       pickTarget(target);
@@ -317,6 +340,11 @@ export function App() {
       manualSecurityId: applyForm.security_id,
       selectedChatTarget,
       chatTargets,
+    });
+    const targetIdentity = resolveTargetIdentity({
+      selectedChatTarget,
+      chatTargets,
+      securityId: resolvedSecurityId,
     });
 
     if (resolvedSecurityId && resolvedSecurityId !== applyForm.security_id.trim()) {
@@ -347,7 +375,7 @@ export function App() {
           sessionId,
           mode: "accurate",
           security_id: resolvedSecurityId,
-          auto_send_resume: true,
+          auto_send_resume: false,
         }),
       });
       const payload = await response.json();
@@ -381,15 +409,25 @@ export function App() {
           second: "2-digit",
         }),
       };
+      const shouldAutoSendResume = shouldSendResumeByDefault({
+        question: trimmed,
+        draftIntent: payload.draftIntent,
+        securityId: resolvedSecurityId,
+      });
+      const resumeRequested = String(payload.draftIntent || "") === "resume_share_request";
+      if (resumeRequested && !resolvedSecurityId) {
+        nextResult.delivery = {
+          status: "missing_security_id",
+          message_sent: false,
+          resume_sent: false,
+          send_resume: true,
+          send_attachment_resume: true,
+          error_message: "已识别为发简历请求，但当前没有可用的 Boss security_id。",
+        };
+      }
 
       setResult(nextResult);
-      setSendResumeWithDraft(
-        shouldSendResumeByDefault({
-          question: trimmed,
-          draftIntent: payload.draftIntent,
-          securityId: resolvedSecurityId,
-        }),
-      );
+      setSendResumeWithDraft(shouldAutoSendResume);
       setSelectedCitationIndex(0);
       if (payload.thread?.messages) {
         setThread(payload.thread.messages);
@@ -404,6 +442,14 @@ export function App() {
         },
         ...current,
       ]);
+      if (shouldAutoSendResume && nextResult.draftId) {
+        void sendDraftToBoss({
+          draftId: nextResult.draftId,
+          securityId: resolvedSecurityId,
+          sendAttachmentResume: true,
+          targetIdentity,
+        });
+      }
     } catch (error) {
       const message = error instanceof Error ? error.message : "Agent 请求失败。";
       setResult({
@@ -435,16 +481,10 @@ export function App() {
     }
   }
 
-  async function handleSendToBoss() {
-    if (!result.draftId || isSendingToBoss) return;
-    const resolvedSecurityId = resolveSecurityId({
-      manualSecurityId: applyForm.security_id,
-      selectedChatTarget,
-      chatTargets,
-    });
-
-    if (resolvedSecurityId && resolvedSecurityId !== applyForm.security_id.trim()) {
-      setApplyForm({ security_id: resolvedSecurityId });
+  async function sendDraftToBoss({ draftId, securityId, sendAttachmentResume, targetIdentity = null }) {
+    if (!draftId || isSendingToBoss) return;
+    if (securityId && securityId !== applyForm.security_id.trim()) {
+      setApplyForm({ security_id: securityId });
     }
 
     let latestBridgeState = bridgeState;
@@ -478,6 +518,17 @@ export function App() {
     }
 
     setIsSendingToBoss(true);
+    setResult((current) => ({
+      ...current,
+      delivery: {
+        status: "sending",
+        message_sent: false,
+        resume_sent: false,
+        send_attachment_resume: sendAttachmentResume,
+        security_id: securityId,
+        target: targetIdentity,
+      },
+    }));
     try {
       const response = await fetch("/api/agent/send", {
         method: "POST",
@@ -485,10 +536,12 @@ export function App() {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          draftId: result.draftId,
+          draftId,
           sessionId,
-          security_id: resolvedSecurityId,
-          send_resume: sendResumeWithDraft,
+          security_id: securityId,
+          send_resume: false,
+          send_attachment_resume: sendAttachmentResume,
+          target: targetIdentity,
         }),
       });
       const payload = await response.json();
@@ -535,6 +588,26 @@ export function App() {
     } finally {
       setIsSendingToBoss(false);
     }
+  }
+
+  async function handleSendToBoss() {
+    if (!result.draftId || isSendingToBoss) return;
+    const resolvedSecurityId = resolveSecurityId({
+      manualSecurityId: applyForm.security_id,
+      selectedChatTarget,
+      chatTargets,
+    });
+    const targetIdentity = resolveTargetIdentity({
+      selectedChatTarget,
+      chatTargets,
+      securityId: resolvedSecurityId,
+    });
+    await sendDraftToBoss({
+      draftId: result.draftId,
+      securityId: resolvedSecurityId,
+      sendAttachmentResume: sendResumeWithDraft,
+      targetIdentity,
+    });
   }
 
   return (
@@ -650,18 +723,27 @@ export function App() {
           </div>
           <ul className="history-list">
             {chatTargets.length ? (
-              chatTargets.map((target, index) => (
-                <li key={`${target.conversation_id || target.security_id}-${index}`}>
-                  <button type="button" onClick={() => pickTarget(target)}>
-                    <strong>{target.company || "未知公司"} · {target.title || "未知职位"}</strong>
-                    <span>
-                      {(target.recruiter_name || "未命名 HR")}
-                      {target.unread_count ? ` · 未读 ${target.unread_count}` : ""}
-                    </span>
-                    <em>{target.last_message || target.security_id}</em>
-                  </button>
-                </li>
-              ))
+              chatTargets.map((target, index) => {
+                const isSelected = targetOptionValue(target) === selectedTargetValue;
+                return (
+                  <li key={`${target.conversation_id || target.security_id}-${index}`}>
+                    <button
+                      type="button"
+                      className={isSelected ? "is-selected" : ""}
+                      aria-pressed={isSelected}
+                      onClick={() => pickTarget(target)}
+                    >
+                      <strong>{target.company || "未知公司"} · {target.title || "未知职位"}</strong>
+                      <span>
+                        {(target.recruiter_name || "未命名 HR")}
+                        {target.unread_count ? ` · 未读 ${target.unread_count}` : ""}
+                        {isSelected ? " · 已选" : ""}
+                      </span>
+                      <em>{target.last_message || target.security_id}</em>
+                    </button>
+                  </li>
+                );
+              })
             ) : (
               <li className="history-list__empty">
                 {chatTargetsLoading
@@ -697,6 +779,50 @@ export function App() {
         </header>
 
         <section className="question-panel question-panel--input">
+          <div className="target-picker">
+            <div className="target-picker__summary">
+              <strong>Boss 发送目标</strong>
+              <span>
+                {selectedChatTarget
+                  ? `${selectedChatTarget.company || "未知公司"} / ${selectedChatTarget.recruiter_name || "未命名 HR"}`
+                  : applyForm.security_id.trim()
+                    ? "已手动填写 security_id"
+                    : "未选择，发简历请求不会真实发送"}
+              </span>
+            </div>
+            <div className="target-picker__controls">
+              {chatTargets.length ? (
+                <select
+                  className="target-picker__select"
+                  value={selectedTargetValue}
+                  onChange={(event) => handleTargetSelection(event.target.value)}
+                >
+                  <option value="">选择真实 Boss 对话目标</option>
+                  {chatTargets.map((target, index) => (
+                    <option
+                      key={`${targetOptionValue(target)}-${index}`}
+                      value={targetOptionValue(target)}
+                    >
+                      {`${target.company || "未知公司"} · ${target.recruiter_name || "未命名 HR"} · ${target.title || "未知职位"}`}
+                    </option>
+                  ))}
+                </select>
+              ) : (
+                <span className="target-picker__empty">
+                  {chatTargetsLoading ? "正在读取目标..." : "暂无可选目标"}
+                </span>
+              )}
+              <button
+                type="button"
+                className="inline-action"
+                onClick={loadChatTargets}
+                disabled={chatTargetsLoading}
+              >
+                <ArrowClockwise size={16} />
+                {chatTargetsLoading ? "刷新中" : "刷新目标"}
+              </button>
+            </div>
+          </div>
           <div className="input-headline">
             <h3>你的问题</h3>
             <span>{questionLength} 字</span>
@@ -743,10 +869,14 @@ export function App() {
               {result.delivery?.status === "sent" ? (
                 <p>
                   {result.delivery.resume_sent
-                    ? "已通过 Boss 真实发送消息，并附带在线简历。"
-                    : result.delivery.send_resume
-                      ? "消息已发送，但在线简历没有成功发出。"
+                    ? "已通过 Boss 真实发送附件简历 PDF。"
+                    : result.delivery.send_attachment_resume
+                      ? "附件简历 PDF 没有成功发出。"
                     : "已通过 Boss 真实发送这条 Agent 草稿消息。"}
+                </p>
+              ) : result.delivery?.status === "sending" ? (
+                <p>
+                  已识别为发简历请求，正在通过 Boss 真实发送{result.delivery.send_attachment_resume ? "附件简历 PDF" : "这条 Agent 草稿"}。
                 </p>
               ) : result.delivery?.status === "browser_channel_unavailable" ? (
                 <p>
@@ -759,7 +889,7 @@ export function App() {
               ) : result.delivery?.status === "resume_failed" || result.delivery?.status === "message_failed" ? (
                 <p>
                   {result.delivery.status === "resume_failed"
-                    ? `消息已发送，但在线简历发送失败：${result.delivery.error_message || "未知错误"}。`
+                    ? `附件简历 PDF 发送失败：${result.delivery.error_message || "未知错误"}。`
                     : `发送到 Boss 失败：${result.delivery.error_message || "未知错误"}。`}
                 </p>
               ) : null}
@@ -776,7 +906,7 @@ export function App() {
                 <div className="answer-loader" />
                 <div>
                   <strong>Agent 正在整理回答</strong>
-                  <p>这一步会由本地 Agent workflow 调用 `/api/v1/chat/ask`，再整理最终 answer / citations。</p>
+                  <p>这一步会提交到本地 Agent bridge `/api/agent/ask`，再整理最终 answer / citations。</p>
                 </div>
               </div>
             ) : result.errorMessage ? (
@@ -827,7 +957,7 @@ export function App() {
                     checked={sendResumeWithDraft}
                     onChange={(event) => setSendResumeWithDraft(event.target.checked)}
                   />
-                  <span>同时发送在线简历</span>
+                  <span>发送附件简历 PDF</span>
                 </label>
                 <button
                   type="button"
@@ -906,9 +1036,10 @@ export function App() {
                     className="apply-input"
                     placeholder="已回复对话的 security_id"
                     value={applyForm.security_id}
-                    onChange={(e) =>
-                      setApplyForm({ security_id: e.target.value })
-                    }
+                    onChange={(e) => {
+                      setApplyForm({ security_id: e.target.value });
+                      setSelectedTargetValue("");
+                    }}
                   />
                 </div>
               </div>
@@ -981,7 +1112,7 @@ export function App() {
             </li>
             <li className={bridgeState.ready ? "is-current" : ""}>
               <span className="outline-index">2</span>
-              <span>转发到 `POST /api/v1/chat/ask`</span>
+              <span>转发到 `POST /api/agent/ask`</span>
             </li>
             <li className={result.ok ? "is-current" : ""}>
               <span className="outline-index">3</span>
@@ -993,7 +1124,7 @@ export function App() {
                 <span>
                   {result.delivery?.status === "sent"
                     ? result.delivery?.resume_sent
-                      ? "已调用 Boss 对话真实发送消息，并附带在线简历"
+                      ? "已调用 Boss 对话真实发送附件简历 PDF"
                       : "已调用 Boss 对话真实发送 Agent 草稿"
                     : "草稿已生成，可继续调用 `/api/agent/send` 真实发送"}
                 </span>

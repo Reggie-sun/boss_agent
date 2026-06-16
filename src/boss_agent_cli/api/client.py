@@ -1,6 +1,7 @@
 import atexit
 import random
 import time
+from pathlib import Path
 import weakref
 from types import TracebackType
 from typing import TYPE_CHECKING, Any, cast
@@ -381,7 +382,18 @@ class BossClient:
 		for _ in range(15):
 			try:
 				ready = browser._page.evaluate(
-					"() => { const ulc = document.querySelector('.user-list-content'); return !!(ulc && ulc.__vue__ && ulc.__vue__.$parent && ulc.__vue__.$parent.list && ulc.__vue__.$parent.list.length > 0); }"
+					"""() => {
+						const ulc = document.querySelector('.user-list-content');
+						const vueReady = !!(
+							ulc &&
+							ulc.__vue__ &&
+							ulc.__vue__.$parent &&
+							ulc.__vue__.$parent.list &&
+							ulc.__vue__.$parent.list.length > 0
+						);
+						const domReady = !!(ulc && ulc.querySelector('li'));
+						return vueReady || domReady;
+					}"""
 				)
 				if ready:
 					return {"ok": True, "url": browser._page.url}
@@ -444,6 +456,512 @@ class BossClient:
 			return {"code": -1, "message": str(result.get("error", "发送失败")), "detail": result}
 		except Exception as exc:
 			return {"code": -1, "message": f"发送简历失败: {exc}"}
+
+	def send_resume_attachment(
+		self,
+		security_id: str,
+		file_path: str,
+		*,
+		target_recruiter_name: str = "",
+		target_company: str = "",
+		target_title: str = "",
+	) -> dict[str, Any]:
+		"""通过 CDP 上传附件简历 PDF，不发送额外文字消息。"""
+		attachment = Path(file_path).expanduser().resolve()
+		if not attachment.exists():
+			return {"code": -1, "message": f"附件简历不存在: {attachment}"}
+		navigation = self._navigate_to_chat()
+		if not navigation.get("ok"):
+			return {"code": -1, "message": str(navigation.get("message") or "聊天页未就绪"), "detail": navigation}
+		browser = self._get_browser()
+		def _is_navigation_context_error(exc: Exception) -> bool:
+			message = str(exc)
+			return (
+				"Execution context was destroyed" in message
+				or "most likely because of a navigation" in message
+				or "Cannot find context with specified id" in message
+			)
+
+		def _safe_evaluate(stage: str, script: str, arg: Any | None = None, *, retries: int = 3) -> Any:
+			last_error: Exception | None = None
+			for _ in range(retries):
+				try:
+					if arg is None:
+						return browser._page.evaluate(script)
+					return browser._page.evaluate(script, arg)
+				except Exception as exc:
+					if not _is_navigation_context_error(exc):
+						raise RuntimeError(f"{stage}: {exc}") from exc
+					last_error = exc
+					try:
+						browser._page.wait_for_load_state("domcontentloaded", timeout=5000)
+					except Exception:
+						pass
+					time.sleep(0.5)
+			raise RuntimeError(f"{stage}: {last_error}") from last_error
+
+		try:
+			try:
+				open_result = browser._page.evaluate(
+					'''({ sid, recruiterName, company, title }) => {
+					const normalize = (value) =>
+						String(value || "")
+							.replace(/\\s+/g, "")
+							.replace(/\\.\\.\\.$/, "")
+							.toLowerCase();
+					const summarize = (friend) => ({
+						name: normalize(friend.name || friend.bossName || friend.friendName),
+						company: normalize(friend.brandName || friend.companyName || friend.company),
+						title: normalize(friend.title || friend.sourceTitle || friend.positionName || friend.jobName),
+						securityIdPrefix: String(friend.securityId || "").slice(0, 12),
+					});
+					const publicSummary = (friend) => {
+						const summary = summarize(friend);
+						return {
+							name: friend.name || friend.bossName || friend.friendName || "",
+							company: friend.brandName || friend.companyName || friend.company || "",
+							title: friend.title || friend.sourceTitle || friend.positionName || friend.jobName || "",
+							securityIdPrefix: summary.securityIdPrefix,
+						};
+					};
+					const ulc = document.querySelector(".user-list-content");
+					if (!ulc) return { ok: false, error: "user-list-content not found" };
+					const bossList = ulc.__vue__ && ulc.__vue__.$parent;
+					const list = (bossList && bossList.list) || [];
+					const key = String(sid || "").slice(0, 30);
+					const target = {
+						name: normalize(recruiterName),
+						company: normalize(company),
+						title: normalize(title),
+					};
+					let friend = null;
+					if (bossList && list.length) {
+						if (key) {
+							friend = list.find(f =>
+								String(f.securityId || "").includes(key) ||
+								String(f.encryptBossId || "").includes(key)
+							);
+						}
+						if (!friend && target.name) {
+							const identityMatches = list.filter(f => {
+								const item = summarize(f);
+								const nameMatch = item.name === target.name;
+								const companyMatch =
+									target.company &&
+									item.company &&
+									(item.company === target.company ||
+									 item.company.includes(target.company) ||
+									 target.company.includes(item.company));
+								const titleMatch =
+									target.title &&
+									item.title &&
+									(item.title === target.title ||
+									 item.title.includes(target.title) ||
+									 target.title.includes(item.title));
+								return nameMatch && (companyMatch || titleMatch);
+							});
+							if (identityMatches.length === 1) {
+								friend = identityMatches[0];
+							} else if (identityMatches.length > 1) {
+								return {
+									ok: false,
+									error: "target friend ambiguous",
+									candidates: identityMatches.slice(0, 8).map(publicSummary),
+								};
+							}
+						}
+						if (!friend && target.name) {
+							const nameMatches = list.filter(f => summarize(f).name === target.name);
+							if (nameMatches.length === 1) {
+								friend = nameMatches[0];
+							} else if (nameMatches.length > 1) {
+								return {
+									ok: false,
+									error: "target friend ambiguous by name",
+									candidates: nameMatches.slice(0, 8).map(publicSummary),
+								};
+							}
+						}
+						if (friend) {
+							bossList.handleOpenChat(friend);
+							return { ok: true, method: "vue", friendName: friend.name || "", friend: publicSummary(friend) };
+						}
+					}
+
+					const domItems = [...document.querySelectorAll(".user-list-content li")];
+					const domSummary = (el) => ({
+						name: "",
+						company: "",
+						title: "",
+						text: String(el.innerText || el.textContent || "").replace(/\\s+/g, " ").trim().slice(0, 160),
+					});
+					const domMatches = domItems.filter(el => {
+						const text = normalize(el.innerText || el.textContent || "");
+						const nameMatch = target.name && text.includes(target.name);
+						const companyMatch = target.company && text.includes(target.company);
+						const titleMatch = target.title && text.includes(target.title);
+						return nameMatch && (companyMatch || titleMatch);
+					});
+					if (domMatches.length === 1) {
+						const clickable = domMatches[0].querySelector(".friend-content") || domMatches[0];
+						clickable.click();
+						return { ok: true, method: "dom", friend: domSummary(domMatches[0]) };
+					}
+					if (domMatches.length > 1) {
+						return {
+							ok: false,
+							error: "target friend ambiguous in DOM",
+							candidates: domMatches.slice(0, 8).map(domSummary),
+						};
+					}
+					if (!friend) {
+						return {
+							ok: false,
+							error: "target friend not found",
+							target,
+							candidates: list.length
+								? list.slice(0, 8).map(publicSummary)
+								: domItems.slice(0, 8).map(domSummary),
+						};
+					}
+				}''',
+					{
+						"sid": security_id,
+						"recruiterName": target_recruiter_name,
+						"company": target_company,
+						"title": target_title,
+					},
+				)
+			except Exception as exc:
+				if not _is_navigation_context_error(exc):
+					raise
+				open_result = {
+					"ok": True,
+					"method": "open-triggered-before-navigation",
+					"warning": str(exc),
+				}
+			if not isinstance(open_result, dict) or not open_result.get("ok"):
+				return {"code": -1, "message": str((open_result or {}).get("error") or "打开目标对话失败"), "detail": open_result}
+			try:
+				browser._page.wait_for_load_state("domcontentloaded", timeout=5000)
+			except Exception:
+				pass
+			try:
+				browser._page.wait_for_selector('.chat-input[contenteditable="true"]', timeout=12000)
+			except Exception as exc:
+				return {
+					"code": -1,
+					"message": f"打开目标对话后未找到输入框: {exc}",
+					"detail": open_result,
+				}
+			if target_recruiter_name or target_company or target_title:
+				target_verified = _safe_evaluate(
+					"verify-target-conversation",
+					'''({ recruiterName, company, title }) => {
+						const normalize = (value) =>
+							String(value || "").replace(/\\s+/g, "").replace(/\\.\\.\\.$/, "").toLowerCase();
+						const target = {
+							name: normalize(recruiterName),
+							company: normalize(company),
+							title: normalize(title),
+						};
+						const conversationText =
+							document.querySelector(".chat-conversation")?.innerText ||
+							document.querySelector(".chat-message-list")?.innerText ||
+							document.querySelector(".chat-panel")?.innerText ||
+							document.querySelector(".chat-editor")?.parentElement?.innerText ||
+							"";
+						const text = normalize(conversationText);
+						const nameMatch = target.name && text.includes(target.name);
+						const companyMatch = target.company && text.includes(target.company);
+						const titleMatch = target.title && text.includes(target.title);
+						return {
+							ok: Boolean(nameMatch || companyMatch || titleMatch),
+							nameMatch: Boolean(nameMatch),
+							companyMatch: Boolean(companyMatch),
+							titleMatch: Boolean(titleMatch),
+							textSample: String(conversationText || "").replace(/\\s+/g, " ").trim().slice(0, 200),
+						};
+					}''',
+					{
+						"recruiterName": target_recruiter_name,
+						"company": target_company,
+						"title": target_title,
+					},
+				)
+				if isinstance(target_verified, dict) and not target_verified.get("ok"):
+					return {
+						"code": -1,
+						"message": "打开目标对话后未能确认当前会话身份，已取消附件上传",
+						"detail": {"open_result": open_result, "target_verified": target_verified},
+					}
+			before_file_count = _safe_evaluate(
+				"count-file-before-upload",
+				'''({ name }) => {
+					const conversationText = document.querySelector(".chat-conversation")?.innerText || "";
+					return conversationText.split(name).length - 1;
+				}''',
+				{"name": attachment.name},
+			)
+			try:
+				agree_result = browser._page.evaluate(
+					'''() => {
+						const conversation = document.querySelector(".chat-conversation");
+						if (!conversation) return { ok: false, reason: "conversation not found" };
+						const visible = (el) => !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length);
+						const agreeButtons = [...conversation.querySelectorAll(".btn-agree, button, a, span")]
+							.filter(el => visible(el) && String(el.innerText || el.textContent || "").trim() === "同意");
+						if (!agreeButtons.length) {
+							return {
+								ok: false,
+								reason: "resume request agree button not found",
+								textSample: String(conversation.innerText || "").replace(/\\s+/g, " ").trim().slice(0, 240),
+							};
+						}
+						const button = agreeButtons[agreeButtons.length - 1];
+						button.click();
+						return { ok: true, method: "resume-request-agree", agreeButtonCount: agreeButtons.length };
+					}'''
+				)
+			except Exception as exc:
+				if not _is_navigation_context_error(exc):
+					raise RuntimeError(f"click-resume-request-agree: {exc}") from exc
+				agree_result = {
+					"ok": True,
+					"method": "resume-request-agree",
+					"warning": str(exc),
+				}
+			if isinstance(agree_result, dict) and agree_result.get("ok"):
+				verify: dict[str, Any] | None = None
+				for _ in range(12):
+					time.sleep(1)
+					verify = _safe_evaluate(
+						"verify-resume-request-agree",
+						'''({ name, beforeCount }) => {
+							const conversationText = document.querySelector(".chat-conversation")?.innerText || "";
+							const fileNameCount = conversationText.split(name).length - 1;
+							const visible = (el) => !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length);
+							const agreeButtonCount = [...document.querySelectorAll(".chat-conversation .btn-agree")]
+								.filter(visible).length;
+							const hasResumeRequest = /附件简历|详细简历|发.*简历/.test(conversationText);
+							return {
+								seenFileName: fileNameCount > beforeCount,
+								fileNameCount,
+								beforeCount,
+								agreeButtonCount,
+								hasResumeRequest,
+								textSample: conversationText.replace(/\\s+/g, " ").trim().slice(0, 240),
+							};
+						}''',
+						{"name": attachment.name, "beforeCount": int(before_file_count or 0)},
+					)
+					if isinstance(verify, dict) and (
+						verify.get("seenFileName") or int(verify.get("agreeButtonCount") or 0) == 0
+					):
+						return {
+							"code": 0,
+							"message": "附件简历请求已同意",
+							"method": "resume-request-agree",
+							"file": str(attachment),
+							"detail": {"agree_result": agree_result, "verify": verify},
+						}
+				return {
+					"code": -1,
+					"message": "已点击附件简历同意按钮，但未能确认 Boss 聊天页状态变化",
+					"method": "resume-request-agree",
+					"file": str(attachment),
+					"detail": {"agree_result": agree_result, "verify": verify},
+				}
+			open_toolbar_result = _safe_evaluate(
+				"open-resume-toolbar",
+				'''() => {
+					const visible = (el) => !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
+					const clean = (value) => String(value || "").replace(/\\s+/g, " ").trim();
+					const editor = document.querySelector(".chat-editor");
+					if (!editor) return { ok: false, error: "chat editor not found" };
+					const candidates = [...editor.querySelectorAll("button, a, span, div")]
+						.filter(visible)
+						.map(el => ({ el, text: clean(el.innerText || el.textContent) }))
+						.filter(item => item.text === "发简历" || /^发简历\\b/.test(item.text));
+					if (!candidates.length) {
+						return {
+							ok: false,
+							error: "resume toolbar button not found",
+							editorText: clean(editor.innerText || editor.textContent).slice(0, 240),
+						};
+					}
+					const target = candidates[candidates.length - 1].el;
+					const clickable = target.closest("button, a, [role='button'], .btn, .btn-v2") || target;
+					clickable.click();
+					return {
+						ok: true,
+						method: "resume-toolbar-open",
+						buttonText: candidates[candidates.length - 1].text,
+						editorText: clean(editor.innerText || editor.textContent).slice(0, 240),
+					};
+				}''',
+			)
+			if not isinstance(open_toolbar_result, dict) or not open_toolbar_result.get("ok"):
+				return {
+					"code": -1,
+					"message": "未找到 Boss 聊天工具栏的发简历入口",
+					"method": "resume-toolbar-upload",
+					"file": str(attachment),
+					"detail": open_toolbar_result,
+				}
+			choose_attachment_result: dict[str, Any] | None = None
+			for _ in range(8):
+				time.sleep(0.5)
+				choose_attachment_result = _safe_evaluate(
+					"choose-resume-toolbar-attachment",
+					'''() => {
+						const visible = (el) => !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
+						const clean = (value) => String(value || "").replace(/\\s+/g, " ").trim();
+						const fileSelector = 'input[type="file"][ka="user-resume-upload-file"], input[type="file"][accept*=".pdf"], input[type="file"][accept*="application/pdf"], input[type="file"][accept*="pdf"]';
+						const visibleRoots = [...document.querySelectorAll(".dialog-container, .dialog, .boss-dialog, .modal, .pop, [role='dialog']")]
+							.filter(visible);
+						const roots = visibleRoots.length ? visibleRoots : [document.body];
+						if (visibleRoots.some(root => root.querySelector(fileSelector))) {
+							return { ok: true, method: "resume-toolbar-file-input-ready" };
+						}
+						const labels = ["上传附件简历", "上传简历", "附件简历"];
+						for (const root of roots) {
+							const actions = [...root.querySelectorAll("button, a, span, div")]
+								.filter(visible)
+								.map(el => ({ el, text: clean(el.innerText || el.textContent) }))
+								.filter(item =>
+									item.text &&
+									labels.some(label => item.text === label || item.text.includes(label)) &&
+									!/发送在线简历|在线填写|没有附件简历|取消/.test(item.text)
+								);
+							if (actions.length) {
+								const action = actions[actions.length - 1];
+								const clickable = action.el.closest("button, a, [role='button'], .btn, .btn-v2") || action.el;
+								clickable.click();
+								return { ok: true, method: "resume-toolbar-attachment-option", buttonText: action.text };
+							}
+						}
+						return {
+							ok: false,
+							error: "resume attachment option not found",
+							dialogText: roots.map(root => clean(root.innerText || root.textContent)).join(" | ").slice(0, 360),
+						};
+					}''',
+				)
+				if isinstance(choose_attachment_result, dict) and choose_attachment_result.get("ok"):
+					break
+			if not isinstance(choose_attachment_result, dict) or not choose_attachment_result.get("ok"):
+				return {
+					"code": -1,
+					"message": "已打开 Boss 发简历入口，但未找到附件简历上传选项",
+					"method": "resume-toolbar-upload",
+					"file": str(attachment),
+					"detail": {
+						"open_toolbar_result": open_toolbar_result,
+						"choose_attachment_result": choose_attachment_result,
+					},
+				}
+			file_input = browser._page.locator(
+				'input[type="file"][ka="user-resume-upload-file"], '
+				'input[type="file"][accept*=".pdf"], '
+				'input[type="file"][accept*="application/pdf"], '
+				'input[type="file"][accept*="pdf"]'
+			).first
+			file_input.set_input_files(str(attachment))
+			time.sleep(1)
+			confirm_result = _safe_evaluate(
+				"confirm-resume-toolbar-upload",
+				'''() => {
+					const visible = (el) => !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
+					const clean = (value) => String(value || "").replace(/\\s+/g, " ").trim();
+					const visibleRoots = [...document.querySelectorAll(".dialog-container, .dialog, .boss-dialog, .modal, .pop, [role='dialog']")]
+						.filter(visible);
+					const roots = visibleRoots.filter(root => /简历|附件|RESUME|EXPORT/i.test(clean(root.innerText || root.textContent)));
+					if (!roots.length) {
+						return {
+							ok: true,
+							method: "resume-toolbar-upload",
+							warning: "resume upload dialog not found; waiting for automatic send",
+						};
+					}
+					const labels = ["确认发送", "发送简历", "发送", "确定", "确认"];
+					for (const root of roots) {
+						const actions = [...root.querySelectorAll("button, a, span, div")]
+							.filter(visible)
+							.map(el => ({ el, text: clean(el.innerText || el.textContent), disabled: el.disabled || /disabled/.test(String(el.className || "")) }))
+							.filter(item =>
+								!item.disabled &&
+								item.text &&
+								labels.some(label => item.text === label || item.text.includes(label)) &&
+								!/取消|发送在线简历|在线填写|上传附件简历|上传简历|换电话|换微信/.test(item.text)
+							);
+						if (actions.length) {
+							const action = actions[actions.length - 1];
+							const clickable = action.el.closest("button, a, [role='button'], .btn, .btn-v2") || action.el;
+							clickable.click();
+							return { ok: true, method: "resume-toolbar-upload", buttonText: action.text };
+						}
+					}
+					return {
+						ok: true,
+						method: "resume-toolbar-upload",
+						warning: "resume upload confirmation button not found; waiting for automatic send",
+						dialogText: roots.map(root => clean(root.innerText || root.textContent)).join(" | ").slice(0, 360),
+					};
+				}''',
+			)
+			verify: dict[str, Any] | None = None
+			for _ in range(10):
+				time.sleep(1)
+				verify = _safe_evaluate(
+					"verify-resume-toolbar-upload",
+					'''({ name, beforeCount }) => {
+						const conversationText = document.querySelector(".chat-conversation")?.innerText || "";
+						const fileNameCount = conversationText.split(name).length - 1;
+						const visible = (el) => !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
+						const activeDialogText = [...document.querySelectorAll(".dialog-container, .dialog, .boss-dialog, .modal, .pop, [role='dialog']")]
+							.filter(visible)
+							.map(el => String(el.innerText || el.textContent || "").replace(/\\s+/g, " ").trim())
+							.join(" | ")
+							.slice(0, 360);
+						return {
+							seenFileName: fileNameCount > beforeCount,
+							fileNameCount,
+							beforeCount,
+							hasResumeFileInput: !!document.querySelector('input[type="file"][ka="user-resume-upload-file"], input[type="file"][accept*=".pdf"], input[type="file"][accept*="application/pdf"], input[type="file"][accept*="pdf"]'),
+							activeDialogText,
+							textSample: conversationText.replace(/\\s+/g, " ").trim().slice(0, 240),
+						};
+					}''',
+					{"name": attachment.name, "beforeCount": int(before_file_count or 0)},
+				)
+				if isinstance(verify, dict) and verify.get("seenFileName"):
+					return {
+						"code": 0,
+						"message": "附件简历已通过 Boss 发简历工具栏发送",
+						"method": "resume-toolbar-upload",
+						"file": str(attachment),
+						"detail": {
+							"open_toolbar_result": open_toolbar_result,
+							"choose_attachment_result": choose_attachment_result,
+							"confirm_result": confirm_result,
+							"verify": verify,
+						},
+					}
+			return {
+				"code": -1,
+				"message": "已走 Boss 发简历工具栏上传控件，但未确认看到 PDF 文件名",
+				"method": "resume-toolbar-upload",
+				"file": str(attachment),
+				"detail": {
+					"open_toolbar_result": open_toolbar_result,
+					"choose_attachment_result": choose_attachment_result,
+					"confirm_result": confirm_result,
+					"verify": verify,
+				},
+			}
+		except Exception as exc:
+			return {"code": -1, "message": f"发送附件简历失败: {exc}"}
 
 	def resume_status(self) -> dict[str, Any]:
 		"""查询简历完整度和在线状态。"""

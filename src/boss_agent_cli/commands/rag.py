@@ -729,12 +729,22 @@ def rag_approve_cmd(ctx: click.Context, draft_id: str, copy: bool) -> None:
 @click.argument("draft_id", required=True)
 @click.option("--security-id", default=None)
 @click.option("--send-resume", is_flag=True, default=False)
+@click.option("--send-attachment-resume", is_flag=True, default=False)
+@click.option("--resume-file", default=None)
+@click.option("--target-recruiter-name", default="")
+@click.option("--target-company", default="")
+@click.option("--target-title", default="")
 @click.pass_context
 def rag_send_cmd(
 	ctx: click.Context,
 	draft_id: str,
 	security_id: str | None,
 	send_resume: bool,
+	send_attachment_resume: bool,
+	resume_file: str | None,
+	target_recruiter_name: str,
+	target_company: str,
+	target_title: str,
 ) -> None:
 	store = _resolve_store(ctx)
 	draft = store.get_draft(draft_id)
@@ -777,7 +787,17 @@ def rag_send_cmd(
 		security_id=resolved_security_id,
 		message=message,
 		send_resume=send_resume,
+		send_attachment_resume=send_attachment_resume,
+		resume_file_path=resume_file,
+		target_recruiter_name=target_recruiter_name,
+		target_company=target_company,
+		target_title=target_title,
 	)
+	target_payload = {
+		"recruiter_name": target_recruiter_name,
+		"company": target_company,
+		"title": target_title,
+	}
 	store.append_audit_log(
 		AuditLogRecord.new(
 			event_type="draft_send",
@@ -787,13 +807,16 @@ def rag_send_cmd(
 				"conversation_id": draft.conversation_id,
 				"security_id": resolved_security_id,
 				"send_resume": send_resume,
+				"send_attachment_resume": send_attachment_resume,
+				"resume_file": result.resume_file_path,
 				"message_sent": result.message_sent,
 				"resume_sent": result.resume_sent,
 				"error_message": result.error_message,
+				"target": target_payload,
 			},
 		)
 	)
-	if not result.message_sent:
+	if not result.message_sent and not (send_attachment_resume and result.resume_sent):
 		handle_error_output(
 			ctx,
 			_workflow_command(ctx, "send"),
@@ -812,6 +835,9 @@ def rag_send_cmd(
 			"message_sent": result.message_sent,
 			"resume_sent": result.resume_sent,
 			"send_resume": send_resume,
+			"send_attachment_resume": send_attachment_resume,
+			"resume_file": result.resume_file_path,
+			"target": target_payload,
 			"results": result.results,
 			"error_message": result.error_message,
 		},

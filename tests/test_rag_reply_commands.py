@@ -284,6 +284,83 @@ def test_agent_send_uses_agent_command_name(monkeypatch, tmp_path: Path):
 	assert parsed["data"]["results"] == ["消息已发送", "在线简历已发送"]
 
 
+def test_agent_send_attachment_resume_does_not_send_draft_text(monkeypatch, tmp_path: Path):
+	store = RagReplyStore(tmp_path / "boss-rag.sqlite3")
+	store.initialize()
+	store.save_conversation(
+		ConversationRecord(
+			conversation_id="conv_attachment_001",
+			source="frontend_bridge",
+			state={"security_id": "sec_attachment"},
+		)
+	)
+	draft = DraftRecord.new(
+		conversation_id="conv_attachment_001",
+		source_message_id="msg_attachment_001",
+		draft_text="这段文字不应该作为聊天消息发出去。",
+		intent="resume_share_request",
+	)
+	store.save_draft(draft)
+	resume_file = tmp_path / "resume.pdf"
+	resume_file.write_bytes(b"%PDF-1.4\n")
+	seen: dict[str, object] = {}
+
+	def _fake_execute(ctx, **kwargs):
+		seen.update(kwargs)
+		return ChatReplyExecutionResult(
+			security_id=kwargs["security_id"],
+			message=kwargs["message"],
+			send_resume=kwargs["send_resume"],
+			message_sent=False,
+			resume_sent=True,
+			results=["附件简历已发送: resume.pdf"],
+			resume_file_path=str(resume_file),
+		)
+
+	monkeypatch.setattr(rag_commands, "execute_chat_reply", _fake_execute)
+	runner = CliRunner()
+
+	result = runner.invoke(
+		cli,
+		[
+			"--json",
+			"--data-dir",
+			str(tmp_path),
+			"agent",
+			"send",
+			draft.draft_id,
+			"--send-attachment-resume",
+			"--resume-file",
+			str(resume_file),
+			"--target-recruiter-name",
+			"张HR",
+			"--target-company",
+			"测试公司",
+			"--target-title",
+			"招聘经理",
+		],
+	)
+
+	assert result.exit_code == 0
+	assert seen["send_resume"] is False
+	assert seen["send_attachment_resume"] is True
+	assert seen["resume_file_path"] == str(resume_file)
+	assert seen["target_recruiter_name"] == "张HR"
+	assert seen["target_company"] == "测试公司"
+	assert seen["target_title"] == "招聘经理"
+	parsed = json.loads(result.output)
+	assert parsed["ok"] is True
+	assert parsed["data"]["message_sent"] is False
+	assert parsed["data"]["resume_sent"] is True
+	assert parsed["data"]["send_attachment_resume"] is True
+	assert parsed["data"]["resume_file"] == str(resume_file)
+	assert parsed["data"]["target"] == {
+		"recruiter_name": "张HR",
+		"company": "测试公司",
+		"title": "招聘经理",
+	}
+
+
 def test_rag_send_alias_uses_rag_command_name(monkeypatch, tmp_path: Path):
 	store = RagReplyStore(tmp_path / "boss-rag.sqlite3")
 	store.initialize()
