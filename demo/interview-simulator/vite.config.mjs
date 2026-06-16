@@ -465,6 +465,9 @@ function createRagBridgePlugin() {
     const isAgentTargets = req.url.startsWith("/api/agent/targets") || req.url.startsWith("/api/rag/targets");
     const isAgentAsk = req.url === "/api/agent/ask" || req.url === "/api/rag/ask";
     const isAgentSend = req.url === "/api/agent/send" || req.url === "/api/rag/send";
+    const isWatcherStatus = req.url === "/api/agent/watcher/status";
+    const isWatcherRun = req.url === "/api/agent/watcher/run";
+    const isWatcherControl = req.url === "/api/agent/watcher/control";
 
     if (req.method === "GET" && isAgentHealth) {
       res.setHeader("Content-Type", "application/json; charset=utf-8");
@@ -581,6 +584,73 @@ function createRagBridgePlugin() {
             errorMessage:
               error instanceof Error ? error.message : "读取 Boss 对话目标失败。",
             targets: [],
+          }),
+        );
+      }
+      return true;
+    }
+
+    if (req.method === "GET" && isWatcherStatus) {
+      res.setHeader("Content-Type", "application/json; charset=utf-8");
+      try {
+        const payload = runBossJsonCommand(bridgeConfig, ["agent", "watcher-status"]);
+        res.end(JSON.stringify({ ok: true, data: payload.data || {} }));
+      } catch (error) {
+        res.statusCode = 500;
+        res.end(
+          JSON.stringify({
+            ok: false,
+            errorMessage:
+              error instanceof Error ? error.message : "读取 watcher 状态失败。",
+            data: { running: false, dry_run: true, tasks: [] },
+          }),
+        );
+      }
+      return true;
+    }
+
+    if (req.method === "POST" && isWatcherRun) {
+      res.setHeader("Content-Type", "application/json; charset=utf-8");
+      try {
+        const payload = runBossJsonCommand(bridgeConfig, ["agent", "watcher-run", "--once"]);
+        res.end(JSON.stringify({ ok: true, data: payload.data || {} }));
+      } catch (error) {
+        const payload = error?.commandPayload;
+        res.statusCode = payload?.error?.recoverable ? 502 : 500;
+        res.end(
+          JSON.stringify({
+            ok: false,
+            errorMessage:
+              error instanceof Error ? error.message : "运行 watcher 失败。",
+          }),
+        );
+      }
+      return true;
+    }
+
+    if (req.method === "POST" && isWatcherControl) {
+      res.setHeader("Content-Type", "application/json; charset=utf-8");
+      try {
+        const rawBody = await readBody(req);
+        const parsed = rawBody ? JSON.parse(rawBody) : {};
+        const action = String(parsed.action || "").trim();
+        const conversationId = String(parsed.conversation_id || "").trim();
+        if (!["pause", "resume"].includes(action)) {
+          res.statusCode = 400;
+          res.end(JSON.stringify({ ok: false, errorMessage: "action 必须是 pause 或 resume。" }));
+          return true;
+        }
+        const args = ["agent", action === "pause" ? "watcher-pause" : "watcher-resume"];
+        if (conversationId) args.push("--conversation-id", conversationId);
+        const payload = runBossJsonCommand(bridgeConfig, args);
+        res.end(JSON.stringify({ ok: true, data: payload.data || {} }));
+      } catch (error) {
+        res.statusCode = 500;
+        res.end(
+          JSON.stringify({
+            ok: false,
+            errorMessage:
+              error instanceof Error ? error.message : "更新 watcher 控制状态失败。",
           }),
         );
       }
