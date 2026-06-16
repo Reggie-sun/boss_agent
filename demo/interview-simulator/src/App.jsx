@@ -430,7 +430,11 @@ export function App() {
       if (!response.ok || !payload.ok) {
         throw new Error(payload.errorMessage || "BOSS 搜索失败。");
       }
-      setBossSearchJobs(Array.isArray(payload.data) ? payload.data : []);
+      const jobs = Array.isArray(payload.data) ? payload.data : [];
+      setBossSearchJobs(jobs);
+      if (!jobs.length) {
+        setBossAutomationError("预览没有找到职位，请放宽筛选条件后再开聊。");
+      }
     } catch (error) {
       setBossSearchJobs([]);
       setBossAutomationError(error instanceof Error ? error.message : "BOSS 搜索失败。");
@@ -1425,6 +1429,13 @@ export function App() {
               <div className="apply-result apply-result--error">
                 <WarningCircle size={18} weight="fill" />
                 <span>{bossAutomationError}</span>
+              </div>
+            ) : null}
+
+            {isBossAutoRunning ? (
+              <div className="apply-result apply-result--pending">
+                <Lightning size={18} weight="fill" />
+                <span>正在按当前筛选搜索并开聊；如果候选为 0，会停止并显示原因。</span>
               </div>
             ) : null}
 
