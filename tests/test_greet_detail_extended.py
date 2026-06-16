@@ -178,6 +178,17 @@ def test_batch_greet_respects_count_limit(tmp_path):
 	assert parsed["data"]["count"] == 1
 
 
+def test_batch_greet_no_candidates_is_not_success(tmp_path):
+	"""真实开聊没有候选时不应伪装成 0/0 成功。"""
+	code, parsed = _invoke_batch_greet(
+		"batch-greet", "python", "--count", "3", tmp_path=tmp_path,
+		search_result={"zpData": {"jobList": []}},
+	)
+	assert code == 1
+	assert parsed["ok"] is False
+	assert parsed["error"]["code"] == "NO_CANDIDATES"
+
+
 def test_batch_greet_reports_platform_error(tmp_path):
 	"""搜索接口明确失败时，不应伪装成空候选成功。"""
 	code, parsed = _invoke_batch_greet(

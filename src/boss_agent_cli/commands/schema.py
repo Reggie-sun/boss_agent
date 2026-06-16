@@ -973,6 +973,11 @@ SCHEMA_DATA = {
 			"recoverable": False,
 			"recovery_action": None,
 		},
+		"NO_CANDIDATES": {
+			"message": "没有找到可执行候选人",
+			"recoverable": True,
+			"recovery_action": "调整筛选条件后重试",
+		},
 		"SHORTLIST_NOT_FOUND": {
 			"message": "候选池中不存在该职位",
 			"recoverable": True,

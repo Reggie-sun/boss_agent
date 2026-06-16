@@ -105,6 +105,7 @@ def test_schema_error_codes_cover_all_used_codes():
 		"TOKEN_REFRESH_FAILED",
 		"ACCOUNT_RISK",
 		"JOB_NOT_FOUND",
+		"NO_CANDIDATES",
 		"ALREADY_GREETED",
 		"ALREADY_APPLIED",
 		"GREET_LIMIT",

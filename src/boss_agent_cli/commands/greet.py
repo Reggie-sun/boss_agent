@@ -215,6 +215,16 @@ def batch_greet_cmd(ctx: click.Context, query: str, city: str | None, salary: st
 				)
 				return
 
+			if not candidates:
+				handle_error_output(
+					ctx, "batch-greet",
+					code="NO_CANDIDATES",
+					message="没有找到可开聊候选人，请放宽筛选条件或先用预览确认搜索结果。",
+					recoverable=True,
+					recovery_action="调整关键词/城市/薪资/福利筛选后重试",
+				)
+				return
+
 			results = []
 			stopped_reason = None
 
