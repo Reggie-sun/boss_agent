@@ -29,6 +29,40 @@ from boss_agent_cli.search_filters import (
 )
 
 
+_BATCH_GREET_STOP_ERROR_CODES = (
+	"RATE_LIMITED",
+	"GREET_LIMIT",
+	"TOKEN_REFRESH_FAILED",
+	"AUTH_EXPIRED",
+	"ACCOUNT_RISK",
+)
+
+
+def _batch_greet_stop_reason(error_msg: str) -> str | None:
+	"""Return a batch-level stop reason for errors that affect every candidate."""
+	upper_msg = error_msg.upper()
+	for code in _BATCH_GREET_STOP_ERROR_CODES:
+		if code in upper_msg:
+			return code
+
+	lower_msg = error_msg.lower()
+	if any(token in lower_msg for token in ("too many", "rate")) or any(
+		token in error_msg for token in ("频率", "频繁", "限流", "稍后再试")
+	):
+		return "RATE_LIMITED"
+	if any(token in error_msg for token in ("上限", "今日已达")):
+		return "GREET_LIMIT"
+	if any(token in lower_msg for token in ("stoken", "token", "unauthorized")) or any(
+		token in error_msg for token in ("登录", "登陆", "未认证")
+	):
+		return "AUTH_EXPIRED"
+	if any(token in lower_msg for token in ("risk", "forbidden")) or any(
+		token in error_msg for token in ("环境存在异常", "异常访问", "风控", "安全验证")
+	):
+		return "ACCOUNT_RISK"
+	return None
+
+
 @click.command("greet")
 @click.argument("security_id")
 @click.argument("job_id")
@@ -46,7 +80,8 @@ def greet_cmd(ctx: click.Context, security_id: str, job_id: str, message: str) -
 	with CacheStore(data_dir / "cache" / "boss_agent.db") as cache:
 		if cache.is_greeted(security_id):
 			handle_error_output(
-				ctx, "greet",
+				ctx,
+				"greet",
 				code="ALREADY_GREETED",
 				message="已向该招聘者打过招呼",
 				hints={"next_actions": ["boss search <query> — 搜索其他职位"]},
@@ -58,15 +93,19 @@ def greet_cmd(ctx: click.Context, security_id: str, job_id: str, message: str) -
 			# greet_before hook — allows veto
 			hooks = ctx.obj.get("hooks")
 			if hooks:
-				veto = hooks.greet_before.call({
-					"security_id": security_id,
-					"job_id": job_id,
-					"message": message,
-					"source": "greet",
-				})
+				veto = hooks.greet_before.call(
+					{
+						"security_id": security_id,
+						"job_id": job_id,
+						"message": message,
+						"source": "greet",
+					}
+				)
 				if veto:
 					handle_error_output(
-						ctx, "greet", code="HOOK_BLOCKED",
+						ctx,
+						"greet",
+						code="HOOK_BLOCKED",
 						message=f"打招呼被钩子阻止: {veto}",
 						recoverable=True,
 					)
@@ -76,7 +115,8 @@ def greet_cmd(ctx: click.Context, security_id: str, job_id: str, message: str) -
 			if not platform.is_success(resp):
 				error_code, _ = platform.parse_error(resp)
 				handle_error_output(
-					ctx, "greet",
+					ctx,
+					"greet",
 					code=error_code if error_code != "UNKNOWN" else "NETWORK_ERROR",
 					message=resp.get("message") or "打招呼失败",
 					recoverable=True,
@@ -88,12 +128,14 @@ def greet_cmd(ctx: click.Context, security_id: str, job_id: str, message: str) -
 
 			# greet_after hook
 			if hooks:
-				hooks.greet_after.call({
-					"security_id": security_id,
-					"job_id": job_id,
-					"success": True,
-					"source": "greet",
-				})
+				hooks.greet_after.call(
+					{
+						"security_id": security_id,
+						"job_id": job_id,
+						"success": True,
+						"source": "greet",
+					}
+				)
 
 			data = {
 				"security_id": security_id,
@@ -107,7 +149,9 @@ def greet_cmd(ctx: click.Context, security_id: str, job_id: str, message: str) -
 				],
 			}
 			handle_output(
-				ctx, "greet", data,
+				ctx,
+				"greet",
+				data,
 				render=lambda d: render_message_panel(d, title="greet"),
 				hints=hints,
 			)
@@ -119,16 +163,47 @@ def greet_cmd(ctx: click.Context, security_id: str, job_id: str, message: str) -
 @click.option("--salary", default=None, help="薪资范围")
 @click.option("--experience", default=None, help="经验要求（如 3-5年）")
 @click.option("--education", default=None, help="学历要求（如 本科）")
-@click.option("--industry", default=None, type=click.Choice(list(INDUSTRY_CODES.keys()), case_sensitive=False), help="行业类型")
-@click.option("--scale", default=None, type=click.Choice(list(SCALE_CODES.keys()), case_sensitive=False), help="公司规模（如 100-499人）")
-@click.option("--stage", default=None, type=click.Choice(list(STAGE_CODES.keys()), case_sensitive=False), help="融资阶段（如 已上市、A轮）")
-@click.option("--job-type", default=None, type=click.Choice(list(JOB_TYPE_CODES.keys()), case_sensitive=False), help="职位类型（全职/兼职/实习）")
+@click.option(
+	"--industry", default=None, type=click.Choice(list(INDUSTRY_CODES.keys()), case_sensitive=False), help="行业类型"
+)
+@click.option(
+	"--scale",
+	default=None,
+	type=click.Choice(list(SCALE_CODES.keys()), case_sensitive=False),
+	help="公司规模（如 100-499人）",
+)
+@click.option(
+	"--stage",
+	default=None,
+	type=click.Choice(list(STAGE_CODES.keys()), case_sensitive=False),
+	help="融资阶段（如 已上市、A轮）",
+)
+@click.option(
+	"--job-type",
+	default=None,
+	type=click.Choice(list(JOB_TYPE_CODES.keys()), case_sensitive=False),
+	help="职位类型（全职/兼职/实习）",
+)
 @click.option("--welfare", default=None, help="福利筛选（如 双休、五险一金），逗号分隔时按 AND 匹配")
 @click.option("--count", default=10, help="打招呼数量上限（最大 150）")
 @click.option("--dry-run", is_flag=True, default=False, help="仅模拟执行，不实际打招呼")
 @click.pass_context
 @handle_auth_errors("batch-greet")
-def batch_greet_cmd(ctx: click.Context, query: str, city: str | None, salary: str | None, experience: str | None, education: str | None, industry: str | None, scale: str | None, stage: str | None, job_type: str | None, welfare: str | None, count: int, dry_run: bool) -> None:
+def batch_greet_cmd(
+	ctx: click.Context,
+	query: str,
+	city: str | None,
+	salary: str | None,
+	experience: str | None,
+	education: str | None,
+	industry: str | None,
+	scale: str | None,
+	stage: str | None,
+	job_type: str | None,
+	welfare: str | None,
+	count: int,
+	dry_run: bool,
+) -> None:
 	"""搜索后批量打招呼（上限 150）"""
 	if not require_compliance_allowed(ctx, "batch-greet"):
 		return
@@ -160,13 +235,21 @@ def batch_greet_cmd(ctx: click.Context, query: str, city: str | None, salary: st
 				return
 
 			criteria = SearchFilterCriteria(
-				query=query, city=city, salary=salary, experience=experience,
-				education=education, industry=industry, scale=scale,
-				stage=stage, job_type=job_type,
+				query=query,
+				city=city,
+				salary=salary,
+				experience=experience,
+				education=education,
+				industry=industry,
+				scale=scale,
+				stage=stage,
+				job_type=job_type,
 			)
 			try:
 				pipeline_result = run_search_pipeline(
-					platform, cache, logger,
+					platform,
+					cache,
+					logger,
 					criteria=criteria,
 					max_pages=5 if welfare_conditions or salary_requires_local_filter else 1,
 					limit=count,
@@ -175,7 +258,8 @@ def batch_greet_cmd(ctx: click.Context, query: str, city: str | None, salary: st
 				)
 			except SearchPipelinePlatformError as exc:
 				handle_error_output(
-					ctx, "batch-greet",
+					ctx,
+					"batch-greet",
 					code=exc.code,
 					message=exc.message or "搜索结果获取失败",
 					recoverable=False,
@@ -186,7 +270,9 @@ def batch_greet_cmd(ctx: click.Context, query: str, city: str | None, salary: st
 
 			if dry_run:
 				handle_output(
-					ctx, "batch-greet", {
+					ctx,
+					"batch-greet",
+					{
 						"dry_run": True,
 						"candidates": candidates,
 						"count": len(candidates),
@@ -197,7 +283,8 @@ def batch_greet_cmd(ctx: click.Context, query: str, city: str | None, salary: st
 
 			if not candidates:
 				handle_error_output(
-					ctx, "batch-greet",
+					ctx,
+					"batch-greet",
 					code="NO_CANDIDATES",
 					message="没有找到可开聊候选人，请放宽筛选条件或先用预览确认搜索结果。",
 					recoverable=True,
@@ -207,6 +294,7 @@ def batch_greet_cmd(ctx: click.Context, query: str, city: str | None, salary: st
 
 			results = []
 			stopped_reason = None
+			stopped_error = None
 
 			for idx, item in enumerate(candidates):
 				retry_count = 0
@@ -216,40 +304,48 @@ def batch_greet_cmd(ctx: click.Context, query: str, city: str | None, salary: st
 					try:
 						resp = platform.greet(item["security_id"], item["job_id"])
 						if not platform.is_success(resp):
-							error_code, _ = platform.parse_error(resp)
-							raise RuntimeError(error_code if error_code != "UNKNOWN" else (resp.get("message") or "greet failed"))
+							error_code, error_detail = platform.parse_error(resp)
+							if error_code == "UNKNOWN":
+								raise RuntimeError(resp.get("message") or error_detail or "greet failed")
+							error_msg = error_code
+							if error_detail:
+								error_msg = f"{error_code}: {error_detail}"
+							raise RuntimeError(error_msg)
 						cache.record_greet(item["security_id"], item["job_id"])
-						results.append({
-							"security_id": item["security_id"],
-							"job_id": item["job_id"],
-							"title": item["title"],
-							"company": item["company"],
-							"status": "success",
-						})
+						results.append(
+							{
+								"security_id": item["security_id"],
+								"job_id": item["job_id"],
+								"title": item["title"],
+								"company": item["company"],
+								"status": "success",
+							}
+						)
 						success = True
 						logger.info(f"打招呼成功: {item['title']} @ {item['company']}")
 						break
 					except Exception as e:
 						error_msg = str(e)
-						if "RATE_LIMITED" in error_msg or "频率" in error_msg:
-							stopped_reason = "RATE_LIMITED"
-							break
-						if "GREET_LIMIT" in error_msg or "上限" in error_msg:
-							stopped_reason = "GREET_LIMIT"
+						stop_reason = _batch_greet_stop_reason(error_msg)
+						if stop_reason:
+							stopped_reason = stop_reason
+							stopped_error = error_msg
 							break
 						if retry_count == 0:
 							logger.warning(f"打招呼失败，重试中: {item['title']}")
 							retry_count += 1
 							time.sleep(random.uniform(1.0, 2.0))
 						else:
-							results.append({
-								"security_id": item["security_id"],
-								"job_id": item["job_id"],
-								"title": item["title"],
-								"company": item["company"],
-								"status": "failed",
-								"error": error_msg,
-							})
+							results.append(
+								{
+									"security_id": item["security_id"],
+									"job_id": item["job_id"],
+									"title": item["title"],
+									"company": item["company"],
+									"status": "failed",
+									"error": error_msg,
+								}
+							)
 							break
 
 				if stopped_reason:
@@ -267,8 +363,12 @@ def batch_greet_cmd(ctx: click.Context, query: str, city: str | None, salary: st
 			}
 			if stopped_reason:
 				data["stopped_reason"] = stopped_reason
+			if stopped_error:
+				data["stopped_error"] = stopped_error
 
 			handle_output(
-				ctx, "batch-greet", data,
+				ctx,
+				"batch-greet",
+				data,
 				render=lambda d: render_batch_operation_summary(d, title="batch-greet"),
 			)

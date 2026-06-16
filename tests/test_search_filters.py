@@ -142,7 +142,7 @@ def _make_raw(
 
 class TestPrefilterJob:
 	def test_all_pass(self):
-		raw = _make_raw()
+		raw = _make_raw(salary="10-20K")
 		criteria = SearchFilterCriteria(
 			query="go",
 			city="广州",
@@ -167,6 +167,27 @@ class TestPrefilterJob:
 		ok, reasons = prefilter_job(raw, criteria)
 		assert ok is False
 		assert any("薪资" in r for r in reasons)
+
+	def test_salary_above_range_rejected(self):
+		raw = _make_raw(salary="25-40K")
+		criteria = SearchFilterCriteria(query="go", salary="12-24K")
+		ok, reasons = prefilter_job(raw, criteria)
+		assert ok is False
+		assert any("薪资" in r for r in reasons)
+
+	def test_salary_partially_above_range_rejected(self):
+		raw = _make_raw(salary="15-30K")
+		criteria = SearchFilterCriteria(query="go", salary="12-24K")
+		ok, reasons = prefilter_job(raw, criteria)
+		assert ok is False
+		assert any("薪资" in r for r in reasons)
+
+	def test_salary_inside_range_passes(self):
+		raw = _make_raw(salary="15-20K")
+		criteria = SearchFilterCriteria(query="go", salary="12-24K")
+		ok, reasons = prefilter_job(raw, criteria)
+		assert ok is True
+		assert reasons == []
 
 	def test_salary_mianyi_pass(self):
 		"""面议的薪资应该通过（无法判断）"""

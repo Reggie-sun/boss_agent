@@ -302,6 +302,12 @@ export function App() {
     () => bossSearchJobs.map(normalizeBossJob),
     [bossSearchJobs],
   );
+  const bossAutomationFailedItems = Array.isArray(bossAutomationResult?.failed)
+    ? bossAutomationResult.failed
+    : [];
+  const bossAutomationHasIssue =
+    Boolean(bossAutomationResult?.stopped_reason) ||
+    Number(bossAutomationResult?.total_failed || 0) > 0;
 
   function updateBossSearchForm(field, value) {
     setBossSearchForm((current) => ({
@@ -1440,13 +1446,39 @@ export function App() {
             ) : null}
 
             {bossAutomationResult ? (
-              <div className="apply-result apply-result--ok">
-                <CheckCircle size={18} weight="fill" />
-                <span>
-                  已开聊 {bossAutomationResult.total_greeted || 0} 个，
-                  失败 {bossAutomationResult.total_failed || 0} 个
-                  {bossAutomationResult.stopped_reason ? `，停止原因：${bossAutomationResult.stopped_reason}` : ""}
-                </span>
+              <div className={`apply-result ${bossAutomationHasIssue ? "apply-result--error" : "apply-result--ok"}`}>
+                {bossAutomationHasIssue ? (
+                  <WarningCircle size={18} weight="fill" />
+                ) : (
+                  <CheckCircle size={18} weight="fill" />
+                )}
+                <div className="apply-result__content">
+                  <span>
+                    已开聊 {bossAutomationResult.total_greeted || 0} 个，
+                    失败 {bossAutomationResult.total_failed || 0} 个
+                    {bossAutomationResult.stopped_reason ? `，停止原因：${bossAutomationResult.stopped_reason}` : ""}
+                  </span>
+                  {bossAutomationResult.stopped_error ? (
+                    <span className="apply-result__detail">{bossAutomationResult.stopped_error}</span>
+                  ) : null}
+                  {bossAutomationFailedItems.length ? (
+                    <ul className="apply-result__failure-list">
+                      {bossAutomationFailedItems.slice(0, 4).map((item, index) => {
+                        const label = [item?.title, item?.company].filter(Boolean).join(" @ ") ||
+                          item?.security_id ||
+                          `候选 ${index + 1}`;
+                        return (
+                          <li key={`${item?.security_id || item?.job_id || label}-${index}`}>
+                            {label}：{item?.error || "未知失败"}
+                          </li>
+                        );
+                      })}
+                      {bossAutomationFailedItems.length > 4 ? (
+                        <li>还有 {bossAutomationFailedItems.length - 4} 个失败项</li>
+                      ) : null}
+                    </ul>
+                  ) : null}
+                </div>
               </div>
             ) : null}
 

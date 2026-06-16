@@ -142,6 +142,49 @@ def test_batch_greet_rate_limited_stops_remaining(mock_cache_cls, mock_auth_cls,
 @patch("boss_agent_cli.commands.greet.get_platform_instance")
 @patch("boss_agent_cli.commands.greet.AuthManager")
 @patch("boss_agent_cli.commands.greet.CacheStore")
+def test_batch_greet_token_refresh_failed_stops_remaining(mock_cache_cls, mock_auth_cls, mock_client_cls, mock_time, legacy_args):
+	"""平台环境异常应立即中止，不继续把剩余候选打成失败。"""
+	mock_cache = _ctx_mock(mock_cache_cls)
+	mock_cache.is_greeted.return_value = False
+	mock_client = _ctx_mock(mock_client_cls)
+	mock_client.search_jobs.return_value = {
+		"zpData": {"jobList": [
+			_make_raw_job("A", "s1"),
+			_make_raw_job("B", "s2"),
+			_make_raw_job("C", "s3"),
+		]}
+	}
+
+	def greet_side_effect(sid, jid, msg=""):
+		if sid == "s1":
+			return {"code": 0, "zpData": {}}
+		if sid == "s2":
+			return {"code": 37, "message": "您的环境存在异常."}
+		return {"code": 0, "zpData": {}}
+
+	mock_client.greet.side_effect = greet_side_effect
+	mock_client.is_success.side_effect = lambda response: response.get("code", 0) == 0
+	mock_client.parse_error.side_effect = lambda response: (
+		"TOKEN_REFRESH_FAILED",
+		response.get("message", ""),
+	)
+	mock_time.sleep = MagicMock()
+
+	runner = CliRunner()
+	result = runner.invoke(cli, [*legacy_args, "batch-greet", "test", "--count", "3"])
+	assert result.exit_code == 0
+	parsed = json.loads(result.output)
+	assert parsed["data"]["total_greeted"] == 1
+	assert parsed["data"]["total_failed"] == 0
+	assert parsed["data"]["stopped_reason"] == "TOKEN_REFRESH_FAILED"
+	assert "环境存在异常" in parsed["data"]["stopped_error"]
+	assert mock_client.greet.call_count == 2
+
+
+@patch("boss_agent_cli.commands.greet.time")
+@patch("boss_agent_cli.commands.greet.get_platform_instance")
+@patch("boss_agent_cli.commands.greet.AuthManager")
+@patch("boss_agent_cli.commands.greet.CacheStore")
 def test_batch_greet_greet_limit_stops_remaining(mock_cache_cls, mock_auth_cls, mock_client_cls, mock_time):
 	"""GREET_LIMIT 错误关键字也应触发停止。"""
 	mock_cache = _ctx_mock(mock_cache_cls)
@@ -346,7 +389,7 @@ def test_batch_greet_custom_salary_range_uses_local_filter(mock_cache_cls, mock_
 	low_salary = _make_raw_job("低薪", "sec_low")
 	low_salary["salaryDesc"] = "5-7K"
 	high_salary = _make_raw_job("匹配", "sec_high")
-	high_salary["salaryDesc"] = "12-18K"
+	high_salary["salaryDesc"] = "10-12K"
 	mock_client.search_jobs.return_value = {
 		"zpData": {
 			"hasMore": False,

@@ -326,13 +326,13 @@ def prefilter_job(raw_item: dict[str, Any], criteria: SearchFilterCriteria) -> t
 		if item_city and criteria.city not in item_city:
 			reasons.append(f"城市不匹配: {item_city} != {criteria.city}")
 
-	# Salary filter — reject only if candidate max is below required min
+	# Salary filter — frontend range labels are exact local constraints.
 	if criteria.salary:
 		req_range = parse_salary_range(criteria.salary)
 		item_range = parse_salary_range(raw_item.get("salaryDesc", ""))
 		if req_range and item_range:
-			if item_range[1] < req_range[0]:
-				reasons.append(f"薪资不足: {raw_item.get('salaryDesc', '')} < {criteria.salary}")
+			if item_range[0] < req_range[0] or item_range[1] > req_range[1]:
+				reasons.append(f"薪资不匹配: {raw_item.get('salaryDesc', '')} 不在 {criteria.salary}")
 
 	# Experience filter
 	if criteria.experience:
