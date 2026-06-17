@@ -453,7 +453,7 @@ SCHEMA_DATA = {
 			},
 		},
 		"greet": {
-			"description": "受限能力：向指定招聘者打招呼。默认低风险模式会阻断，建议回到平台官网由用户手动完成。",
+			"description": "受限能力：向指定招聘者打招呼。发送消息会表明求职助理 Agent 身份；默认低风险模式会阻断，建议回到平台官网由用户手动完成。",
 			"args": [
 				{"name": "security_id", "required": True, "description": "安全 ID"},
 				{"name": "job_id", "required": True, "description": "加密职位 ID"},
@@ -462,12 +462,12 @@ SCHEMA_DATA = {
 				"--message": {
 					"type": "string",
 					"default": "",
-					"description": "自定义打招呼消息",
+					"description": "自定义打招呼消息（发送时会表明求职助理 Agent 身份）",
 				},
 			},
 		},
 		"batch-greet": {
-			"description": "受限能力：搜索后批量打招呼。默认低风险模式会阻断，避免批量触达。",
+			"description": "受限能力：搜索后批量打招呼。发送消息会表明求职助理 Agent 身份；默认低风险模式会阻断，避免批量触达。",
 			"args": [
 				{"name": "query", "required": True, "description": "搜索关键词"},
 			],

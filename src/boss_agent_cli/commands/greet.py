@@ -38,6 +38,15 @@ _BATCH_GREET_STOP_ERROR_CODES = (
 	"AUTH_EXPIRED",
 	"ACCOUNT_RISK",
 )
+_GREET_AGENT_DISCLOSURE = "我是候选人的求职助理 Agent"
+_DEFAULT_GREET_MESSAGE = "您好，我对该岗位很感兴趣，希望能和您聊一聊。"
+
+
+def _greet_message_with_agent_disclosure(message: str | None = None) -> str:
+	base_message = (message or "").strip() or _DEFAULT_GREET_MESSAGE
+	if _GREET_AGENT_DISCLOSURE in base_message:
+		return base_message
+	return f"{_GREET_AGENT_DISCLOSURE}，{base_message}"
 
 
 def _batch_greet_stop_reason(error_msg: str) -> str | None:
@@ -89,7 +98,7 @@ def _emit_batch_greet_progress(enabled: bool, *, current: int, total: int, item:
 @click.command("greet")
 @click.argument("security_id")
 @click.argument("job_id")
-@click.option("--message", default="", help="自定义打招呼消息")
+@click.option("--message", default="", help="自定义打招呼消息（发送时会表明求职助理 Agent 身份）")
 @click.pass_context
 @handle_auth_errors("greet")
 def greet_cmd(ctx: click.Context, security_id: str, job_id: str, message: str) -> None:
@@ -113,6 +122,7 @@ def greet_cmd(ctx: click.Context, security_id: str, job_id: str, message: str) -
 
 		auth = AuthManager(data_dir, logger=logger, platform=ctx.obj.get("platform", "zhipin"))
 		with get_platform_instance(ctx, auth) as platform:
+			greet_message = _greet_message_with_agent_disclosure(message)
 			# greet_before hook — allows veto
 			hooks = ctx.obj.get("hooks")
 			if hooks:
@@ -120,7 +130,7 @@ def greet_cmd(ctx: click.Context, security_id: str, job_id: str, message: str) -
 					{
 						"security_id": security_id,
 						"job_id": job_id,
-						"message": message,
+						"message": greet_message,
 						"source": "greet",
 					}
 				)
@@ -134,7 +144,7 @@ def greet_cmd(ctx: click.Context, security_id: str, job_id: str, message: str) -
 					)
 					return
 
-			resp = platform.greet(security_id, job_id, message)
+			resp = platform.greet(security_id, job_id, greet_message)
 			if not platform.is_success(resp):
 				error_code, _ = platform.parse_error(resp)
 				handle_error_output(
@@ -321,6 +331,7 @@ def batch_greet_cmd(
 			results = []
 			stopped_reason = None
 			stopped_error = None
+			greet_message = _greet_message_with_agent_disclosure()
 
 			for idx, item in enumerate(candidates):
 				retry_count = 0
@@ -334,7 +345,7 @@ def batch_greet_cmd(
 
 				while retry_count <= 1:
 					try:
-						resp = platform.greet(item["security_id"], item["job_id"])
+						resp = platform.greet(item["security_id"], item["job_id"], greet_message)
 						if not platform.is_success(resp):
 							error_code, error_detail = platform.parse_error(resp)
 							if error_code == "UNKNOWN":

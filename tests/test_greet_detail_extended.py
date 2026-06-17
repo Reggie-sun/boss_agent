@@ -8,6 +8,9 @@ from click.testing import CliRunner
 from boss_agent_cli.main import cli
 
 
+_DEFAULT_AGENT_GREET_MESSAGE = "我是候选人的求职助理 Agent，您好，我对该岗位很感兴趣，希望能和您聊一聊。"
+
+
 # ── 辅助 ─────────────────────────────────────────────────────────────
 
 _PATCHES = {
@@ -57,7 +60,7 @@ def test_greet_success(tmp_path):
 	assert code == 0
 	assert parsed["ok"] is True
 	assert parsed["data"]["security_id"] == "sid1"
-	mock_client.greet.assert_called_once_with("sid1", "jid1", "")
+	mock_client.greet.assert_called_once_with("sid1", "jid1", _DEFAULT_AGENT_GREET_MESSAGE)
 	mock_cache.record_greet.assert_called_once_with("sid1", "jid1")
 
 
@@ -90,7 +93,7 @@ def test_greet_with_custom_message(tmp_path):
 		"greet", "sid1", "jid1", "--message", "你好", tmp_path=tmp_path,
 	)
 	assert code == 0
-	mock_client.greet.assert_called_once_with("sid1", "jid1", "你好")
+	mock_client.greet.assert_called_once_with("sid1", "jid1", "我是候选人的求职助理 Agent，你好")
 
 
 def test_greet_records_to_cache(tmp_path):

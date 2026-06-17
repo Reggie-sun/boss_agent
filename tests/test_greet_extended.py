@@ -11,6 +11,9 @@ from click.testing import CliRunner
 from boss_agent_cli.main import cli
 
 
+_DEFAULT_AGENT_GREET_MESSAGE = "我是候选人的求职助理 Agent，您好，我对该岗位很感兴趣，希望能和您聊一聊。"
+
+
 def _ctx_mock(mock_cls):
 	instance = mock_cls.return_value
 	instance.__enter__ = lambda self: self
@@ -63,8 +66,53 @@ def test_greet_success_renders_message_and_records_cache(mock_cache_cls, mock_au
 	assert parsed["data"]["job_id"] == "job_001"
 	assert "打招呼成功" in parsed["data"]["message"]
 
-	mock_platform.greet.assert_called_once_with("sec_001", "job_001", "")
+	mock_platform.greet.assert_called_once_with("sec_001", "job_001", _DEFAULT_AGENT_GREET_MESSAGE)
 	mock_cache.record_greet.assert_called_once_with("sec_001", "job_001")
+
+
+@patch("boss_agent_cli.commands.greet.get_platform_instance")
+@patch("boss_agent_cli.commands.greet.AuthManager")
+@patch("boss_agent_cli.commands.greet.CacheStore")
+def test_greet_custom_message_discloses_agent(mock_cache_cls, mock_auth_cls, mock_get_platform, legacy_args):
+	mock_cache = _ctx_mock(mock_cache_cls)
+	mock_cache.is_greeted.return_value = False
+	mock_platform = _ctx_mock(mock_get_platform)
+	mock_platform.greet.return_value = {"code": 0, "zpData": {}}
+	mock_platform.is_success.return_value = True
+
+	runner = CliRunner()
+	result = runner.invoke(
+		cli,
+		[*legacy_args, "greet", "sec_001", "job_001", "--message", "您好，对这个岗位感兴趣。"],
+	)
+
+	assert result.exit_code == 0
+	mock_platform.greet.assert_called_once_with(
+		"sec_001",
+		"job_001",
+		"我是候选人的求职助理 Agent，您好，对这个岗位感兴趣。",
+	)
+
+
+@patch("boss_agent_cli.commands.greet.get_platform_instance")
+@patch("boss_agent_cli.commands.greet.AuthManager")
+@patch("boss_agent_cli.commands.greet.CacheStore")
+def test_greet_custom_message_keeps_existing_agent_disclosure(mock_cache_cls, mock_auth_cls, mock_get_platform, legacy_args):
+	mock_cache = _ctx_mock(mock_cache_cls)
+	mock_cache.is_greeted.return_value = False
+	mock_platform = _ctx_mock(mock_get_platform)
+	mock_platform.greet.return_value = {"code": 0, "zpData": {}}
+	mock_platform.is_success.return_value = True
+	message = "我是候选人的求职助理 Agent，您好，对这个岗位感兴趣。"
+
+	runner = CliRunner()
+	result = runner.invoke(
+		cli,
+		[*legacy_args, "greet", "sec_001", "job_001", "--message", message],
+	)
+
+	assert result.exit_code == 0
+	mock_platform.greet.assert_called_once_with("sec_001", "job_001", message)
 
 
 # Note: hook veto 分支已由 tests/test_hooks.py 独立覆盖，Click runner
@@ -100,6 +148,10 @@ def test_batch_greet_success_all(mock_cache_cls, mock_auth_cls, mock_client_cls,
 	assert len(parsed["data"]["greeted"]) == 2
 	# 应调用 2 次 greet + 2 次 record_greet
 	assert mock_client.greet.call_count == 2
+	assert [call.args for call in mock_client.greet.call_args_list] == [
+		("sec_1", "job_sec_1", _DEFAULT_AGENT_GREET_MESSAGE),
+		("sec_2", "job_sec_2", _DEFAULT_AGENT_GREET_MESSAGE),
+	]
 	assert mock_cache.record_greet.call_count == 2
 	mock_time.sleep.assert_called_once()
 
