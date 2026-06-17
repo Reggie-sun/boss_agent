@@ -9,6 +9,7 @@ const CDP_REQUIRED_FOR_BOSS_DELIVERY_MESSAGE =
   "Boss 自动开聊/发送需要 CDP 真实 Chrome（127.0.0.1:9222）。当前只检测到 Bridge 扩展；为保护账号，已停止本次自动触达。请用 --remote-debugging-port=9222 打开真实 Chrome 后刷新本页面。";
 const DELIVERY_PROBE_CACHE_TTL_MS = 10_000;
 let cachedDeliveryProbe = null;
+let pendingDeliveryProbe = null;
 
 function parseEnvFile(filePath) {
   if (!fs.existsSync(filePath)) return {};
@@ -347,6 +348,25 @@ async function detectBossDeliveryChannel(config) {
     return cachedDeliveryProbe.value;
   }
 
+  if (pendingDeliveryProbe?.key === cacheKey) {
+    return pendingDeliveryProbe.promise;
+  }
+
+  const probePromise = runCdpDeliveryProbe(config, baseState, cacheKey);
+  pendingDeliveryProbe = {
+    key: cacheKey,
+    promise: probePromise,
+  };
+  try {
+    return await probePromise;
+  } finally {
+    if (pendingDeliveryProbe?.promise === probePromise) {
+      pendingDeliveryProbe = null;
+    }
+  }
+}
+
+async function runCdpDeliveryProbe(config, baseState, cacheKey) {
   const target = await createCdpProbeTarget(config.cdpUrl);
   if (!target?.id) {
     const unavailable = {
@@ -460,6 +480,7 @@ function buildBossDeliveryBlockPayload(browserChannel) {
 
 export function resetDeliveryProbeCacheForTests() {
   cachedDeliveryProbe = null;
+  pendingDeliveryProbe = null;
 }
 
 export { buildBossDeliveryBlockPayload, detectBossDeliveryChannel };

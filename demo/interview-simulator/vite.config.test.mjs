@@ -71,3 +71,99 @@ test("buildBossDeliveryBlockPayload returns a non-risk CDP-required response", (
   assert.equal(blocked.body.delivery.status, "browser_channel_unavailable");
   assert.doesNotMatch(blocked.body.errorMessage, /环境存在异常|异常访问|风控|安全验证/);
 });
+
+test("detectBossDeliveryChannel reuses an in-flight CDP probe", async () => {
+  const originalFetch = globalThis.fetch;
+  const originalWebSocket = globalThis.WebSocket;
+  let createdTargets = 0;
+  let closedTargets = 0;
+
+  class FakeWebSocket {
+    constructor(url) {
+      this.url = url;
+      queueMicrotask(() => this.onopen?.());
+    }
+
+    send(raw) {
+      const message = JSON.parse(raw);
+      const result = message.method === "Runtime.evaluate"
+        ? {
+            result: {
+              value: JSON.stringify({
+                href: "https://www.zhipin.com/web/geek/chat",
+                title: "BOSS直聘",
+                hasUserList: true,
+                bodySnippet: "候选人列表",
+              }),
+            },
+          }
+        : {};
+      queueMicrotask(() => {
+        this.onmessage?.({
+          data: JSON.stringify({
+            id: message.id,
+            result,
+          }),
+        });
+      });
+    }
+
+    close() {}
+  }
+
+  globalThis.WebSocket = FakeWebSocket;
+  globalThis.fetch = async (url, options = {}) => {
+    const requestUrl = String(url);
+    const method = options.method || "GET";
+
+    if (requestUrl === "http://cdp.test/json/version") {
+      return Response.json({
+        webSocketDebuggerUrl: "ws://cdp.test/browser",
+      });
+    }
+    if (requestUrl === "http://bridge.test/status") {
+      return Response.json({
+        ok: true,
+        extensionConnected: false,
+      });
+    }
+    if (requestUrl.startsWith("http://cdp.test/json/new?")) {
+      assert.equal(method, "PUT");
+      createdTargets += 1;
+      return Response.json({
+        id: `target-${createdTargets}`,
+        webSocketDebuggerUrl: `ws://cdp.test/target-${createdTargets}`,
+      });
+    }
+    if (requestUrl.startsWith("http://cdp.test/json/close/")) {
+      closedTargets += 1;
+      return new Response("OK");
+    }
+    throw new Error(`unexpected fetch: ${requestUrl}`);
+  };
+
+  try {
+    resetDeliveryProbeCacheForTests();
+    const [first, second] = await Promise.all([
+      detectBossDeliveryChannel({
+        cdpUrl: "http://cdp.test",
+        bridgeUrl: "http://bridge.test",
+      }),
+      detectBossDeliveryChannel({
+        cdpUrl: "http://cdp.test",
+        bridgeUrl: "http://bridge.test",
+      }),
+    ]);
+
+    assert.equal(first.available, true);
+    assert.equal(second.available, true);
+    assert.equal(first.preflightStatus, "ready");
+    assert.equal(second.preflightStatus, "ready");
+    assert.equal(createdTargets, 1);
+    assert.equal(closedTargets, 1);
+  } finally {
+    resetDeliveryProbeCacheForTests();
+    globalThis.fetch = originalFetch;
+    globalThis.WebSocket = originalWebSocket;
+  }
+});
