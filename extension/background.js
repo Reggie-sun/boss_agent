@@ -8,6 +8,7 @@
 const DAEMON_PORT = 19826;
 const DAEMON_WS_URL = `ws://127.0.0.1:${DAEMON_PORT}/ext`;
 const DAEMON_PING_URL = `http://127.0.0.1:${DAEMON_PORT}/ping`;
+const BOSS_WORKSPACE_URL = 'https://www.zhipin.com/';
 const WINDOW_IDLE_TIMEOUT = 30000;
 
 let ws = null;
@@ -31,7 +32,7 @@ function resetIdleTimer() {
 	}, WINDOW_IDLE_TIMEOUT);
 }
 
-async function getAutomationWindow() {
+async function getAutomationWindow(initialUrl = BOSS_WORKSPACE_URL) {
 	if (automationWindowId) {
 		try {
 			await chrome.windows.get(automationWindowId);
@@ -41,7 +42,7 @@ async function getAutomationWindow() {
 		}
 	}
 	const win = await chrome.windows.create({
-		url: 'data:text/html,<html></html>',
+		url: initialUrl,
 		focused: false,
 		width: 1280,
 		height: 900,
@@ -128,11 +129,11 @@ async function resolveTabId(tabId, workspace) {
 		if (zhipinTabs.length > 0) return zhipinTabs[0].id;
 	}
 
-	const windowId = await getAutomationWindow();
+	const windowId = await getAutomationWindow(BOSS_WORKSPACE_URL);
 	const tabs = await chrome.tabs.query({ windowId });
-	const good = tabs.find(t => t.url?.startsWith('http') || t.url?.startsWith('data:'));
+	const good = tabs.find(t => t.url?.startsWith('http'));
 	if (good?.id) return good.id;
-	const newTab = await chrome.tabs.create({ windowId, url: 'data:text/html,<html></html>', active: true });
+	const newTab = await chrome.tabs.create({ windowId, url: BOSS_WORKSPACE_URL, active: true });
 	return newTab.id;
 }
 
