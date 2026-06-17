@@ -427,7 +427,6 @@ export function App() {
         setWatcherState((current) => ({
           ...current,
           tasks: runData.tasks,
-          errorMessage: "",
         }));
       }
     } catch (error) {
