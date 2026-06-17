@@ -108,6 +108,42 @@ def test_batch_greet_success_all(mock_cache_cls, mock_auth_cls, mock_client_cls,
 @patch("boss_agent_cli.commands.greet.get_platform_instance")
 @patch("boss_agent_cli.commands.greet.AuthManager")
 @patch("boss_agent_cli.commands.greet.CacheStore")
+def test_batch_greet_progress_json_reports_current_candidate(
+	mock_cache_cls,
+	mock_auth_cls,
+	mock_client_cls,
+	mock_time,
+	legacy_args,
+):
+	"""--progress-json 输出当前正在处理第几个候选，供前端显示真实进度。"""
+	mock_cache = _ctx_mock(mock_cache_cls)
+	mock_cache.is_greeted.return_value = False
+	mock_client = _ctx_mock(mock_client_cls)
+	mock_client.search_jobs.return_value = {
+		"zpData": {"jobList": [_make_raw_job("Go 1", "sec_1"), _make_raw_job("Go 2", "sec_2")]}
+	}
+	mock_client.greet.return_value = {"code": 0, "zpData": {}}
+	mock_client.is_success.return_value = True
+	mock_time.sleep = MagicMock()
+
+	runner = CliRunner()
+	result = runner.invoke(
+		cli,
+		[*legacy_args, "batch-greet", "golang", "--count", "2", "--progress-json"],
+	)
+
+	assert result.exit_code == 0, result.output
+	events = [json.loads(line) for line in result.stderr.splitlines() if line.strip().startswith("{")]
+	assert [event["current"] for event in events] == [1, 2]
+	assert [event["total"] for event in events] == [2, 2]
+	assert events[0]["title"] == "Go 1"
+	assert events[0]["company"] == "TestCo"
+
+
+@patch("boss_agent_cli.commands.greet.time")
+@patch("boss_agent_cli.commands.greet.get_platform_instance")
+@patch("boss_agent_cli.commands.greet.AuthManager")
+@patch("boss_agent_cli.commands.greet.CacheStore")
 def test_batch_greet_rate_limited_stops_remaining(mock_cache_cls, mock_auth_cls, mock_client_cls, mock_time, legacy_args):
 	"""第 1 个成功，第 2 个 RATE_LIMITED 应中止剩余。"""
 	mock_cache = _ctx_mock(mock_cache_cls)

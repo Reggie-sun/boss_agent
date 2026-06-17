@@ -478,6 +478,151 @@ function runBossJsonCommand(config, args) {
   });
 }
 
+function writeNdjson(res, event) {
+  res.write(`${JSON.stringify(event)}\n`);
+}
+
+function parseBossProgressLine(line) {
+  const trimmed = line.trim();
+  if (!trimmed.startsWith("{")) return null;
+  try {
+    const event = JSON.parse(trimmed);
+    return event?.type === "boss_auto_greet_progress" ? event : null;
+  } catch {
+    return null;
+  }
+}
+
+function runBossJsonCommandStream(config, args, res) {
+  return new Promise((resolve) => {
+    const child = spawn(
+      config.pythonBin,
+      [
+        "-c",
+        "from boss_agent_cli.main import cli; import sys; cli.main(args=sys.argv[1:], standalone_mode=False)",
+        "--json",
+        "--data-dir",
+        config.dataDir,
+        ...args,
+      ],
+      {
+        cwd: config.repoRoot,
+        env: {
+          ...process.env,
+          PYTHONPATH: process.env.PYTHONPATH
+            ? `${config.repoRoot}/src:${process.env.PYTHONPATH}`
+            : `${config.repoRoot}/src`,
+        },
+      },
+    );
+
+    let stdout = "";
+    let stderr = "";
+    let stderrBuffer = "";
+    let timedOut = false;
+    const timer = config.commandTimeoutMs
+      ? setTimeout(() => {
+          timedOut = true;
+          child.kill("SIGTERM");
+        }, config.commandTimeoutMs)
+      : null;
+
+    child.stdout.setEncoding("utf8");
+    child.stderr.setEncoding("utf8");
+    child.stdout.on("data", (chunk) => {
+      stdout += chunk;
+    });
+    child.stderr.on("data", (chunk) => {
+      stderr += chunk;
+      stderrBuffer += chunk;
+      const lines = stderrBuffer.split(/\r?\n/);
+      stderrBuffer = lines.pop() || "";
+      for (const line of lines) {
+        const progress = parseBossProgressLine(line);
+        if (progress) {
+          writeNdjson(res, { type: "progress", data: progress });
+        }
+      }
+    });
+    child.on("error", (error) => {
+      if (timer) clearTimeout(timer);
+      writeNdjson(res, {
+        type: "error",
+        ok: false,
+        errorMessage: error instanceof Error ? error.message : "自动开聊失败",
+        error: null,
+      });
+      resolve();
+    });
+    child.on("close", (status) => {
+      if (timer) clearTimeout(timer);
+      if (stderrBuffer.trim()) {
+        const progress = parseBossProgressLine(stderrBuffer);
+        if (progress) {
+          writeNdjson(res, { type: "progress", data: progress });
+        }
+      }
+      if (timedOut) {
+        const seconds = Math.round((config.commandTimeoutMs || 0) / 1000);
+        writeNdjson(res, {
+          type: "error",
+          ok: false,
+          errorMessage: `boss-agent-cli 执行超过 ${seconds}s，已停止本次请求。请检查 CDP 发送链路或稍后重试。`,
+          error: null,
+        });
+        resolve();
+        return;
+      }
+      if (status !== 0 && !stdout.trim()) {
+        writeNdjson(res, {
+          type: "error",
+          ok: false,
+          errorMessage: stderr.trim() || `boss command failed with exit code ${status}`,
+          error: null,
+        });
+        resolve();
+        return;
+      }
+
+      let parsed = {};
+      try {
+        parsed = stdout.trim() ? JSON.parse(stdout) : {};
+      } catch (error) {
+        writeNdjson(res, {
+          type: "error",
+          ok: false,
+          errorMessage: `无法解析 boss-agent-cli 输出: ${stdout.trim() || stderr.trim() || String(error)}`,
+          error: null,
+        });
+        resolve();
+        return;
+      }
+
+      if (!parsed.ok) {
+        writeNdjson(res, {
+          type: "error",
+          ok: false,
+          errorMessage:
+            parsed.error?.message ||
+            parsed.errorMessage ||
+            stderr.trim() ||
+            "boss-agent-cli 返回错误。",
+          error: parsed.error || null,
+        });
+        resolve();
+        return;
+      }
+      writeNdjson(res, {
+        type: "result",
+        ok: true,
+        data: parsed.data,
+        hints: parsed.hints,
+      });
+      resolve();
+    });
+  });
+}
+
 function createRagBridgePlugin() {
   const bridgeConfig = loadBridgeConfig();
 
@@ -912,6 +1057,7 @@ function createRagBridgePlugin() {
         const jobType = String(body.jobType || body.job_type || "").trim();
         const welfare = String(body.welfare || "").trim();
         const count = Number.parseInt(String(body.count || "3"), 10);
+        const stream = Boolean(body.stream);
 
         if (!query) {
           res.statusCode = 400;
@@ -934,6 +1080,20 @@ function createRagBridgePlugin() {
         if (stage) args.push("--stage", stage);
         if (jobType) args.push("--job-type", jobType);
         if (welfare) args.push("--welfare", welfare);
+        if (stream) args.push("--progress-json");
+
+        if (stream) {
+          res.setHeader("Content-Type", "application/x-ndjson; charset=utf-8");
+          res.setHeader("Cache-Control", "no-cache");
+          writeNdjson(res, {
+            type: "status",
+            status: "searching",
+            message: "正在搜索可开聊候选，还没有开始聊天。",
+          });
+          await runBossJsonCommandStream(bridgeConfig, args, res);
+          res.end();
+          return true;
+        }
 
         const payload = await runBossJsonCommand(bridgeConfig, args);
         res.end(JSON.stringify({

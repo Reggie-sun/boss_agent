@@ -1,3 +1,4 @@
+import json
 import random
 import time
 
@@ -61,6 +62,25 @@ def _batch_greet_stop_reason(error_msg: str) -> str | None:
 	):
 		return "ACCOUNT_RISK"
 	return None
+
+
+def _emit_batch_greet_progress(enabled: bool, *, current: int, total: int, item: dict) -> None:
+	if not enabled:
+		return
+	click.echo(
+		json.dumps(
+			{
+				"type": "boss_auto_greet_progress",
+				"status": "greeting",
+				"current": current,
+				"total": total,
+				"title": item.get("title", ""),
+				"company": item.get("company", ""),
+			},
+			ensure_ascii=False,
+		),
+		err=True,
+	)
 
 
 @click.command("greet")
@@ -187,6 +207,7 @@ def greet_cmd(ctx: click.Context, security_id: str, job_id: str, message: str) -
 @click.option("--welfare", default=None, help="福利筛选（如 双休、五险一金），逗号分隔时按 AND 匹配")
 @click.option("--count", default=10, help="打招呼数量上限（最大 150）")
 @click.option("--dry-run", is_flag=True, default=False, help="仅模拟执行，不实际打招呼")
+@click.option("--progress-json", is_flag=True, default=False, hidden=True, help="向 stderr 输出自动开聊进度 JSONL")
 @click.pass_context
 @handle_auth_errors("batch-greet")
 def batch_greet_cmd(
@@ -203,6 +224,7 @@ def batch_greet_cmd(
 	welfare: str | None,
 	count: int,
 	dry_run: bool,
+	progress_json: bool,
 ) -> None:
 	"""搜索后批量打招呼（上限 150）"""
 	if not require_compliance_allowed(ctx, "batch-greet"):
@@ -300,6 +322,12 @@ def batch_greet_cmd(
 			for idx, item in enumerate(candidates):
 				retry_count = 0
 				success = False
+				_emit_batch_greet_progress(
+					progress_json,
+					current=idx + 1,
+					total=len(candidates),
+					item=item,
+				)
 
 				while retry_count <= 1:
 					try:

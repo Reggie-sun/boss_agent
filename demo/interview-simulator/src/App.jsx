@@ -269,6 +269,7 @@ export function App() {
   const [bossSearchJobs, setBossSearchJobs] = useState([]);
   const [bossAutomationResult, setBossAutomationResult] = useState(null);
   const [bossAutomationError, setBossAutomationError] = useState("");
+  const [bossAutomationProgress, setBossAutomationProgress] = useState(null);
   const [isBossSearching, setIsBossSearching] = useState(false);
   const [isBossAutoRunning, setIsBossAutoRunning] = useState(false);
   const [chatTargets, setChatTargets] = useState([]);
@@ -316,6 +317,17 @@ export function App() {
   const bossAutomationHasIssue =
     Boolean(bossAutomationResult?.stopped_reason) ||
     Number(bossAutomationResult?.total_failed || 0) > 0;
+  const bossAutomationProgressCurrent = Number(bossAutomationProgress?.current || 0);
+  const bossAutomationProgressTotal = Number(
+    bossAutomationProgress?.total || bossSearchForm.count || 0,
+  );
+  const bossAutomationIsGreeting =
+    bossAutomationProgress?.phase === "greeting" && bossAutomationProgressCurrent > 0;
+  const bossAutoButtonLabel = isBossAutoRunning
+    ? bossAutomationIsGreeting
+      ? `第${bossAutomationProgressCurrent}${bossAutomationProgressTotal ? `/${bossAutomationProgressTotal}` : ""}个`
+      : "搜索中..."
+    : "Agent 全自动";
 
   function updateBossSearchForm(field, value) {
     setBossSearchForm((current) => ({
@@ -423,6 +435,7 @@ export function App() {
     setIsBossSearching(true);
     setBossAutomationError("");
     setBossAutomationResult(null);
+    setBossAutomationProgress(null);
     try {
       const response = await fetch("/api/boss/search", {
         method: "POST",
@@ -463,6 +476,12 @@ export function App() {
     setIsBossAutoRunning(true);
     setBossAutomationError("");
     setBossAutomationResult(null);
+    setBossAutomationProgress({
+      phase: "searching",
+      current: 0,
+      total: Number.parseInt(String(bossSearchForm.count || "0"), 10) || 0,
+      message: "正在搜索可开聊候选，还没有开始聊天。",
+    });
     try {
       const response = await fetch("/api/boss/auto-greet", {
         method: "POST",
@@ -479,15 +498,77 @@ export function App() {
           jobType: bossSearchForm.jobType,
           welfare: bossSearchForm.welfare,
           count: bossSearchForm.count,
+          stream: true,
         }),
       });
+      const contentType = response.headers.get("Content-Type") || "";
+      if (response.body && contentType.includes("application/x-ndjson")) {
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = "";
+        let finalPayload = null;
+        let streamError = null;
+        const consumeLine = (line) => {
+          const trimmed = line.trim();
+          if (!trimmed) return;
+          const event = JSON.parse(trimmed);
+          if (event.type === "status") {
+            setBossAutomationProgress((current) => ({
+              ...current,
+              phase: event.status || "searching",
+              message: event.message || "正在搜索可开聊候选，还没有开始聊天。",
+            }));
+          } else if (event.type === "progress") {
+            const data = event.data || {};
+            setBossAutomationProgress({
+              phase: "greeting",
+              current: Number(data.current || 0),
+              total: Number(data.total || 0),
+              title: String(data.title || ""),
+              company: String(data.company || ""),
+              message: "正在开聊候选。",
+            });
+          } else if (event.type === "result") {
+            finalPayload = event;
+          } else if (event.type === "error") {
+            streamError = event;
+          }
+        };
+
+        while (true) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split(/\r?\n/);
+          buffer = lines.pop() || "";
+          lines.forEach(consumeLine);
+        }
+        buffer += decoder.decode();
+        if (buffer.trim()) consumeLine(buffer);
+        if (streamError) {
+          throw new Error(
+            streamError.errorMessage ||
+              streamError.error?.message ||
+              "Agent 自动开聊失败。",
+          );
+        }
+        if (!finalPayload?.ok) {
+          throw new Error("Agent 自动开聊没有返回结果。");
+        }
+        setBossAutomationResult(finalPayload.data || {});
+        setBossAutomationProgress(null);
+        await loadChatTargets();
+        return;
+      }
       const payload = await response.json();
       if (!response.ok || !payload.ok) {
         throw new Error(payload.errorMessage || "Agent 自动开聊失败。");
       }
       setBossAutomationResult(payload.data || {});
+      setBossAutomationProgress(null);
       await loadChatTargets();
     } catch (error) {
+      setBossAutomationProgress(null);
       setBossAutomationError(
         bossBridgeErrorMessage(error, "Agent 自动开聊失败。"),
       );
@@ -1435,7 +1516,7 @@ export function App() {
                 disabled={isBossAutoRunning || !bossSearchForm.query.trim()}
               >
                 <PaperPlaneTilt size={16} weight="fill" />
-                {isBossAutoRunning ? "运行中..." : "Agent 全自动"}
+                {bossAutoButtonLabel}
               </button>
             </div>
 
@@ -1449,7 +1530,18 @@ export function App() {
             {isBossAutoRunning ? (
               <div className="apply-result apply-result--pending">
                 <Lightning size={18} weight="fill" />
-                <span>正在按当前筛选搜索并开聊；如果候选为 0，会停止并显示原因。</span>
+                <div className="apply-result__content">
+                  <span>
+                    {bossAutomationIsGreeting
+                      ? `正在和第 ${bossAutomationProgressCurrent}${bossAutomationProgressTotal ? ` / ${bossAutomationProgressTotal}` : ""} 个候选开聊`
+                      : bossAutomationProgress?.message || "正在搜索可开聊候选，还没有开始聊天。"}
+                  </span>
+                  {bossAutomationIsGreeting && (bossAutomationProgress?.title || bossAutomationProgress?.company) ? (
+                    <span className="apply-result__detail">
+                      {[bossAutomationProgress.title, bossAutomationProgress.company].filter(Boolean).join(" @ ")}
+                    </span>
+                  ) : null}
+                </div>
               </div>
             ) : null}
 
