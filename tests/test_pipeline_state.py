@@ -11,6 +11,7 @@ def _chat_item(
 	company="TestCo",
 	title="HR",
 	last_msg="你好",
+	message_status=2,
 ):
 	return {
 		"securityId": security_id,
@@ -21,6 +22,7 @@ def _chat_item(
 		"brandName": company,
 		"title": title,
 		"lastMsg": last_msg,
+		"lastMessageInfo": {"status": message_status},
 	}
 
 
@@ -47,6 +49,27 @@ def test_build_pipeline_items_marks_reply_needed_for_unread():
 def test_build_pipeline_items_marks_follow_up_for_stale_chat():
 	items = build_pipeline_items(
 		chat_items=[_chat_item(last_ts=1700000000000)],
+		interview_items=[],
+		now_ts_ms=1700000000000 + 5 * 24 * 3600 * 1000,
+		stale_days=3,
+	)
+	assert items[0]["stage"] == "follow_up"
+
+
+def test_build_pipeline_items_marks_read_no_reply_for_stale_read_self_message():
+	items = build_pipeline_items(
+		chat_items=[_chat_item(relation_type=2, message_status=2, last_ts=1700000000000)],
+		interview_items=[],
+		now_ts_ms=1700000000000 + 5 * 24 * 3600 * 1000,
+		stale_days=3,
+	)
+	assert items[0]["stage"] == "read_no_reply"
+	assert items[0]["reason"] == "对方已读未回，建议主动跟进"
+
+
+def test_build_pipeline_items_does_not_mark_unread_self_message_as_read_no_reply():
+	items = build_pipeline_items(
+		chat_items=[_chat_item(relation_type=2, message_status=1, last_ts=1700000000000)],
 		interview_items=[],
 		now_ts_ms=1700000000000 + 5 * 24 * 3600 * 1000,
 		stale_days=3,

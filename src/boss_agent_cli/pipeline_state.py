@@ -1,10 +1,12 @@
 import datetime
 from typing import Any
 
-from boss_agent_cli.commands.chat_utils import RELATION_LABELS
+from boss_agent_cli.commands.chat_utils import MSG_STATUS_LABELS, RELATION_LABELS
 
 
-_FOLLOW_UP_STATES = {"reply_needed", "follow_up", "interview"}
+_ME_INITIATED_RELATION = 2
+_READ_STATUS = 2
+_FOLLOW_UP_STATES = {"reply_needed", "read_no_reply", "follow_up", "interview"}
 
 
 def _ts_to_label(ts_ms: int) -> str:
@@ -12,6 +14,18 @@ def _ts_to_label(ts_ms: int) -> str:
 		return "-"
 	dt = datetime.datetime.fromtimestamp(ts_ms / 1000)
 	return dt.strftime("%m-%d %H:%M")
+
+
+def _message_status(item: dict[str, Any]) -> int | None:
+	last_message_info = item.get("lastMessageInfo") or {}
+	if not isinstance(last_message_info, dict):
+		return None
+	status = last_message_info.get("status")
+	return status if isinstance(status, int) else None
+
+
+def _is_stale(last_ts: int, *, now_ts_ms: int, stale_days: int) -> bool:
+	return bool(last_ts and now_ts_ms - last_ts >= stale_days * 24 * 3600 * 1000)
 
 
 def _chat_stage(item: dict[str, Any], *, now_ts_ms: int, stale_days: int) -> str:
@@ -22,28 +36,48 @@ def _chat_stage(item: dict[str, Any], *, now_ts_ms: int, stale_days: int) -> str
 		return "reply_needed"
 	if relation_type == 3:
 		return "applied"
-	if last_ts and now_ts_ms - last_ts >= stale_days * 24 * 3600 * 1000:
+	if (
+		relation_type == _ME_INITIATED_RELATION
+		and _message_status(item) == _READ_STATUS
+		and _is_stale(last_ts, now_ts_ms=now_ts_ms, stale_days=stale_days)
+	):
+		return "read_no_reply"
+	if _is_stale(last_ts, now_ts_ms=now_ts_ms, stale_days=stale_days):
 		return "follow_up"
 	return "chatting"
+
+
+def _stage_reason(stage: str, *, unread: int) -> str:
+	if unread > 0:
+		return "存在未读消息"
+	if stage == "read_no_reply":
+		return "对方已读未回，建议主动跟进"
+	if stage == "follow_up":
+		return "需要继续推进"
+	return "会话进行中"
 
 
 def build_pipeline_items(*, chat_items: list[dict[str, Any]], interview_items: list[dict[str, Any]], now_ts_ms: int, stale_days: int = 3) -> list[dict[str, Any]]:
 	items: list[dict[str, Any]] = []
 
 	for raw in chat_items:
+		stage = _chat_stage(raw, now_ts_ms=now_ts_ms, stale_days=stale_days)
+		unread = raw.get("unreadMsgCount") or 0
+		message_status = _message_status(raw)
 		items.append(
 			{
 				"source": "chat",
-				"stage": _chat_stage(raw, now_ts_ms=now_ts_ms, stale_days=stale_days),
+				"stage": stage,
 				"security_id": raw.get("securityId") or "",
 				"job_id": raw.get("encryptJobId") or "",
 				"company": raw.get("brandName") or "-",
 				"title": raw.get("title") or "-",
 				"relation": RELATION_LABELS.get(raw.get("relationType"), "未知"),
-				"unread": raw.get("unreadMsgCount") or 0,
+				"unread": unread,
+				"msg_status": MSG_STATUS_LABELS.get(message_status, "未知") if message_status is not None else "未知",
 				"last_msg": raw.get("lastMsg") or "-",
 				"last_time": _ts_to_label(raw.get("lastTS") or 0),
-				"reason": "存在未读消息" if (raw.get("unreadMsgCount") or 0) > 0 else "需要继续推进" if _chat_stage(raw, now_ts_ms=now_ts_ms, stale_days=stale_days) == "follow_up" else "会话进行中",
+				"reason": _stage_reason(stage, unread=unread),
 			}
 		)
 
@@ -70,3 +104,7 @@ def build_pipeline_items(*, chat_items: list[dict[str, Any]], interview_items: l
 
 def select_follow_up_candidates(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
 	return [item for item in items if item.get("stage") in _FOLLOW_UP_STATES]
+
+
+def select_read_no_reply_candidates(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+	return [item for item in items if item.get("stage") == "read_no_reply"]

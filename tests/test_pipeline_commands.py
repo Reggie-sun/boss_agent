@@ -1,4 +1,5 @@
 import json
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from click.testing import CliRunner
@@ -26,7 +27,10 @@ def _chat_item(
 	relation_type=1,
 	unread=0,
 	last_ts=1700000000000,
+	message_status=None,
 ):
+	if message_status is None:
+		message_status = 1 if unread else 2
 	return {
 		"name": "张HR",
 		"securityId": security_id,
@@ -39,7 +43,7 @@ def _chat_item(
 		"lastTS": last_ts,
 		"unreadMsgCount": unread,
 		"relationType": relation_type,
-		"lastMessageInfo": {"status": 1 if unread else 2},
+		"lastMessageInfo": {"status": message_status},
 	}
 
 
@@ -115,6 +119,161 @@ def test_follow_up_command_aggregates_items_from_second_page(mock_auth_cls, mock
 	assert mock_client.friend_list.call_args_list[0].kwargs == {"page": 1}
 	assert mock_client.friend_list.call_args_list[1].kwargs == {"page": 2}
 	assert mock_client.friend_list.call_args_list[2].kwargs == {"page": 3}
+
+
+@patch("boss_agent_cli.commands.pipeline.execute_chat_reply")
+@patch("boss_agent_cli.commands.pipeline.get_platform_instance")
+@patch("boss_agent_cli.commands.pipeline.AuthManager")
+def test_follow_up_send_read_no_reply_defaults_to_dry_run(mock_auth_cls, mock_client_cls, mock_send, legacy_args):
+	mock_client = _ctx_mock(mock_client_cls)
+	mock_client.friend_list.return_value = _friend_list_response(
+		[
+			_chat_item(
+				security_id="sec_read",
+				relation_type=2,
+				unread=0,
+				message_status=2,
+				last_ts=1700000000000,
+			),
+			_chat_item(
+				security_id="sec_unread",
+				relation_type=2,
+				unread=0,
+				message_status=1,
+				last_ts=1700000000000,
+			),
+		]
+	)
+	mock_client.interview_data.return_value = {"zpData": {"interviewList": []}}
+
+	runner = CliRunner()
+	result = runner.invoke(
+		cli,
+		[
+			"--json",
+			*legacy_args,
+			"follow-up",
+			"--now-ts-ms",
+			str(1700000000000 + 5 * 24 * 3600 * 1000),
+			"--send-read-no-reply",
+			"--message",
+			"您好，想跟进一下这个岗位。",
+		],
+	)
+
+	assert result.exit_code == 0
+	parsed = json.loads(result.output)
+	assert parsed["ok"] is True
+	assert parsed["data"]["send_results"] == [
+		{
+			"security_id": "sec_read",
+			"stage": "read_no_reply",
+			"status": "dry_run",
+			"message_sent": False,
+			"error_message": "",
+		}
+	]
+	mock_send.assert_not_called()
+
+
+@patch("boss_agent_cli.commands.pipeline.execute_chat_reply")
+@patch("boss_agent_cli.commands.pipeline.get_platform_instance")
+@patch("boss_agent_cli.commands.pipeline.AuthManager")
+def test_follow_up_live_send_read_no_reply_requires_send_enabled(mock_auth_cls, mock_client_cls, mock_send, legacy_args, monkeypatch):
+	monkeypatch.setenv("BOSS_RAG_SEND_ENABLED", "false")
+	mock_client = _ctx_mock(mock_client_cls)
+	mock_client.friend_list.return_value = _friend_list_response(
+		[
+			_chat_item(
+				security_id="sec_read",
+				relation_type=2,
+				unread=0,
+				message_status=2,
+				last_ts=1700000000000,
+			)
+		]
+	)
+	mock_client.interview_data.return_value = {"zpData": {"interviewList": []}}
+
+	runner = CliRunner()
+	result = runner.invoke(
+		cli,
+		[
+			"--json",
+			*legacy_args,
+			"follow-up",
+			"--now-ts-ms",
+			str(1700000000000 + 5 * 24 * 3600 * 1000),
+			"--send-read-no-reply",
+			"--message",
+			"您好，想跟进一下这个岗位。",
+			"--live-send",
+		],
+	)
+
+	assert result.exit_code == 1
+	parsed = json.loads(result.output)
+	assert parsed["error"]["code"] == "SEND_DISABLED"
+	mock_send.assert_not_called()
+
+
+@patch("boss_agent_cli.commands.pipeline.execute_chat_reply")
+@patch("boss_agent_cli.commands.pipeline.get_platform_instance")
+@patch("boss_agent_cli.commands.pipeline.AuthManager")
+def test_follow_up_live_send_read_no_reply_uses_chat_reply_when_enabled(mock_auth_cls, mock_client_cls, mock_send, legacy_args, monkeypatch):
+	monkeypatch.setenv("BOSS_RAG_SEND_ENABLED", "true")
+	mock_send.return_value = SimpleNamespace(message_sent=True, error_message="")
+	mock_client = _ctx_mock(mock_client_cls)
+	mock_client.friend_list.return_value = _friend_list_response(
+		[
+			_chat_item(
+				security_id="sec_read",
+				relation_type=2,
+				unread=0,
+				message_status=2,
+				last_ts=1700000000000,
+			),
+			_chat_item(
+				security_id="sec_unread",
+				relation_type=2,
+				unread=0,
+				message_status=1,
+				last_ts=1700000000000,
+			),
+		]
+	)
+	mock_client.interview_data.return_value = {"zpData": {"interviewList": []}}
+
+	runner = CliRunner()
+	result = runner.invoke(
+		cli,
+		[
+			"--json",
+			*legacy_args,
+			"follow-up",
+			"--now-ts-ms",
+			str(1700000000000 + 5 * 24 * 3600 * 1000),
+			"--send-read-no-reply",
+			"--message",
+			"您好，想跟进一下这个岗位。",
+			"--live-send",
+		],
+	)
+
+	assert result.exit_code == 0
+	parsed = json.loads(result.output)
+	assert parsed["data"]["send_results"] == [
+		{
+			"security_id": "sec_read",
+			"stage": "read_no_reply",
+			"status": "sent",
+			"message_sent": True,
+			"error_message": "",
+		}
+	]
+	mock_send.assert_called_once()
+	assert mock_send.call_args.kwargs["security_id"] == "sec_read"
+	assert mock_send.call_args.kwargs["message"] == "您好，想跟进一下这个岗位。"
 
 
 @patch("boss_agent_cli.commands.pipeline.get_platform_instance")

@@ -754,6 +754,26 @@ SCHEMA_DATA = {
 			"args": [],
 			"options": {
 				"--days-stale": {"type": "int", "default": 3, "description": "超过 N 天未推进则视为 follow_up"},
+				"--send-read-no-reply": {
+					"type": "bool",
+					"default": False,
+					"description": "对 read_no_reply 候选生成或发送主动跟进消息；默认仍只返回候选列表",
+				},
+				"--message": {
+					"type": "string",
+					"default": "您好，想跟进一下这个岗位目前是否还在招聘？如果方便的话可以继续沟通，我这边对岗位方向比较感兴趣。",
+					"description": "read_no_reply 主动跟进消息",
+				},
+				"--max-send": {
+					"type": "int",
+					"default": 1,
+					"description": "本次最多处理的 read_no_reply 数量；CLI 上限为 5，避免批量触达",
+				},
+				"--dry-run": {
+					"type": "bool",
+					"default": True,
+					"description": "默认只预览；CLI 可用 --live-send 切到真实发送，且必须显式开启 boss_rag_send_enabled",
+				},
 			},
 		},
 		"apply": {
@@ -1017,6 +1037,11 @@ SCHEMA_DATA = {
 			"message": "参数校验失败",
 			"recoverable": False,
 			"recovery_action": "修正参数",
+		},
+		"SEND_DISABLED": {
+			"message": "自动发送未显式开启",
+			"recoverable": True,
+			"recovery_action": "先 dry-run 复核，确认后显式开启发送配置再重试",
 		},
 		"ENDPOINT_DEPRECATED": {
 			"message": "服务端端点已迁移，CLI 当前实现无法直接发送",

@@ -111,6 +111,7 @@ def test_schema_error_codes_cover_all_used_codes():
 		"GREET_LIMIT",
 		"NETWORK_ERROR",
 		"INVALID_PARAM",
+		"SEND_DISABLED",
 		"NOT_SUPPORTED",
 		"COMPLIANCE_BLOCKED",
 		"HOOK_BLOCKED",
@@ -171,6 +172,16 @@ def test_search_schema_keeps_welfare_option():
 	welfare = SCHEMA_DATA["commands"]["search"]["options"]["--welfare"]
 	assert welfare["type"] == "string"
 	assert "福利筛选" in welfare["description"]
+
+
+def test_follow_up_schema_exposes_read_no_reply_send_controls():
+	"""follow-up 主动跟进必须暴露 dry-run/live-send 控制，避免工具侧绕过复核。"""
+	options = SCHEMA_DATA["commands"]["follow-up"]["options"]
+	assert "--send-read-no-reply" in options
+	assert "--message" in options
+	assert "--max-send" in options
+	assert "--dry-run" in options
+	assert options["--dry-run"]["default"] is True
 
 
 def test_schema_exposes_recruiter_chat_context_commands():
