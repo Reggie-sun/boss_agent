@@ -1,6 +1,6 @@
 # Boss Agent Current Stage
 
-> Last updated: 2026-06-16
+> Last updated: 2026-06-17
 >
 > Scope: 本文档用于说明当前 `BOSS_AGENT` 项目已经推进到什么阶段、哪些链路已经可用、哪些仍然需要真实 Boss 会话验证，以及下一步应该怎么接着做。
 
@@ -89,6 +89,27 @@ frontend "发送到 Boss" or auto_send_resume
   -> client.send_resume(security_id) when send_resume=true
 ```
 
+Boss 主动消息全自动链路是：
+
+```text
+Boss inbound message
+  -> boss agent watcher-run --loop or frontend watcher interval
+  -> _CliWatcherMessageSyncer.sync_messages(...)
+  -> BossPassiveWatcher.run_once(live_sync=True)
+  -> BossRagReplyService.create_draft_for_message(...)
+  -> run_auto_reply_graph(...)
+  -> _CliWatcherDelivery.send(...)
+  -> execute_chat_reply(...)
+```
+
+这个链路只有在显式配置打开时才会发送真实消息：
+
+- `boss_rag_allow_message_read=true`
+- `boss_rag_send_enabled=true`
+- `boss_rag_watcher_enabled=true`
+- `boss_rag_watcher_dry_run=false`
+- `boss_rag_watcher_live_sync=true`
+
 本阶段最重要的新边界是：
 
 - `/api/agent/ask` 负责生成回答，并且在 `auto_send_resume=true` 且问题是发简历请求时尝试自动发送。
@@ -99,6 +120,10 @@ frontend "发送到 Boss" or auto_send_resume
   - `browserChannel.transportAvailable`
   - `browserChannel.chatPageReachable`
   - `browserChannel.preflightStatus`
+- `run_auto_reply_graph(...)` 只做状态编排和动作决策，不直接访问 Boss 页面。
+- 真实 Boss 读写仍然只通过 Bridge/CDP channel 和 CLI adapter 进入。
+- Frontend watcher console 的 running 状态会周期性触发 `POST /api/agent/watcher/run { liveSync: true }`。
+- Bridge/CDP 不可用、`ACCOUNT_RISK`、`AUTH_EXPIRED`、缺少 `security_id` 或空草稿时，全自动链路只写 audit，不发送。
 
 ## Completed Work
 
