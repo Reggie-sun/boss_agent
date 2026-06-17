@@ -19,6 +19,9 @@ class WatcherConfig:
     resume_attachment_path: str
     poll_seconds: int = 20
     max_failures_per_conversation: int = 3
+    live_sync: bool = False
+    require_send_enabled: bool = True
+    send_enabled: bool = False
 
     @classmethod
     def from_mapping(cls, values: dict[str, object]) -> "WatcherConfig":
@@ -36,6 +39,11 @@ class WatcherConfig:
                 1,
                 int(values.get("boss_rag_watcher_max_failures_per_conversation") or 3),
             ),
+            live_sync=bool(values.get("boss_rag_watcher_live_sync", False)),
+            require_send_enabled=bool(
+                values.get("boss_rag_watcher_require_send_enabled", True)
+            ),
+            send_enabled=bool(values.get("boss_rag_send_enabled", False)),
         )
 
 

@@ -85,3 +85,29 @@ def test_interview_window_reply_uses_configured_windows():
         "可以的，我这边通常工作日 20:00 后，周末全天方便面试。"
         "您可以发几个可选时间，我确认后会尽快回复。"
     )
+
+
+def test_watcher_config_reads_full_auto_flags():
+    config = WatcherConfig.from_mapping(
+        {
+            "boss_rag_watcher_enabled": True,
+            "boss_rag_watcher_dry_run": False,
+            "boss_rag_watcher_live_sync": True,
+            "boss_rag_watcher_poll_seconds": 3,
+            "boss_rag_watcher_max_failures_per_conversation": 2,
+            "boss_rag_watcher_require_send_enabled": True,
+            "boss_rag_send_enabled": True,
+            "boss_rag_contact_phone": "13800138000",
+            "boss_rag_contact_wechat": "reggie-ai",
+            "boss_rag_interview_windows": "工作日 20:00 后",
+            "boss_rag_resume_attachment_path": "/tmp/resume.pdf",
+        }
+    )
+
+    assert config.enabled is True
+    assert config.dry_run is False
+    assert config.live_sync is True
+    assert config.poll_seconds == 5
+    assert config.max_failures_per_conversation == 2
+    assert config.require_send_enabled is True
+    assert config.send_enabled is True

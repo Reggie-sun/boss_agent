@@ -207,3 +207,27 @@ def test_config_env_override_parses_rag_boolean_and_int(monkeypatch):
 
 	assert cfg["boss_rag_allow_message_read"] is True
 	assert cfg["boss_rag_rag_timeout_seconds"] == 33
+
+
+def test_load_config_reads_watcher_env_aliases(monkeypatch, tmp_path):
+	monkeypatch.setenv("BOSS_RAG_WATCHER_ENABLED", "true")
+	monkeypatch.setenv("BOSS_RAG_WATCHER_DRY_RUN", "false")
+	monkeypatch.setenv("BOSS_RAG_WATCHER_LIVE_SYNC", "true")
+	monkeypatch.setenv("BOSS_RAG_WATCHER_POLL_SECONDS", "7")
+	monkeypatch.setenv("BOSS_RAG_CONTACT_PHONE", "13800138000")
+	monkeypatch.setenv("BOSS_RAG_CONTACT_WECHAT", "reggie-ai")
+	monkeypatch.setenv("BOSS_RAG_INTERVIEW_WINDOWS", "工作日 20:00 后")
+	monkeypatch.setenv("BOSS_RAG_RESUME_ATTACHMENT_PATH", "/tmp/resume.pdf")
+
+	from boss_agent_cli.config import load_config
+
+	cfg = load_config(tmp_path / "missing.json")
+
+	assert cfg["boss_rag_watcher_enabled"] is True
+	assert cfg["boss_rag_watcher_dry_run"] is False
+	assert cfg["boss_rag_watcher_live_sync"] is True
+	assert cfg["boss_rag_watcher_poll_seconds"] == 7
+	assert cfg["boss_rag_contact_phone"] == "13800138000"
+	assert cfg["boss_rag_contact_wechat"] == "reggie-ai"
+	assert cfg["boss_rag_interview_windows"] == "工作日 20:00 后"
+	assert cfg["boss_rag_resume_attachment_path"] == "/tmp/resume.pdf"
