@@ -7,7 +7,10 @@ personal-data workflows before they reach this client.
 
 Supports two modes:
   1. CDP mode: connects to user's existing Chrome via DevTools Protocol
-  2. Patchright mode (fallback): launches a headless Chromium instance
+  2. Bridge mode: delegates fetches to the user's Chrome extension channel
+
+Headless patchright helpers still exist for isolated utility paths, but live
+BOSS platform requests fail closed instead of silently falling back to headless.
 """
 import sys
 import time
@@ -51,6 +54,17 @@ class RecruiterChatTabRequired(RuntimeError):
 			"Chrome (CDP-attached) and retry."
 		)
 
+
+class BrowserChannelUnavailable(RuntimeError):
+	"""No safe live browser channel is available for real platform requests."""
+
+	def __init__(self) -> None:
+		super().__init__(
+			"BOSS 浏览器通道不可用：未检测到 Bridge 扩展连接，且无法通过 CDP 复用真实 Chrome。"
+			"为保护账号，已禁止降级到 headless patchright。"
+			"请启动 BOSS Agent Bridge，或用 --remote-debugging-port=9222 打开真实 Chrome 后重试。"
+		)
+
 # 超时常量
 _CDP_PROBE_TIMEOUT = 3           # CDP 探测 HTTP 超时（秒）
 _CDP_CONNECT_TIMEOUT_MS = 10000  # CDP 握手超时，避免 Chrome 端口存在但连接挂住
@@ -69,7 +83,8 @@ _CHROME_USER_DATA_CANDIDATES = [
 class BrowserSession:
 	"""Persistent browser session that makes API calls via page.evaluate(fetch).
 
-	Tries CDP connection to user's Chrome first; falls back to headless patchright.
+	Tries Bridge first, then CDP against the user's Chrome. Real platform
+	requests must not silently fall back to headless automation.
 	"""
 
 	def __init__(self, cookies: dict[str, Any], user_agent: str, *, delay: tuple[float, float] = (1.5, 3.0), cdp_url: str | None = None, logger: Any = None) -> None:
@@ -111,8 +126,16 @@ class BrowserSession:
 		if not _is_patchright_runtime(sync_playwright) and self._try_cdp():
 			return
 
-		# 兜底：启动 headless patchright
-		self._start_headless()
+		self._stop_playwright_driver()
+		raise BrowserChannelUnavailable()
+
+	def _stop_playwright_driver(self) -> None:
+		if self._pw:
+			try:
+				self._pw.stop()
+			except Exception:
+				pass
+			self._pw = None
 
 	def _try_bridge(self) -> bool:
 		"""尝试通过 Browser Bridge（Chrome 扩展 + daemon）连接。"""

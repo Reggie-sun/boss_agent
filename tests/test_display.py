@@ -278,6 +278,30 @@ class TestHandleAuthErrorsAccountRisk:
 			assert "客服" in kwargs["recovery_action"]
 
 
+# ── handle_auth_errors BrowserChannelUnavailable 分支 ───────
+
+
+class TestHandleAuthErrorsBrowserChannelUnavailable:
+	def test_browser_channel_unavailable_reports_bridge_or_cdp_requirement(self):
+		from boss_agent_cli.api.browser_client import BrowserChannelUnavailable
+		ctx = MagicMock()
+		ctx.obj = {"json_output": True}
+
+		@handle_auth_errors("search")
+		def impl(ctx):
+			raise BrowserChannelUnavailable()
+
+		with patch("boss_agent_cli.display.handle_error_output") as mock_err:
+			impl(ctx)
+			mock_err.assert_called_once()
+			kwargs = mock_err.call_args[1]
+			assert kwargs["code"] == "NETWORK_ERROR"
+			assert kwargs["recoverable"] is True
+			assert "Bridge" in kwargs["recovery_action"]
+			assert "CDP" in kwargs["recovery_action"]
+			assert "禁止降级到 headless patchright" in kwargs["message"]
+
+
 # ── 各 renderer 冒烟测试（调用不抛异常即可覆盖） ────────────
 
 

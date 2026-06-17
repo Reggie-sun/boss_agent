@@ -79,7 +79,28 @@ const defaultBossSearchForm = {
   count: "3",
 };
 
+const bossAccountRiskCode = "ACCOUNT_RISK";
+const bossAccountRiskMessage =
+  "Boss 账号触发风控，已停止自动化访问。请回到 BOSS 官方页面手动处理，恢复后刷新本页面。";
+
+function bossBridgeErrorFromPayload(payload, fallback) {
+  const error = new Error(
+    payload?.errorMessage ||
+      payload?.error?.message ||
+      fallback,
+  );
+  error.bossCode = payload?.error?.code || "";
+  return error;
+}
+
+function bossBridgeErrorCode(error) {
+  return error?.bossCode || "";
+}
+
 function bossBridgeErrorMessage(error, fallback) {
+  if (bossBridgeErrorCode(error) === bossAccountRiskCode) {
+    return bossAccountRiskMessage;
+  }
   const message = error instanceof Error ? error.message : "";
   if (message === "Failed to fetch" || message.includes("NetworkError")) {
     return "本地 Vite bridge 无响应。请刷新页面，或确认当前页面打开的是正在运行的 demo/interview-simulator dev server。";
@@ -270,6 +291,7 @@ export function App() {
   const [bossAutomationResult, setBossAutomationResult] = useState(null);
   const [bossAutomationError, setBossAutomationError] = useState("");
   const [bossAutomationProgress, setBossAutomationProgress] = useState(null);
+  const [bossAutomationRiskLocked, setBossAutomationRiskLocked] = useState(false);
   const [isBossSearching, setIsBossSearching] = useState(false);
   const [isBossAutoRunning, setIsBossAutoRunning] = useState(false);
   const [chatTargets, setChatTargets] = useState([]);
@@ -328,6 +350,7 @@ export function App() {
       ? `第${bossAutomationProgressCurrent}${bossAutomationProgressTotal ? `/${bossAutomationProgressTotal}` : ""}个`
       : "搜索中..."
     : "Agent 全自动";
+  const bossSearchActionsDisabled = bossAutomationRiskLocked || !bossSearchForm.query.trim();
 
   function updateBossSearchForm(field, value) {
     setBossSearchForm((current) => ({
@@ -431,7 +454,7 @@ export function App() {
 
   async function handleBossSearchPreview() {
     const query = bossSearchForm.query.trim();
-    if (!query || isBossSearching) return;
+    if (!query || isBossSearching || bossAutomationRiskLocked) return;
     setIsBossSearching(true);
     setBossAutomationError("");
     setBossAutomationResult(null);
@@ -455,7 +478,7 @@ export function App() {
       });
       const payload = await response.json();
       if (!response.ok || !payload.ok) {
-        throw new Error(payload.errorMessage || "BOSS 搜索失败。");
+        throw bossBridgeErrorFromPayload(payload, "BOSS 搜索失败。");
       }
       const jobs = Array.isArray(payload.data) ? payload.data : [];
       setBossSearchJobs(jobs);
@@ -464,6 +487,9 @@ export function App() {
       }
     } catch (error) {
       setBossSearchJobs([]);
+      if (bossBridgeErrorCode(error) === bossAccountRiskCode) {
+        setBossAutomationRiskLocked(true);
+      }
       setBossAutomationError(bossBridgeErrorMessage(error, "BOSS 搜索失败。"));
     } finally {
       setIsBossSearching(false);
@@ -472,7 +498,7 @@ export function App() {
 
   async function handleBossAutoGreet() {
     const query = bossSearchForm.query.trim();
-    if (!query || isBossAutoRunning) return;
+    if (!query || isBossAutoRunning || bossAutomationRiskLocked) return;
     setIsBossAutoRunning(true);
     setBossAutomationError("");
     setBossAutomationResult(null);
@@ -546,11 +572,7 @@ export function App() {
         buffer += decoder.decode();
         if (buffer.trim()) consumeLine(buffer);
         if (streamError) {
-          throw new Error(
-            streamError.errorMessage ||
-              streamError.error?.message ||
-              "Agent 自动开聊失败。",
-          );
+          throw bossBridgeErrorFromPayload(streamError, "Agent 自动开聊失败。");
         }
         if (!finalPayload?.ok) {
           throw new Error("Agent 自动开聊没有返回结果。");
@@ -562,13 +584,16 @@ export function App() {
       }
       const payload = await response.json();
       if (!response.ok || !payload.ok) {
-        throw new Error(payload.errorMessage || "Agent 自动开聊失败。");
+        throw bossBridgeErrorFromPayload(payload, "Agent 自动开聊失败。");
       }
       setBossAutomationResult(payload.data || {});
       setBossAutomationProgress(null);
       await loadChatTargets();
     } catch (error) {
       setBossAutomationProgress(null);
+      if (bossBridgeErrorCode(error) === bossAccountRiskCode) {
+        setBossAutomationRiskLocked(true);
+      }
       setBossAutomationError(
         bossBridgeErrorMessage(error, "Agent 自动开聊失败。"),
       );
@@ -1504,7 +1529,7 @@ export function App() {
                 type="button"
                 className="apply-btn apply-btn--search"
                 onClick={handleBossSearchPreview}
-                disabled={isBossSearching || !bossSearchForm.query.trim()}
+                disabled={isBossSearching || bossSearchActionsDisabled}
               >
                 <MagnifyingGlass size={16} />
                 {isBossSearching ? "搜索中..." : "预览"}
@@ -1513,7 +1538,7 @@ export function App() {
                 type="button"
                 className="apply-btn apply-btn--send apply-btn--compact"
                 onClick={handleBossAutoGreet}
-                disabled={isBossAutoRunning || !bossSearchForm.query.trim()}
+                disabled={isBossAutoRunning || bossSearchActionsDisabled}
               >
                 <PaperPlaneTilt size={16} weight="fill" />
                 {bossAutoButtonLabel}

@@ -1,6 +1,7 @@
 from unittest.mock import patch, MagicMock
 
 import httpx
+import pytest
 
 from boss_agent_cli.api.browser_client import (
 	CDP_DEFAULT_URL,
@@ -9,6 +10,7 @@ from boss_agent_cli.api.browser_client import (
 	_CDP_CONNECT_TIMEOUT_MS,
 	_HEADLESS_NETWORKIDLE_GRACE_MS,
 	_NAV_TIMEOUT_MS,
+	BrowserChannelUnavailable,
 	BrowserSession,
 )
 
@@ -265,35 +267,31 @@ def test_start_headless_tolerates_networkidle_timeout():
 	)
 
 
-def test_ensure_started_falls_back_to_patchright_when_bridge_and_cdp_fail():
+def test_ensure_started_fails_closed_when_bridge_and_cdp_fail():
 	session = BrowserSession(cookies={}, user_agent="")
 	mock_pw = MagicMock()
-	sentinel = {"headless_started": False}
-
-	def mark_headless_started():
-		sentinel["headless_started"] = True
-		session._started = True
 
 	with (
 		patch.object(session, "_try_bridge", return_value=False) as mock_try_bridge,
 		patch("boss_agent_cli.api.browser_client._sync_playwright") as mock_sync_playwright,
 		patch.object(session, "_try_cdp", return_value=False) as mock_try_cdp,
-		patch.object(session, "_start_headless", side_effect=mark_headless_started) as mock_start_headless,
+		patch.object(session, "_start_headless") as mock_start_headless,
 	):
 		mock_sync_playwright.return_value.return_value.start.return_value = mock_pw
 
-		session._ensure_started()
+		with pytest.raises(BrowserChannelUnavailable):
+			session._ensure_started()
 
-	assert sentinel["headless_started"] is True
-	assert session._started is True
-	assert session._pw is mock_pw
+	assert session._started is False
+	assert session._pw is None
 	mock_try_bridge.assert_called_once()
 	mock_sync_playwright.assert_called_once()
 	mock_try_cdp.assert_called_once()
-	mock_start_headless.assert_called_once()
+	mock_pw.stop.assert_called_once()
+	mock_start_headless.assert_not_called()
 
 
-def test_ensure_started_skips_patchright_cdp_attach():
+def test_ensure_started_skips_patchright_cdp_attach_and_fails_closed():
 	session = BrowserSession(cookies={}, user_agent="")
 	mock_pw = MagicMock()
 
@@ -307,12 +305,14 @@ def test_ensure_started_skips_patchright_cdp_attach():
 		patch.object(session, "_try_cdp", return_value=True) as mock_try_cdp,
 		patch.object(session, "_start_headless") as mock_start_headless,
 	):
-		session._ensure_started()
+		with pytest.raises(BrowserChannelUnavailable):
+			session._ensure_started()
 
 	mock_try_bridge.assert_called_once()
 	mock_sync_playwright.assert_called_once()
 	mock_try_cdp.assert_not_called()
-	mock_start_headless.assert_called_once()
+	mock_pw.stop.assert_called_once()
+	mock_start_headless.assert_not_called()
 
 
 def test_try_cdp_attempts_http_ws_and_devtools_urls_before_falling_back():

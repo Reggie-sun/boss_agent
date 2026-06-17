@@ -362,7 +362,7 @@ def handle_auth_errors(command_name: str) -> Callable[[Callable[..., Any]], Call
 	def decorator(func: Callable[..., Any]) -> Callable[..., Any]:
 		@wraps(func)
 		def wrapper(ctx: Any, *args: Any, **kwargs: Any) -> Any:
-			from boss_agent_cli.api.browser_client import RecruiterChatTabRequired
+			from boss_agent_cli.api.browser_client import BrowserChannelUnavailable, RecruiterChatTabRequired
 			from boss_agent_cli.api.client import AccountRiskError
 			from boss_agent_cli.auth.manager import AuthRequired, TokenRefreshFailed
 			try:
@@ -376,6 +376,17 @@ def handle_auth_errors(command_name: str) -> Callable[[Callable[..., Any]], Call
 					hints={"next_actions": [
 						"在 BOSS 直聘官方页面确认候选人和沟通上下文",
 						"保持 CLI 默认低风险模式，不通过自动化链路发送消息或请求简历",
+					]},
+				)
+			except BrowserChannelUnavailable as e:
+				handle_error_output(
+					ctx, command_name, code="NETWORK_ERROR",
+					message=str(e),
+					recoverable=True,
+					recovery_action="启动 BOSS Agent Bridge，或用 CDP --remote-debugging-port=9222 打开真实 Chrome 后重试",
+					hints={"next_actions": [
+						"不要在 Bridge/CDP 不可用时继续真实平台搜索或开聊",
+						"确认前端健康检查显示 Bridge 或 CDP 可用后再操作",
 					]},
 				)
 			except AuthRequired:
