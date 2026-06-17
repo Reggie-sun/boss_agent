@@ -44,6 +44,11 @@ class TestBridgeCommand:
 		d = cmd.to_dict()
 		assert d["domain"] == "zhipin.com"
 
+	def test_to_dict_allows_explicit_diagnostic_tab_creation(self):
+		cmd = BridgeCommand(id="cmd_7", action="navigate", url="http://127.0.0.1:19826/ping", allow_create=True)
+		d = cmd.to_dict()
+		assert d["allowCreate"] is True
+
 
 class TestBridgeResult:
 	def test_from_dict_success(self):

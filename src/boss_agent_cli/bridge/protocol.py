@@ -30,6 +30,7 @@ class BridgeCommand:
 	domain: str = ""
 	workspace: str = "boss"
 	tab_id: int | None = None
+	allow_create: bool = False
 
 	def to_dict(self) -> dict[str, Any]:
 		d: dict[str, Any] = {"id": self.id, "action": self.action}
@@ -43,6 +44,8 @@ class BridgeCommand:
 			d["workspace"] = self.workspace
 		if self.tab_id is not None:
 			d["tabId"] = self.tab_id
+		if self.allow_create:
+			d["allowCreate"] = True
 		return d
 
 

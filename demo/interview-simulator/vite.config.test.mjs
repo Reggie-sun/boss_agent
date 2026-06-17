@@ -29,6 +29,7 @@ test("detectBossDeliveryChannel accepts bridge-only channel after safe exec prob
       assert.equal(body.action, "exec");
       assert.match(body.code, /location\.href/);
       assert.equal(body.workspace, "boss");
+      assert.equal(body.allowCreate, false);
       return Response.json({
         id: body.id,
         ok: true,

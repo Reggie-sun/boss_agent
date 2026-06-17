@@ -189,6 +189,7 @@ class BridgeClient:
 			"navigate",
 			url=DIAGNOSTIC_NAVIGATE_URL,
 			workspace=f"{workspace}-diagnostic",
+			allow_create=True,
 		)
 		checks.append(_bridge_check(
 			"bridge_navigate",
@@ -255,9 +256,9 @@ class BridgeClient:
 			raise RuntimeError(f"Bridge evaluate 失败: {result.error}")
 		return result.data if isinstance(result.data, dict) else {"result": result.data}
 
-	def navigate(self, url: str, *, workspace: str = "boss") -> dict[str, Any]:
+	def navigate(self, url: str, *, workspace: str = "boss", allow_create: bool = False) -> dict[str, Any]:
 		"""导航到指定 URL。"""
-		result = self.send_command("navigate", url=url, workspace=workspace)
+		result = self.send_command("navigate", url=url, workspace=workspace, allow_create=allow_create)
 		if not result.ok:
 			raise RuntimeError(f"Bridge navigate 失败: {result.error}")
 		return result.data if isinstance(result.data, dict) else {}

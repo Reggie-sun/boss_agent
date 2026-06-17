@@ -40,6 +40,15 @@ def test_bridge_extension_waits_for_created_workspace_tab_to_be_debuggable():
 	assert "return newTab.id;" not in background
 
 
+def test_bridge_extension_requires_existing_boss_tab_for_live_workspace():
+	repo_root = Path(__file__).resolve().parents[1]
+	background = (repo_root / "extension" / "background.js").read_text()
+
+	assert "allowCreate" in background
+	assert "No existing BOSS tab found" in background
+	assert "resolveTabId(cmd.tabId, cmd.workspace, Boolean(cmd.allowCreate))" in background
+
+
 def test_bridge_extension_keeps_websocket_session_alive():
 	repo_root = Path(__file__).resolve().parents[1]
 	background = (repo_root / "extension" / "background.js").read_text()

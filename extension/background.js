@@ -128,7 +128,7 @@ async function waitForHttpTab(tabId, timeoutMs = 5000) {
 	throw new Error(`Cannot debug tab ${tabId}: URL is ${tab.url || ''}`);
 }
 
-async function resolveTabId(tabId, workspace) {
+async function resolveTabId(tabId, workspace, allowCreate = false, initialUrl = BOSS_WORKSPACE_URL) {
 	if (tabId !== undefined) {
 		try {
 			const tab = await chrome.tabs.get(tabId);
@@ -142,13 +142,20 @@ async function resolveTabId(tabId, workspace) {
 		const readyTab = zhipinTabs.find(tab => tab.url?.startsWith('http'));
 		if (readyTab?.id) return readyTab.id;
 		if (zhipinTabs[0]?.id) return await waitForHttpTab(zhipinTabs[0].id);
+		if (!allowCreate) {
+			throw new Error('No existing BOSS tab found. Open https://www.zhipin.com/ in this Chrome profile and retry.');
+		}
 	}
 
-	const windowId = await getAutomationWindow(BOSS_WORKSPACE_URL);
+	if (!allowCreate) {
+		throw new Error(`No existing ${workspace || 'default'} tab found, and tab creation is disabled for this command.`);
+	}
+
+	const windowId = await getAutomationWindow(initialUrl);
 	const tabs = await chrome.tabs.query({ windowId });
 	const good = tabs.find(t => t.url?.startsWith('http'));
 	if (good?.id) return good.id;
-	const newTab = await chrome.tabs.create({ windowId, url: BOSS_WORKSPACE_URL, active: true });
+	const newTab = await chrome.tabs.create({ windowId, url: initialUrl, active: true });
 	if (!newTab.id) throw new Error('Created workspace tab has no id');
 	return await waitForHttpTab(newTab.id);
 }
@@ -248,7 +255,7 @@ async function handleCommand(cmd) {
 
 async function handleExec(cmd) {
 	if (!cmd.code) return { id: cmd.id, ok: false, error: 'Missing code' };
-	const tabId = await resolveTabId(cmd.tabId, cmd.workspace);
+	const tabId = await resolveTabId(cmd.tabId, cmd.workspace, Boolean(cmd.allowCreate));
 	const data = await evaluate(tabId, cmd.code);
 	return { id: cmd.id, ok: true, data };
 }
@@ -257,7 +264,7 @@ async function handleNavigate(cmd) {
 	if (!cmd.url) return { id: cmd.id, ok: false, error: 'Missing url' };
 	if (!cmd.url.startsWith('http')) return { id: cmd.id, ok: false, error: 'Only http(s) allowed' };
 
-	const tabId = await resolveTabId(cmd.tabId, cmd.workspace);
+	const tabId = await resolveTabId(cmd.tabId, cmd.workspace, Boolean(cmd.allowCreate), cmd.url);
 	await chrome.tabs.update(tabId, { url: cmd.url });
 
 	// 等待导航完成

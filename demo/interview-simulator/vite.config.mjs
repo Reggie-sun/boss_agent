@@ -146,6 +146,7 @@ async function evaluateBridgeProbe(bridgeUrl) {
     id: `vite_probe_${Date.now()}`,
     action: "exec",
     workspace: "boss",
+    allowCreate: false,
     code: "(() => ({ href: location.href, title: document.title }))()",
   });
   if (!result?.ok) {
