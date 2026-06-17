@@ -766,6 +766,100 @@ def test_agent_watcher_run_once_live_sync_passes_flag(monkeypatch, tmp_path: Pat
 	assert payload["data"]["processed"] == 1
 
 
+def test_agent_watcher_run_ensure_chat_page_runs_before_watcher(monkeypatch, tmp_path: Path):
+	(tmp_path / "config.json").write_text(
+		json.dumps({"boss_rag_watcher_enabled": True}),
+		encoding="utf-8",
+	)
+	events: list[str] = []
+
+	def _ensure_chat_page(cdp_url):
+		events.append(f"ensure:{cdp_url}")
+		return {
+			"ok": True,
+			"status": "ready",
+			"url": "https://www.zhipin.com/web/geek/chat",
+		}
+
+	class _FakeWatcher:
+		def run_once(self, *, live_sync=None):
+			events.append("run")
+			return rag_commands.WatcherRunResult(
+				processed=1,
+				skipped=0,
+				blocked=0,
+				tasks=[{"message_id": "msg_001", "status": "sent"}],
+			)
+
+	monkeypatch.setattr(rag_commands, "ensure_candidate_chat_page_via_cdp", _ensure_chat_page)
+	monkeypatch.setattr(rag_commands, "_build_passive_watcher", lambda ctx: _FakeWatcher())
+	runner = CliRunner()
+
+	result = runner.invoke(
+		cli,
+		[
+			"--json",
+			"--data-dir",
+			str(tmp_path),
+			"agent",
+			"watcher-run",
+			"--once",
+			"--ensure-chat-page",
+		],
+	)
+
+	assert result.exit_code == 0
+	assert events == ["ensure:http://localhost:9222", "run"]
+	payload = json.loads(result.output)
+	assert payload["ok"] is True
+	assert payload["data"]["chat_page"]["status"] == "ready"
+
+
+def test_agent_watcher_run_ensure_chat_page_fails_closed(monkeypatch, tmp_path: Path):
+	(tmp_path / "config.json").write_text(
+		json.dumps({"boss_rag_watcher_enabled": True}),
+		encoding="utf-8",
+	)
+	called = {"build_watcher": False}
+
+	def _ensure_chat_page(cdp_url):
+		return {
+			"ok": False,
+			"code": "CDP_UNAVAILABLE",
+			"message": "cannot reach CDP at http://localhost:9222/json/list",
+			"recoverable": True,
+			"recovery_action": "启动带 remote-debugging-port=9222 的 Chrome 后重试",
+		}
+
+	def _build_watcher(ctx):
+		called["build_watcher"] = True
+		return object()
+
+	monkeypatch.setattr(rag_commands, "ensure_candidate_chat_page_via_cdp", _ensure_chat_page)
+	monkeypatch.setattr(rag_commands, "_build_passive_watcher", _build_watcher)
+	runner = CliRunner()
+
+	result = runner.invoke(
+		cli,
+		[
+			"--json",
+			"--data-dir",
+			str(tmp_path),
+			"agent",
+			"watcher-run",
+			"--once",
+			"--ensure-chat-page",
+		],
+	)
+
+	assert result.exit_code == 1
+	assert called["build_watcher"] is False
+	payload = json.loads(result.output)
+	assert payload["ok"] is False
+	assert payload["command"] == "agent-watcher-run"
+	assert payload["error"]["code"] == "CDP_UNAVAILABLE"
+
+
 def test_agent_watcher_run_once_no_live_sync_overrides_config(monkeypatch, tmp_path: Path):
 	(tmp_path / "config.json").write_text(
 		json.dumps(

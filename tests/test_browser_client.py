@@ -12,6 +12,7 @@ from boss_agent_cli.api.browser_client import (
 	_NAV_TIMEOUT_MS,
 	BrowserChannelUnavailable,
 	BrowserSession,
+	ensure_candidate_chat_page_via_cdp,
 )
 
 
@@ -68,6 +69,60 @@ def test_fetch_ws_url_non_object_json_returns_none():
 		ws = BrowserSession._fetch_ws_url("http://127.0.0.1:9222")
 
 		assert ws is None
+
+
+def test_ensure_candidate_chat_page_uses_existing_chat_tab():
+	with patch(
+		"boss_agent_cli.api.browser_client._load_cdp_targets",
+		return_value=[
+			{
+				"type": "page",
+				"url": "https://www.zhipin.com/web/geek/chat",
+				"title": "沟通 - BOSS直聘",
+			}
+		],
+	) as mock_load, patch("boss_agent_cli.api.browser_client._open_cdp_tab") as mock_open:
+		result = ensure_candidate_chat_page_via_cdp("http://127.0.0.1:9222")
+
+	assert result["ok"] is True
+	assert result["status"] == "ready"
+	assert result["opened"] is False
+	assert result["url"] == "https://www.zhipin.com/web/geek/chat"
+	mock_load.assert_called_once_with("http://127.0.0.1:9222")
+	mock_open.assert_not_called()
+
+
+def test_ensure_candidate_chat_page_opens_chat_tab_when_missing():
+	load_results = [
+		[{"type": "page", "url": "https://www.google.com/search?q=boss"}],
+		[
+			{"type": "page", "url": "https://www.google.com/search?q=boss"},
+			{
+				"type": "page",
+				"url": "https://www.zhipin.com/web/geek/chat",
+				"title": "沟通 - BOSS直聘",
+			},
+		],
+	]
+
+	with patch(
+		"boss_agent_cli.api.browser_client._load_cdp_targets",
+		side_effect=load_results,
+	) as mock_load, patch("boss_agent_cli.api.browser_client._open_cdp_tab") as mock_open:
+		result = ensure_candidate_chat_page_via_cdp(
+			"http://127.0.0.1:9222",
+			wait_seconds=0,
+		)
+
+	assert result["ok"] is True
+	assert result["status"] == "ready"
+	assert result["opened"] is True
+	assert result["url"] == "https://www.zhipin.com/web/geek/chat"
+	assert mock_load.call_count == 2
+	mock_open.assert_called_once_with(
+		"http://127.0.0.1:9222",
+		"https://www.zhipin.com/web/geek/chat",
+	)
 
 
 def test_read_devtools_active_port_missing(tmp_path):

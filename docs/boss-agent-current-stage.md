@@ -93,7 +93,8 @@ Boss 主动消息全自动链路是：
 
 ```text
 Boss inbound message
-  -> boss agent watcher-run --loop or frontend watcher interval
+  -> boss agent watcher-run --loop --ensure-chat-page or frontend watcher interval
+  -> ensure_candidate_chat_page_via_cdp(...)
   -> _CliWatcherMessageSyncer.sync_messages(...)
   -> BossPassiveWatcher.run_once(live_sync=True)
   -> BossRagReplyService.create_draft_for_message(...)
@@ -109,6 +110,7 @@ Boss inbound message
 - `boss_rag_watcher_enabled=true`
 - `boss_rag_watcher_dry_run=false`
 - `boss_rag_watcher_live_sync=true`
+- `--ensure-chat-page` 或前端 watcher console 的 `ensureChatPage=true`
 
 本阶段最重要的新边界是：
 

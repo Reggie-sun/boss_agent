@@ -23,6 +23,7 @@ from boss_agent_cli.api.throttle import RequestThrottle
 from boss_agent_cli.auth.browser import _DEFAULT_CDP_URL as CDP_DEFAULT_URL
 
 HOME_URL = "https://www.zhipin.com/"
+CANDIDATE_CHAT_URL = "https://www.zhipin.com/web/geek/chat"
 
 
 def _sync_playwright() -> Any:
@@ -71,6 +72,7 @@ _CDP_CONNECT_TIMEOUT_MS = 10000  # CDP 握手超时，避免 Chrome 端口存在
 _NAV_TIMEOUT_MS = 15000          # 页面导航超时（毫秒）
 _HEADLESS_NETWORKIDLE_GRACE_MS = 3000  # headless 预热的额外宽限，避免卡满 30s
 _BROWSER_FETCH_TIMEOUT_MS = 30000  # 页面内 fetch 超时，避免 CLI / 前端无限等待
+_CDP_CHAT_PAGE_WAIT_SECONDS = 15
 
 # macOS / Linux / Windows Chrome user data 默认路径
 _CHROME_USER_DATA_CANDIDATES = [
@@ -531,6 +533,148 @@ def _pick_chat_target_ws(cdp_http_url: str) -> str:
 			if target_ws:
 				return cast("str", target_ws)
 	raise RecruiterChatTabRequired()
+
+
+def _load_cdp_targets(cdp_http_url: str) -> list[dict[str, Any]]:
+	import json as _json
+	import urllib.request
+
+	list_url = cdp_http_url.rstrip("/") + "/json/list"
+	with urllib.request.urlopen(list_url, timeout=_CDP_PROBE_TIMEOUT) as resp:
+		payload = _json.load(resp)
+	if not isinstance(payload, list):
+		return []
+	return [item for item in payload if isinstance(item, dict)]
+
+
+def _open_cdp_tab(cdp_http_url: str, url: str) -> dict[str, Any]:
+	import json as _json
+	import urllib.parse
+	import urllib.request
+
+	target_url = cdp_http_url.rstrip("/") + "/json/new?" + urllib.parse.quote(url, safe="")
+	req = urllib.request.Request(target_url, method="PUT")
+	with urllib.request.urlopen(req, timeout=_CDP_PROBE_TIMEOUT) as resp:
+		payload = _json.load(resp)
+	return payload if isinstance(payload, dict) else {}
+
+
+def _find_candidate_chat_target(targets: list[dict[str, Any]]) -> dict[str, Any] | None:
+	for target in targets:
+		if target.get("type") != "page":
+			continue
+		url = str(target.get("url") or "")
+		if "/web/geek/chat" in url:
+			return target
+	return None
+
+
+def _find_zhipin_login_target(targets: list[dict[str, Any]]) -> dict[str, Any] | None:
+	for target in targets:
+		if target.get("type") != "page":
+			continue
+		url = str(target.get("url") or "")
+		title = str(target.get("title") or "")
+		if "zhipin.com" in url and ("/web/user" in url or "登录" in title or "注册登录" in title):
+			return target
+	return None
+
+
+def ensure_candidate_chat_page_via_cdp(
+	cdp_http_url: str | None = None,
+	*,
+	wait_seconds: float = _CDP_CHAT_PAGE_WAIT_SECONDS,
+) -> dict[str, Any]:
+	"""Ensure the user's CDP Chrome has a BOSS candidate chat page open.
+
+	This is a preflight for inbound auto-reply. It only opens/navigates a tab in
+	the user's CDP Chrome and never sends chat content.
+	"""
+	cdp_url = cdp_http_url or CDP_DEFAULT_URL
+	try:
+		targets = _load_cdp_targets(cdp_url)
+	except Exception as exc:
+		return {
+			"ok": False,
+			"status": "cdp_unavailable",
+			"code": "CDP_UNAVAILABLE",
+			"message": f"cannot reach CDP at {cdp_url.rstrip('/')}/json/list: {exc}",
+			"recoverable": True,
+			"recovery_action": "用 --remote-debugging-port=9222 打开真实 Chrome 后重试",
+		}
+
+	chat_target = _find_candidate_chat_target(targets)
+	if chat_target is not None:
+		return _candidate_chat_ready_payload(cdp_url, chat_target, opened=False)
+
+	try:
+		_open_cdp_tab(cdp_url, CANDIDATE_CHAT_URL)
+	except Exception as exc:
+		return {
+			"ok": False,
+			"status": "open_failed",
+			"code": "CDP_CHAT_PAGE_OPEN_FAILED",
+			"message": f"failed to open BOSS chat page through CDP: {exc}",
+			"recoverable": True,
+			"recovery_action": "确认 Chrome CDP 可访问后重试，或手动打开 BOSS 聊天页",
+		}
+
+	deadline = time.time() + max(wait_seconds, 0)
+	while True:
+		try:
+			targets = _load_cdp_targets(cdp_url)
+		except Exception as exc:
+			return {
+				"ok": False,
+				"status": "cdp_unavailable",
+				"code": "CDP_UNAVAILABLE",
+				"message": f"cannot reach CDP at {cdp_url.rstrip('/')}/json/list: {exc}",
+				"recoverable": True,
+				"recovery_action": "用 --remote-debugging-port=9222 打开真实 Chrome 后重试",
+			}
+
+		chat_target = _find_candidate_chat_target(targets)
+		if chat_target is not None:
+			return _candidate_chat_ready_payload(cdp_url, chat_target, opened=True)
+
+		login_target = _find_zhipin_login_target(targets)
+		if login_target is not None:
+			return {
+				"ok": False,
+				"status": "auth_required",
+				"code": "AUTH_EXPIRED",
+				"message": "Boss CDP 登录态已失效，聊天页被重定向到登录页。请在当前 CDP Chrome 内重新登录 BOSS。",
+				"recoverable": True,
+				"recovery_action": "在当前 CDP Chrome 内重新登录 BOSS 后重试",
+				"url": str(login_target.get("url") or ""),
+				"title": str(login_target.get("title") or ""),
+				"cdp_url": cdp_url,
+			}
+
+		if time.time() >= deadline:
+			break
+		time.sleep(min(1.0, max(0.1, deadline - time.time())))
+
+	return {
+		"ok": False,
+		"status": "not_ready",
+		"code": "CDP_CHAT_PAGE_NOT_READY",
+		"message": "Boss 聊天页未在 CDP Chrome 中就绪。请确认 BOSS 页面可访问并已登录。",
+		"recoverable": True,
+		"recovery_action": "手动打开 https://www.zhipin.com/web/geek/chat 后重试",
+		"cdp_url": cdp_url,
+	}
+
+
+def _candidate_chat_ready_payload(cdp_url: str, target: dict[str, Any], *, opened: bool) -> dict[str, Any]:
+	return {
+		"ok": True,
+		"status": "ready",
+		"opened": opened,
+		"url": str(target.get("url") or ""),
+		"title": str(target.get("title") or ""),
+		"cdp_url": cdp_url,
+	}
 
 
 def _build_eval_expression(script: str, arg: Any) -> str:

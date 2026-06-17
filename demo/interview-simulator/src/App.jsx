@@ -428,7 +428,7 @@ export function App() {
       const response = await fetch("/api/agent/watcher/run", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ liveSync: true }),
+        body: JSON.stringify({ liveSync: true, ensureChatPage: true }),
       });
       const payload = await response.json();
       if (!response.ok || !payload.ok) {

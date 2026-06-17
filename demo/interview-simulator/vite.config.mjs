@@ -871,8 +871,10 @@ function createRagBridgePlugin() {
         const rawBody = await readBody(req);
         const body = rawBody ? JSON.parse(rawBody) : {};
         const liveSync = Boolean(body.liveSync);
+        const ensureChatPage = Boolean(body.ensureChatPage);
         const args = ["agent", "watcher-run", "--once"];
         if (liveSync) args.push("--live-sync");
+        if (ensureChatPage) args.push("--ensure-chat-page");
         const payload = await runBossJsonCommand(bridgeConfig, args);
         res.end(JSON.stringify({ ok: true, data: payload.data || {} }));
       } catch (error) {

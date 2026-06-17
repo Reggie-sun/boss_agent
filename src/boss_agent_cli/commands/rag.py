@@ -8,6 +8,7 @@ from pathlib import Path
 
 import click
 
+from boss_agent_cli.api.browser_client import ensure_candidate_chat_page_via_cdp
 from boss_agent_cli.ai.config import AIConfigStore
 from boss_agent_cli.ai.service import AIService
 from boss_agent_cli.auth.manager import AuthManager
@@ -987,6 +988,7 @@ def rag_watcher_status_cmd(ctx: click.Context, limit: int) -> None:
 @click.option("--loop", "loop_mode", is_flag=True, default=False)
 @click.option("--live-sync/--no-live-sync", default=None)
 @click.option("--max-cycles", type=int, default=None)
+@click.option("--ensure-chat-page", is_flag=True, default=False)
 @click.pass_context
 def rag_watcher_run_cmd(
 	ctx: click.Context,
@@ -994,6 +996,7 @@ def rag_watcher_run_cmd(
 	loop_mode: bool,
 	live_sync: bool | None,
 	max_cycles: int | None,
+	ensure_chat_page: bool,
 ) -> None:
 	if once == loop_mode:
 		handle_error_output(
@@ -1032,6 +1035,20 @@ def rag_watcher_run_cmd(
 			render=lambda data: click.echo("Watcher is disabled; no tasks processed.", err=True),
 		)
 		return
+	chat_page: dict[str, object] = {}
+	if ensure_chat_page:
+		chat_page = ensure_candidate_chat_page_via_cdp(ctx.obj.get("cdp_url"))
+		if not chat_page.get("ok"):
+			handle_error_output(
+				ctx,
+				_workflow_command(ctx, "watcher-run"),
+				code=str(chat_page.get("code") or "CDP_CHAT_PAGE_NOT_READY"),
+				message=str(chat_page.get("message") or "Boss 聊天页未就绪。"),
+				recoverable=bool(chat_page.get("recoverable", True)),
+				recovery_action=str(chat_page.get("recovery_action") or "打开 BOSS 聊天页后重试"),
+				details=chat_page,
+			)
+			return
 	watcher = _build_passive_watcher(ctx)
 	if once:
 		payload = _watcher_result_payload(watcher.run_once(live_sync=effective_live_sync))
@@ -1059,6 +1076,8 @@ def rag_watcher_run_cmd(
 			"blocked": blocked,
 			"tasks": tasks[-20:],
 		}
+	if chat_page:
+		payload["chat_page"] = chat_page
 	handle_output(
 		ctx,
 		_workflow_command(ctx, "watcher-run"),
