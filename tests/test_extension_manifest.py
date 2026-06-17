@@ -32,6 +32,14 @@ def test_bridge_extension_boss_workspace_fallback_is_debuggable_https_page():
 	assert "startsWith('data:')" not in background
 
 
+def test_bridge_extension_waits_for_created_workspace_tab_to_be_debuggable():
+	repo_root = Path(__file__).resolve().parents[1]
+	background = (repo_root / "extension" / "background.js").read_text()
+
+	assert "waitForHttpTab" in background
+	assert "return newTab.id;" not in background
+
+
 def test_bridge_extension_keeps_websocket_session_alive():
 	repo_root = Path(__file__).resolve().parents[1]
 	background = (repo_root / "extension" / "background.js").read_text()

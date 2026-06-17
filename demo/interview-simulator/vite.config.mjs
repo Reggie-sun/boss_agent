@@ -84,6 +84,33 @@ async function readTextWithTimeout(url, { method = "GET", timeoutMs = 1500 } = {
   }
 }
 
+async function postJsonWithTimeout(url, payload, timeoutMs = 3000) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+      signal: controller.signal,
+    });
+    if (!response.ok) {
+      return {
+        ok: false,
+        errorMessage: await response.text(),
+      };
+    }
+    return await response.json();
+  } catch (error) {
+    return {
+      ok: false,
+      errorMessage: error instanceof Error ? error.message : "Bridge probe 请求失败。",
+    };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 async function detectBrowserChannel(config) {
   const cdpVersion = await readJsonWithTimeout(`${config.cdpUrl}/json/version`);
   const bridgeStatus = await readJsonWithTimeout(`${config.bridgeUrl}/status`);
@@ -111,6 +138,28 @@ async function detectBrowserChannel(config) {
     errorMessage: available
       ? ""
       : `未检测到可用的浏览器发送通道：CDP (${config.cdpUrl}) / Bridge (${config.bridgeUrl})。请先启动带 remote debugging 的 Chrome，或连接 BOSS Agent Bridge 扩展。`,
+  };
+}
+
+async function evaluateBridgeProbe(bridgeUrl) {
+  const result = await postJsonWithTimeout(`${bridgeUrl}/command`, {
+    id: `vite_probe_${Date.now()}`,
+    action: "exec",
+    workspace: "boss",
+    code: "(() => ({ href: location.href, title: document.title }))()",
+  });
+  if (!result?.ok) {
+    return {
+      ok: false,
+      errorMessage: result?.error || result?.errorMessage || "Bridge exec 探针失败。",
+    };
+  }
+
+  const data = result.data && typeof result.data === "object" ? result.data : {};
+  return {
+    ok: true,
+    href: String(data.href || ""),
+    title: String(data.title || ""),
   };
 }
 
@@ -273,13 +322,39 @@ async function detectBossDeliveryChannel(config) {
 
   if (!transport.cdpAvailable) {
     if (transport.bridgeAvailable) {
-      return {
-        ...baseState,
-        available: false,
-        preflightStatus: "cdp_required",
-        errorMessage:
-          "当前只检测到 Bridge 扩展，但这个 demo 的 Boss 对话发送预检仍需要 CDP Chrome 才能确认聊天页是否可达。",
+      const cacheKey = `bridge:${config.bridgeUrl}`;
+      if (
+        cachedDeliveryProbe &&
+        cachedDeliveryProbe.key === cacheKey &&
+        cachedDeliveryProbe.expiresAt > Date.now()
+      ) {
+        return cachedDeliveryProbe.value;
+      }
+
+      const bridgeProbe = await evaluateBridgeProbe(config.bridgeUrl);
+      const resolved = bridgeProbe.ok
+        ? {
+            ...baseState,
+            available: true,
+            chatPageReachable: String(bridgeProbe.href || "").includes("/web/geek/chat"),
+            preflightStatus: "bridge_ready",
+            lastObservedUrl: String(bridgeProbe.href || ""),
+            lastObservedTitle: String(bridgeProbe.title || ""),
+            errorMessage: "",
+          }
+        : {
+            ...baseState,
+            available: false,
+            preflightStatus: "bridge_probe_failed",
+            errorMessage:
+              bridgeProbe.errorMessage || "Bridge 扩展已连接，但只读 exec 探针失败。",
+          };
+      cachedDeliveryProbe = {
+        key: cacheKey,
+        expiresAt: Date.now() + DELIVERY_PROBE_CACHE_TTL_MS,
+        value: resolved,
       };
+      return resolved;
     }
     return {
       ...baseState,
@@ -375,6 +450,12 @@ async function detectBossDeliveryChannel(config) {
   };
   return resolved;
 }
+
+export function resetDeliveryProbeCacheForTests() {
+  cachedDeliveryProbe = null;
+}
+
+export { detectBossDeliveryChannel };
 
 function readBody(req) {
   return new Promise((resolve, reject) => {

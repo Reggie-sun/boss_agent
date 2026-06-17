@@ -83,13 +83,23 @@ const bossAccountRiskCode = "ACCOUNT_RISK";
 const bossAccountRiskMessage =
   "Boss 账号触发风控，已停止自动化访问。请回到 BOSS 官方页面手动处理，恢复后刷新本页面。";
 
-function bossBridgeErrorFromPayload(payload, fallback) {
-  const error = new Error(
-    payload?.errorMessage ||
-      payload?.error?.message ||
-      fallback,
+function isBossAccountRiskMessage(message) {
+  return ["环境存在异常", "异常访问", "风控", "安全验证"].some((token) =>
+    String(message || "").includes(token),
   );
-  error.bossCode = payload?.error?.code || "";
+}
+
+function bossBridgeErrorFromPayload(payload, fallback) {
+  const message =
+    payload?.errorMessage ||
+    payload?.error?.message ||
+    fallback;
+  const error = new Error(
+    message,
+  );
+  error.bossCode = payload?.error?.code || (
+    isBossAccountRiskMessage(message) ? bossAccountRiskCode : ""
+  );
   return error;
 }
 
@@ -98,10 +108,13 @@ function bossBridgeErrorCode(error) {
 }
 
 function bossBridgeErrorMessage(error, fallback) {
-  if (bossBridgeErrorCode(error) === bossAccountRiskCode) {
+  const message = error instanceof Error ? error.message : "";
+  if (
+    bossBridgeErrorCode(error) === bossAccountRiskCode ||
+    isBossAccountRiskMessage(message)
+  ) {
     return bossAccountRiskMessage;
   }
-  const message = error instanceof Error ? error.message : "";
   if (message === "Failed to fetch" || message.includes("NetworkError")) {
     return "本地 Vite bridge 无响应。请刷新页面，或确认当前页面打开的是正在运行的 demo/interview-simulator dev server。";
   }
@@ -988,7 +1001,9 @@ export function App() {
           <p>
             Boss 发送预检：
             {bridgeState.browserChannel.available
-              ? " 聊天页可达"
+              ? bridgeState.browserChannel.chatPageReachable
+                ? " 聊天页可达"
+                : " 通道可用"
               : bridgeState.browserChannel.errorMessage
                 ? " 未就绪"
                 : " 未检查"}

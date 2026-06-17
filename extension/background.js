@@ -117,6 +117,17 @@ async function evaluate(tabId, code) {
 
 // ── Tab management ───────────────────────────────────────────────────
 
+async function waitForHttpTab(tabId, timeoutMs = 5000) {
+	const deadline = Date.now() + timeoutMs;
+	while (Date.now() < deadline) {
+		const tab = await chrome.tabs.get(tabId);
+		if (tab.url?.startsWith('http')) return tabId;
+		await new Promise(r => setTimeout(r, 100));
+	}
+	const tab = await chrome.tabs.get(tabId);
+	throw new Error(`Cannot debug tab ${tabId}: URL is ${tab.url || ''}`);
+}
+
 async function resolveTabId(tabId, workspace) {
 	if (tabId !== undefined) {
 		try {
@@ -128,7 +139,9 @@ async function resolveTabId(tabId, workspace) {
 	// workspace="boss" 时，优先找已有的 zhipin tab（用户正常浏览的页面）
 	if (workspace === 'boss') {
 		const zhipinTabs = await chrome.tabs.query({ url: '*://*.zhipin.com/*' });
-		if (zhipinTabs.length > 0) return zhipinTabs[0].id;
+		const readyTab = zhipinTabs.find(tab => tab.url?.startsWith('http'));
+		if (readyTab?.id) return readyTab.id;
+		if (zhipinTabs[0]?.id) return await waitForHttpTab(zhipinTabs[0].id);
 	}
 
 	const windowId = await getAutomationWindow(BOSS_WORKSPACE_URL);
@@ -136,7 +149,8 @@ async function resolveTabId(tabId, workspace) {
 	const good = tabs.find(t => t.url?.startsWith('http'));
 	if (good?.id) return good.id;
 	const newTab = await chrome.tabs.create({ windowId, url: BOSS_WORKSPACE_URL, active: true });
-	return newTab.id;
+	if (!newTab.id) throw new Error('Created workspace tab has no id');
+	return await waitForHttpTab(newTab.id);
 }
 
 // ── WebSocket connection ─────────────────────────────────────────────
