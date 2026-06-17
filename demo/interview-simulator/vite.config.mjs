@@ -5,6 +5,8 @@ import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 
 const BOSS_GEEK_CHAT_URL = "https://www.zhipin.com/web/geek/chat";
+const CDP_REQUIRED_FOR_BOSS_DELIVERY_MESSAGE =
+  "Boss 自动开聊/发送需要 CDP 真实 Chrome（127.0.0.1:9222）。当前只检测到 Bridge 扩展；为保护账号，已停止本次自动触达。请用 --remote-debugging-port=9222 打开真实 Chrome 后刷新本页面。";
 const DELIVERY_PROBE_CACHE_TTL_MS = 10_000;
 let cachedDeliveryProbe = null;
 
@@ -323,39 +325,12 @@ async function detectBossDeliveryChannel(config) {
 
   if (!transport.cdpAvailable) {
     if (transport.bridgeAvailable) {
-      const cacheKey = `bridge:${config.bridgeUrl}`;
-      if (
-        cachedDeliveryProbe &&
-        cachedDeliveryProbe.key === cacheKey &&
-        cachedDeliveryProbe.expiresAt > Date.now()
-      ) {
-        return cachedDeliveryProbe.value;
-      }
-
-      const bridgeProbe = await evaluateBridgeProbe(config.bridgeUrl);
-      const resolved = bridgeProbe.ok
-        ? {
-            ...baseState,
-            available: true,
-            chatPageReachable: String(bridgeProbe.href || "").includes("/web/geek/chat"),
-            preflightStatus: "bridge_ready",
-            lastObservedUrl: String(bridgeProbe.href || ""),
-            lastObservedTitle: String(bridgeProbe.title || ""),
-            errorMessage: "",
-          }
-        : {
-            ...baseState,
-            available: false,
-            preflightStatus: "bridge_probe_failed",
-            errorMessage:
-              bridgeProbe.errorMessage || "Bridge 扩展已连接，但只读 exec 探针失败。",
-          };
-      cachedDeliveryProbe = {
-        key: cacheKey,
-        expiresAt: Date.now() + DELIVERY_PROBE_CACHE_TTL_MS,
-        value: resolved,
+      return {
+        ...baseState,
+        available: false,
+        preflightStatus: "cdp_required",
+        errorMessage: CDP_REQUIRED_FOR_BOSS_DELIVERY_MESSAGE,
       };
-      return resolved;
     }
     return {
       ...baseState,
@@ -452,11 +427,42 @@ async function detectBossDeliveryChannel(config) {
   return resolved;
 }
 
+function buildBossDeliveryBlockPayload(browserChannel) {
+  if (browserChannel?.available && browserChannel?.cdpAvailable) return null;
+
+  const errorMessage = String(
+    browserChannel?.errorMessage || CDP_REQUIRED_FOR_BOSS_DELIVERY_MESSAGE,
+  );
+  const code = browserChannel?.cdpAvailable
+    ? "BROWSER_CHANNEL_UNAVAILABLE"
+    : "BROWSER_CDP_REQUIRED";
+
+  return {
+    statusCode: 503,
+    body: {
+      ok: false,
+      errorMessage,
+      browserChannel,
+      error: {
+        code,
+        message: errorMessage,
+        recoverable: true,
+      },
+      delivery: {
+        status: "browser_channel_unavailable",
+        message_sent: false,
+        resume_sent: false,
+        error_message: errorMessage,
+      },
+    },
+  };
+}
+
 export function resetDeliveryProbeCacheForTests() {
   cachedDeliveryProbe = null;
 }
 
-export { detectBossDeliveryChannel };
+export { buildBossDeliveryBlockPayload, detectBossDeliveryChannel };
 
 function readBody(req) {
   return new Promise((resolve, reject) => {
@@ -1149,6 +1155,14 @@ function createRagBridgePlugin() {
         if (!query) {
           res.statusCode = 400;
           res.end(JSON.stringify({ ok: false, errorMessage: "query 不能为空。" }));
+          return true;
+        }
+
+        const browserChannel = await detectBossDeliveryChannel(bridgeConfig);
+        const blocked = buildBossDeliveryBlockPayload(browserChannel);
+        if (blocked) {
+          res.statusCode = blocked.statusCode;
+          res.end(JSON.stringify(blocked.body));
           return true;
         }
 

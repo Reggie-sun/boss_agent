@@ -2,11 +2,12 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  buildBossDeliveryBlockPayload,
   detectBossDeliveryChannel,
   resetDeliveryProbeCacheForTests,
 } from "./vite.config.mjs";
 
-test("detectBossDeliveryChannel accepts bridge-only channel after safe exec probe", async () => {
+test("detectBossDeliveryChannel requires CDP instead of bridge-only exec probe", async () => {
   const originalFetch = globalThis.fetch;
   const calls = [];
 
@@ -25,19 +26,7 @@ test("detectBossDeliveryChannel accepts bridge-only channel after safe exec prob
       });
     }
     if (requestUrl === "http://bridge.test/command") {
-      const body = JSON.parse(String(options.body || "{}"));
-      assert.equal(body.action, "exec");
-      assert.match(body.code, /location\.href/);
-      assert.equal(body.workspace, "boss");
-      assert.equal(body.allowCreate, false);
-      return Response.json({
-        id: body.id,
-        ok: true,
-        data: {
-          href: "https://www.zhipin.com/",
-          title: "BOSS直聘",
-        },
-      });
+      throw new Error("bridge exec probe should not run for delivery preflight");
     }
     throw new Error(`unexpected fetch: ${requestUrl}`);
   };
@@ -49,14 +38,36 @@ test("detectBossDeliveryChannel accepts bridge-only channel after safe exec prob
       bridgeUrl: "http://bridge.test",
     });
 
-    assert.equal(state.available, true);
+    assert.equal(state.available, false);
     assert.equal(state.mode, "bridge");
-    assert.equal(state.preflightStatus, "bridge_ready");
-    assert.equal(state.lastObservedUrl, "https://www.zhipin.com/");
-    assert.equal(state.errorMessage, "");
+    assert.equal(state.preflightStatus, "cdp_required");
+    assert.equal(state.lastObservedUrl, "");
+    assert.match(state.errorMessage, /CDP/);
+    assert.match(state.errorMessage, /Bridge/);
+    assert.doesNotMatch(state.errorMessage, /环境存在异常|异常访问|风控|安全验证/);
     assert.equal(calls.some((call) => call.url.includes("/json/new")), false);
+    assert.equal(calls.some((call) => call.url.endsWith("/command")), false);
   } finally {
     resetDeliveryProbeCacheForTests();
     globalThis.fetch = originalFetch;
   }
+});
+
+test("buildBossDeliveryBlockPayload returns a non-risk CDP-required response", () => {
+  const browserChannel = {
+    available: false,
+    cdpAvailable: false,
+    bridgeAvailable: true,
+    errorMessage: "Boss 自动开聊/发送需要 CDP 真实 Chrome。",
+  };
+
+  const blocked = buildBossDeliveryBlockPayload(browserChannel);
+
+  assert.equal(blocked.statusCode, 503);
+  assert.equal(blocked.body.ok, false);
+  assert.equal(blocked.body.error.code, "BROWSER_CDP_REQUIRED");
+  assert.equal(blocked.body.error.recoverable, true);
+  assert.equal(blocked.body.browserChannel, browserChannel);
+  assert.equal(blocked.body.delivery.status, "browser_channel_unavailable");
+  assert.doesNotMatch(blocked.body.errorMessage, /环境存在异常|异常访问|风控|安全验证/);
 });

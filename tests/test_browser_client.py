@@ -291,6 +291,52 @@ def test_ensure_started_fails_closed_when_bridge_and_cdp_fail():
 	mock_start_headless.assert_not_called()
 
 
+def test_ensure_started_prefers_cdp_over_bridge_when_available():
+	session = BrowserSession(cookies={}, user_agent="")
+	mock_pw = MagicMock()
+
+	def fake_sync_playwright():
+		return MagicMock(start=MagicMock(return_value=mock_pw))
+	fake_sync_playwright.__module__ = "playwright.sync_api"
+
+	with (
+		patch.object(session, "_try_bridge", return_value=True) as mock_try_bridge,
+		patch("boss_agent_cli.api.browser_client._sync_playwright", return_value=fake_sync_playwright) as mock_sync_playwright,
+		patch.object(session, "_try_cdp", return_value=True) as mock_try_cdp,
+		patch.object(session, "_start_headless") as mock_start_headless,
+	):
+		session._ensure_started()
+
+	mock_sync_playwright.assert_called_once()
+	mock_try_cdp.assert_called_once()
+	mock_try_bridge.assert_not_called()
+	mock_pw.stop.assert_not_called()
+	mock_start_headless.assert_not_called()
+
+
+def test_ensure_started_falls_back_to_bridge_after_cdp_fails():
+	session = BrowserSession(cookies={}, user_agent="")
+	mock_pw = MagicMock()
+
+	def fake_sync_playwright():
+		return MagicMock(start=MagicMock(return_value=mock_pw))
+	fake_sync_playwright.__module__ = "playwright.sync_api"
+
+	with (
+		patch.object(session, "_try_bridge", return_value=True) as mock_try_bridge,
+		patch("boss_agent_cli.api.browser_client._sync_playwright", return_value=fake_sync_playwright) as mock_sync_playwright,
+		patch.object(session, "_try_cdp", return_value=False) as mock_try_cdp,
+		patch.object(session, "_start_headless") as mock_start_headless,
+	):
+		session._ensure_started()
+
+	mock_sync_playwright.assert_called_once()
+	mock_try_cdp.assert_called_once()
+	mock_try_bridge.assert_called_once()
+	mock_pw.stop.assert_called_once()
+	mock_start_headless.assert_not_called()
+
+
 def test_ensure_started_skips_patchright_cdp_attach_and_fails_closed():
 	session = BrowserSession(cookies={}, user_agent="")
 	mock_pw = MagicMock()

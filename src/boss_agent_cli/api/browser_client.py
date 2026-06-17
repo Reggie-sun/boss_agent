@@ -27,10 +27,10 @@ HOME_URL = "https://www.zhipin.com/"
 
 def _sync_playwright() -> Any:
 	try:
-		from patchright.sync_api import sync_playwright
+		from playwright.sync_api import sync_playwright
 	except ModuleNotFoundError:
 		try:
-			from playwright.sync_api import sync_playwright
+			from patchright.sync_api import sync_playwright
 		except ModuleNotFoundError as exc:
 			raise RuntimeError("patchright / playwright 均未安装；仅在浏览器兼容模式需要时安装该依赖") from exc
 	return sync_playwright
@@ -83,7 +83,7 @@ _CHROME_USER_DATA_CANDIDATES = [
 class BrowserSession:
 	"""Persistent browser session that makes API calls via page.evaluate(fetch).
 
-	Tries Bridge first, then CDP against the user's Chrome. Real platform
+	Tries CDP against the user's Chrome, then Bridge. Real platform
 	requests must not silently fall back to headless automation.
 	"""
 
@@ -115,18 +115,25 @@ class BrowserSession:
 		if self._started:
 			return
 
-		# 优先尝试 Bridge 模式（Chrome 扩展 + daemon，零配置）
+		cdp_connected = False
+		try:
+			sync_playwright = _sync_playwright()
+			self._pw = sync_playwright().start()
+
+			# 优先：CDP 连接用户 Chrome（登录态兼容，避免 Bridge 调试扩展介入）
+			if not _is_patchright_runtime(sync_playwright) and self._try_cdp():
+				cdp_connected = True
+				return
+		except Exception as exc:
+			self._log(f"[boss] CDP 探测未完成，准备尝试 Bridge：{exc}")
+		finally:
+			if not cdp_connected:
+				self._stop_playwright_driver()
+
+		# 第二优先：Bridge 模式（Chrome 扩展 + daemon）。仅在 CDP 不可用时使用。
 		if self._try_bridge():
 			return
 
-		sync_playwright = _sync_playwright()
-		self._pw = sync_playwright().start()
-
-		# 第二优先：CDP 连接用户 Chrome（登录态兼容）
-		if not _is_patchright_runtime(sync_playwright) and self._try_cdp():
-			return
-
-		self._stop_playwright_driver()
 		raise BrowserChannelUnavailable()
 
 	def _stop_playwright_driver(self) -> None:
