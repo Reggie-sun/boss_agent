@@ -329,7 +329,7 @@ def test_cli_watcher_delivery_forwards_target_identity(monkeypatch):
 	assert seen["target_recruiter_id"] == "boss_recruiter_530232561"
 
 
-def test_cli_watcher_delivery_maps_attachment_request_to_online_resume(monkeypatch):
+def test_cli_watcher_delivery_keeps_attachment_request_as_attachment_delivery(monkeypatch):
 	seen: dict[str, object] = {}
 
 	def _fake_execute(ctx, **kwargs):
@@ -338,9 +338,10 @@ def test_cli_watcher_delivery_maps_attachment_request_to_online_resume(monkeypat
 			security_id=kwargs["security_id"],
 			message=kwargs["message"],
 			send_resume=kwargs["send_resume"],
-			message_sent=True,
+			message_sent=False,
 			resume_sent=True,
-			results=["消息已发送", "在线简历已发送"],
+			results=["附件简历已发送: resume.pdf"],
+			resume_file_path=str(kwargs["resume_file_path"]),
 		)
 
 	monkeypatch.setattr(rag_commands, "execute_chat_reply", _fake_execute)
@@ -356,10 +357,10 @@ def test_cli_watcher_delivery_maps_attachment_request_to_online_resume(monkeypat
 	assert result["ok"] is True
 	assert result["resume_sent"] is True
 	assert result["requested_resume_file"] == "/tmp/resume.pdf"
-	assert result["resume_delivery_method"] == "online_resume"
-	assert seen["send_resume"] is True
-	assert seen["send_attachment_resume"] is False
-	assert seen["resume_file_path"] is None
+	assert result["message_sent"] is False
+	assert seen["send_resume"] is False
+	assert seen["send_attachment_resume"] is True
+	assert seen["resume_file_path"] == "/tmp/resume.pdf"
 
 
 def test_agent_send_attachment_resume_does_not_send_draft_text(monkeypatch, tmp_path: Path):

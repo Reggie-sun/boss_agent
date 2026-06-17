@@ -62,14 +62,13 @@ class _CliWatcherDelivery:
 		target: dict[str, str] | None = None,
 	) -> dict[str, object]:
 		target = target or {}
-		use_online_resume = bool(send_attachment_resume)
 		result = execute_chat_reply(
 			self.ctx,
 			security_id=security_id,
 			message=message,
-			send_resume=use_online_resume,
-			send_attachment_resume=False,
-			resume_file_path=None,
+			send_resume=False,
+			send_attachment_resume=send_attachment_resume,
+			resume_file_path=resume_file if send_attachment_resume else None,
 			target_recruiter_name=str(target.get("recruiter_name") or ""),
 			target_company=str(target.get("company") or ""),
 			target_title=str(target.get("title") or ""),
@@ -89,7 +88,6 @@ class _CliWatcherDelivery:
 			"results": result.results,
 			"resume_file": result.resume_file_path,
 			"requested_resume_file": resume_file if send_attachment_resume else "",
-			"resume_delivery_method": "online_resume" if use_online_resume else "",
 		}
 
 

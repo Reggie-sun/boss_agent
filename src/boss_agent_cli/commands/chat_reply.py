@@ -75,6 +75,11 @@ def execute_chat_reply(
 				target_recruiter_name=target_recruiter_name,
 				target_company=target_company,
 				target_title=target_title,
+				target_gid=target_gid,
+				target_friend_id=target_friend_id,
+				target_uid=target_uid,
+				target_encrypt_boss_id=target_encrypt_boss_id,
+				target_recruiter_id=target_recruiter_id,
 			)
 			if resume_response.get("code") == 0:
 				return ChatReplyExecutionResult(

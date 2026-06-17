@@ -481,6 +481,58 @@ class BossClient:
 		} catch(e) { return { ok: false, error: e.message }; }
 	}''' % _CHAT_TARGET_HELPER_SCRIPT
 
+	_AGREE_RESUME_ATTACHMENT_REQUEST_SCRIPT = '''async ({ sid, target }) => {
+%s
+		try {
+			const ulc = document.querySelector(".user-list-content");
+			if (!ulc || !ulc.__vue__) return { ok: false, error: "user-list-content not found" };
+			const bossList = ulc.__vue__.$parent;
+			const list = (bossList && bossList.list) || [];
+			const match = findTargetFriend(list, sid, target || {});
+			if (!match.ok) return match;
+			const friend = match.friend;
+			if (bossList && friend) bossList.handleOpenChat(friend);
+
+			let conversation = null;
+			for (let i = 0; i < 20; i++) {
+				await new Promise(r => setTimeout(r, 500));
+				conversation =
+					document.querySelector(".chat-conversation") ||
+					document.querySelector(".chat-message-list") ||
+					document.querySelector(".chat-panel");
+				if (conversation) break;
+			}
+			if (!conversation) return { ok: false, error: "chat conversation not found after open" };
+
+			const visible = (el) => !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
+			const clean = (value) => String(value || "").replace(/\\s+/g, " ").trim();
+			const agreeButtons = [...conversation.querySelectorAll(".btn-agree, button, a, span")]
+				.filter(el => visible(el) && clean(el.innerText || el.textContent) === "同意");
+			if (!agreeButtons.length) {
+				return {
+					ok: false,
+					error: "resume request agree button not found",
+					hasResumeRequest: /附件简历|详细简历|发.*简历|简历/.test(clean(conversation.innerText || conversation.textContent)),
+					textSample: clean(conversation.innerText || conversation.textContent).slice(0, 240),
+				};
+			}
+
+			const button = agreeButtons[agreeButtons.length - 1];
+			button.click();
+			await new Promise(r => setTimeout(r, 1500));
+			const remainingAgreeButtonCount = [...conversation.querySelectorAll(".btn-agree, button, a, span")]
+				.filter(el => visible(el) && clean(el.innerText || el.textContent) === "同意").length;
+			return {
+				ok: true,
+				method: "resume-request-agree",
+				friendName: friend.name || friend.bossName || friend.friendName || "",
+				agreeButtonCount: agreeButtons.length,
+				remainingAgreeButtonCount,
+				textSample: clean(conversation.innerText || conversation.textContent).slice(0, 240),
+			};
+		} catch(e) { return { ok: false, error: e.message }; }
+	}''' % _CHAT_TARGET_HELPER_SCRIPT
+
 	def _navigate_to_chat(self) -> dict[str, Any]:
 		"""确保 CDP 页面在候选人聊天页，等待聊天列表就绪。"""
 		browser = self._get_browser()
@@ -736,6 +788,11 @@ class BossClient:
 		target_recruiter_name: str = "",
 		target_company: str = "",
 		target_title: str = "",
+		target_gid: str = "",
+		target_friend_id: str = "",
+		target_uid: str = "",
+		target_encrypt_boss_id: str = "",
+		target_recruiter_id: str = "",
 	) -> dict[str, Any]:
 		"""通过 CDP 上传附件简历 PDF，不发送额外文字消息。"""
 		attachment = Path(file_path).expanduser().resolve()
@@ -746,10 +803,39 @@ class BossClient:
 			return {"code": -1, "message": str(navigation.get("message") or "聊天页未就绪"), "detail": navigation}
 		browser = self._get_browser()
 		if self._browser_raw_cdp_url(browser):
+			target = self._chat_target_payload(
+				security_id=security_id,
+				target_recruiter_name=target_recruiter_name,
+				target_company=target_company,
+				target_title=target_title,
+				target_gid=target_gid,
+				target_friend_id=target_friend_id,
+				target_uid=target_uid,
+				target_encrypt_boss_id=target_encrypt_boss_id,
+				target_recruiter_id=target_recruiter_id,
+			)
+			try:
+				agree_result = self._evaluate_candidate_chat_script(
+					browser,
+					self._AGREE_RESUME_ATTACHMENT_REQUEST_SCRIPT,
+					{"sid": security_id, "target": target},
+				)
+			except Exception as exc:
+				return {"code": -1, "message": f"点击附件简历确认失败: {exc}", "detail": navigation}
+			if isinstance(agree_result, dict) and agree_result.get("ok"):
+				return {
+					"code": 0,
+					"message": "附件简历请求已同意",
+					"method": "resume-request-agree",
+					"file": str(attachment),
+					"detail": {"navigation": navigation, "agree_result": agree_result},
+				}
 			return {
 				"code": -1,
-				"message": "附件简历上传需要 Playwright CDP 页面文件输入能力；当前 raw CDP 通道仅支持文本消息和在线简历发送。",
-				"detail": navigation,
+				"message": "未找到待确认的附件简历同意按钮；当前 raw CDP 通道不能选择本地附件文件，已取消发送。",
+				"method": "resume-request-agree",
+				"file": str(attachment),
+				"detail": {"navigation": navigation, "agree_result": agree_result},
 			}
 		def _is_navigation_context_error(exc: Exception) -> bool:
 			message = str(exc)
