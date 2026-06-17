@@ -61,9 +61,9 @@ class BrowserChannelUnavailable(RuntimeError):
 
 	def __init__(self) -> None:
 		super().__init__(
-			"BOSS 浏览器通道不可用：未检测到 Bridge 扩展连接，且无法通过 CDP 复用真实 Chrome。"
-			"为保护账号，已禁止降级到 headless patchright。"
-			"请启动 BOSS Agent Bridge，或用 --remote-debugging-port=9222 打开真实 Chrome 后重试。"
+			"BOSS 浏览器通道不可用：无法通过 CDP 复用真实 Chrome。"
+			"为保护账号，live BOSS 请求已禁止降级到 Bridge 或 headless patchright。"
+			"请用 --remote-debugging-port=9229 打开真实 Chrome 后重试。"
 		)
 
 # 超时常量
@@ -105,6 +105,7 @@ class BrowserSession:
 		self._logger = logger
 		self._bridge_client: Any = None
 		self._is_bridge = False
+		self._raw_cdp_url: str | None = None
 
 	def _log(self, message: str) -> None:
 		"""通过注入的 logger 输出，受 --log-level 控制。"""
@@ -116,6 +117,11 @@ class BrowserSession:
 	def _ensure_started(self) -> None:
 		if self._started:
 			return
+
+		if self._cdp_url:
+			if self._try_raw_cdp():
+				return
+			raise BrowserChannelUnavailable()
 
 		cdp_connected = False
 		try:
@@ -137,6 +143,33 @@ class BrowserSession:
 			return
 
 		raise BrowserChannelUnavailable()
+
+	def _try_raw_cdp(self) -> bool:
+		if not self._cdp_url:
+			return False
+		try:
+			ws_url = _pick_zhipin_target_ws(self._cdp_url)
+		except Exception:
+			try:
+				_open_cdp_tab(self._cdp_url, HOME_URL)
+				deadline = time.time() + _CDP_CHAT_PAGE_WAIT_SECONDS
+				while time.time() < deadline:
+					try:
+						ws_url = _pick_zhipin_target_ws(self._cdp_url)
+						break
+					except Exception:
+						time.sleep(0.5)
+				else:
+					return False
+			except Exception:
+				return False
+
+		self._raw_cdp_url = self._cdp_url
+		self._started = True
+		self._is_cdp = True
+		self._is_bridge = False
+		self._log(f"[boss] Raw CDP fetch 通道就绪 ({self._cdp_url}, {ws_url})")
+		return True
 
 	def _stop_playwright_driver(self) -> None:
 		if self._pw:
@@ -170,7 +203,7 @@ class BrowserSession:
 
 		Attempts in order:
 		  1. Explicit cdp_url if provided
-		  2. Default http://localhost:9222 (+ auto WS fallback)
+		  2. Default http://localhost:9229 (+ auto WS fallback)
 		  3. WebSocket URL from Chrome's DevToolsActivePort file
 		"""
 		urls_to_try = []
@@ -305,7 +338,7 @@ class BrowserSession:
 			self._log(f"[boss] headless 首页未进入 networkidle（{e}），继续直接发起请求")
 		self._started = True
 		self._is_cdp = False
-		self._log("[boss] CDP 不可用（提示：需以 --remote-debugging-port=9222 启动 Chrome），降级到 headless patchright")
+		self._log("[boss] CDP 不可用（提示：需以 --remote-debugging-port=9229 启动 Chrome），降级到 headless patchright")
 
 	# ── Core request via browser fetch() ─────────────────────────────
 
@@ -393,6 +426,23 @@ class BrowserSession:
 			"referer": referer,
 			"timeoutMs": _BROWSER_FETCH_TIMEOUT_MS,
 		}
+
+		if self._raw_cdp_url:
+			last_error: Exception | None = None
+			for _ in range(3):
+				try:
+					result = _cdp_evaluate_in_zhipin_tab(self._raw_cdp_url, evaluate_script, evaluate_args)
+					break
+				except Exception as exc:
+					if not self._is_navigation_context_error(exc):
+						raise
+					last_error = exc
+					time.sleep(0.5)
+			else:
+				self._log(f"[boss] raw CDP browser fetch navigation retries exhausted: {last_error}")
+				result = {"code": -1, "message": "Failed to fetch", "zpData": {}}
+			self._throttle.mark()
+			return cast("dict[str, Any]", result)
 
 		# Playwright 模式（CDP 或 headless）
 		last_error: Exception | None = None
@@ -535,6 +585,33 @@ def _pick_chat_target_ws(cdp_http_url: str) -> str:
 	raise RecruiterChatTabRequired()
 
 
+def _pick_zhipin_target_ws(cdp_http_url: str) -> str:
+	targets = _load_cdp_targets(cdp_http_url)
+	preferred: list[dict[str, Any]] = []
+	fallbacks: list[dict[str, Any]] = []
+	for target in targets:
+		if target.get("type") != "page":
+			continue
+		url = str(target.get("url") or "")
+		if "zhipin.com" not in url:
+			continue
+		if (
+			"/web/geek/chat" in url
+			or "/web/geek/job" in url
+			or url.rstrip("/") == HOME_URL.rstrip("/")
+		):
+			preferred.append(target)
+		else:
+			fallbacks.append(target)
+	for target in [*preferred, *fallbacks]:
+		target_ws = target.get("webSocketDebuggerUrl")
+		if target_ws:
+			return cast("str", target_ws)
+	raise RuntimeError(
+		"No existing BOSS tab found. Open https://www.zhipin.com/ in this Chrome profile and retry."
+	)
+
+
 def _load_cdp_targets(cdp_http_url: str) -> list[dict[str, Any]]:
 	import json as _json
 	import urllib.request
@@ -600,7 +677,7 @@ def ensure_candidate_chat_page_via_cdp(
 			"code": "CDP_UNAVAILABLE",
 			"message": f"cannot reach CDP at {cdp_url.rstrip('/')}/json/list: {exc}",
 			"recoverable": True,
-			"recovery_action": "用 --remote-debugging-port=9222 打开真实 Chrome 后重试",
+			"recovery_action": "用 --remote-debugging-port=9229 打开真实 Chrome 后重试",
 		}
 
 	chat_target = _find_candidate_chat_target(targets)
@@ -630,7 +707,7 @@ def ensure_candidate_chat_page_via_cdp(
 				"code": "CDP_UNAVAILABLE",
 				"message": f"cannot reach CDP at {cdp_url.rstrip('/')}/json/list: {exc}",
 				"recoverable": True,
-				"recovery_action": "用 --remote-debugging-port=9222 打开真实 Chrome 后重试",
+				"recovery_action": "用 --remote-debugging-port=9229 打开真实 Chrome 后重试",
 			}
 
 		chat_target = _find_candidate_chat_target(targets)
@@ -744,6 +821,46 @@ def _cdp_evaluate_in_chat_tab(cdp_http_url: str, script: str, arg: Any) -> Any:
 			exc_details = msg.get("result", {}).get("exceptionDetails")
 			if exc_details:
 				raise RuntimeError(f"JS exception: {exc_details.get('text')} — {exc_details.get('exception', {}).get('description', '')[:300]}")
+			return result
+		raise RuntimeError("CDP Runtime.evaluate timed out after 30s")
+
+
+def _cdp_evaluate_in_zhipin_tab(cdp_http_url: str, script: str, arg: Any) -> Any:
+	import json as _json
+
+	import websockets.sync.client as _ws_client
+
+	target_ws = _pick_zhipin_target_ws(cdp_http_url)
+	expression = _build_eval_expression(script, arg)
+
+	with _ws_client.connect(target_ws, max_size=8 * 1024 * 1024) as ws:
+		ws.send(_json.dumps({
+			"id": 1,
+			"method": "Runtime.evaluate",
+			"params": {
+				"expression": expression,
+				"returnByValue": True,
+				"awaitPromise": True,
+			},
+		}))
+		deadline = time.time() + 30.0
+		while time.time() < deadline:
+			raw = ws.recv(timeout=max(0.1, deadline - time.time()))
+			msg = _json.loads(raw)
+			if msg.get("id") != 1:
+				continue
+			err = msg.get("error")
+			if err:
+				raise RuntimeError(f"CDP Runtime.evaluate error: {err}")
+			result = msg.get("result", {}).get("result", {})
+			if "value" in result:
+				return result["value"]
+			exc_details = msg.get("result", {}).get("exceptionDetails")
+			if exc_details:
+				raise RuntimeError(
+					f"JS exception: {exc_details.get('text')} — "
+					f"{exc_details.get('exception', {}).get('description', '')[:300]}"
+				)
 			return result
 		raise RuntimeError("CDP Runtime.evaluate timed out after 30s")
 

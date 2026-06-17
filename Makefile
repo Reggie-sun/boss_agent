@@ -1,7 +1,7 @@
 SHELL := /bin/bash
 
 CDP_HOST ?= 127.0.0.1
-CDP_PORT ?= 9222
+CDP_PORT ?= 9229
 CDP_PROFILE ?= $(HOME)/.boss-agent/chrome-cdp-agent
 CDP_URL := http://$(CDP_HOST):$(CDP_PORT)
 CDP_START_URL ?= https://www.zhipin.com/web/geek/chat
@@ -17,7 +17,7 @@ help:
 	@echo "  make cdp-url    Print the CDP URL"
 	@echo ""
 	@echo "Variables:"
-	@echo "  CHROME=/path/to/chrome CDP_PORT=9222 CDP_PROFILE=$(CDP_PROFILE)"
+	@echo "  CHROME=/path/to/chrome CDP_PORT=9229 CDP_PROFILE=$(CDP_PROFILE)"
 
 cdp:
 	@if [ -z "$(CHROME)" ]; then \

@@ -11,7 +11,7 @@ DEFAULTS: dict[str, Any] = {
 	"batch_greet_max": 150,
 	"log_level": "error",
 	"login_timeout": 120,
-	"cdp_url": "http://localhost:9222",
+	"cdp_url": "http://localhost:9229",
 	"export_dir": None,
 	"resume_default_template": "default",
 	"resume_export_format": "pdf",

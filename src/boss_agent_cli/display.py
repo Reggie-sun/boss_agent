@@ -390,7 +390,7 @@ def handle_auth_errors(command_name: str) -> Callable[[Callable[..., Any]], Call
 					ctx, command_name, code="NETWORK_ERROR",
 					message=str(e),
 					recoverable=True,
-					recovery_action="启动 BOSS Agent Bridge，或用 CDP --remote-debugging-port=9222 打开真实 Chrome 后重试",
+					recovery_action="启动 BOSS Agent Bridge，或用 CDP --remote-debugging-port=9229 打开真实 Chrome 后重试",
 					hints={"next_actions": [
 						"不要在 Bridge/CDP 不可用时继续真实平台搜索或开聊",
 						"确认前端健康检查显示 Bridge 或 CDP 可用后再操作",

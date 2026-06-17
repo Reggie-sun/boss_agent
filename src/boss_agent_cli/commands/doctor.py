@@ -285,7 +285,7 @@ def doctor_cmd(ctx: click.Context, live_probe: bool) -> None:
 		else:
 			next_actions.append("boss status --live — 可选执行一次只读在线验证")
 	if not any(item["name"] == "cdp" and item["status"] == "ok" for item in checks):
-		next_actions.append("boss --cdp-url http://localhost:9222 doctor — 检查指定 CDP 地址")
+		next_actions.append("boss --cdp-url http://localhost:9229 doctor — 检查指定 CDP 地址")
 	if not any(item["name"] == "cookie_extract" and item["status"] == "ok" for item in checks):
 		next_actions.append(f"先在本机浏览器登录 {config.site_host}，再重试 {config.login_action}")
 	next_actions.append("python scripts/quality_baseline.py — 提交前运行本地 P0 质量基线")

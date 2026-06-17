@@ -809,7 +809,7 @@ def test_agent_watcher_run_ensure_chat_page_runs_before_watcher(monkeypatch, tmp
 	)
 
 	assert result.exit_code == 0
-	assert events == ["ensure:http://localhost:9222", "run"]
+	assert events == ["ensure:http://localhost:9229", "run"]
 	payload = json.loads(result.output)
 	assert payload["ok"] is True
 	assert payload["data"]["chat_page"]["status"] == "ready"
@@ -826,9 +826,9 @@ def test_agent_watcher_run_ensure_chat_page_fails_closed(monkeypatch, tmp_path: 
 		return {
 			"ok": False,
 			"code": "CDP_UNAVAILABLE",
-			"message": "cannot reach CDP at http://localhost:9222/json/list",
+			"message": "cannot reach CDP at http://localhost:9229/json/list",
 			"recoverable": True,
-			"recovery_action": "启动带 remote-debugging-port=9222 的 Chrome 后重试",
+			"recovery_action": "启动带 remote-debugging-port=9229 的 Chrome 后重试",
 		}
 
 	def _build_watcher(ctx):

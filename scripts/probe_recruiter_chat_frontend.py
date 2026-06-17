@@ -28,7 +28,7 @@ import sys
 import time
 from typing import Any
 
-_DEFAULT_CDP_URL = "http://localhost:9222"
+_DEFAULT_CDP_URL = "http://localhost:9229"
 _CHAT_URL_TPL = "https://www.zhipin.com/web/chat/index?friendId={friend_id}"
 
 # ─── JS payloads ─────────────────────────────────────────────────────────

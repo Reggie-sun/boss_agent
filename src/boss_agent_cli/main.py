@@ -58,7 +58,7 @@ class BossCliGroup(click.Group):
 @click.version_option(version=__version__, prog_name="boss")
 @click.option("--data-dir", default="~/.boss-agent", help="数据存储目录")
 @click.option("--delay", default=None, help="请求间隔范围（秒），如 1.5-3.0")
-@click.option("--cdp-url", default=None, help="Chrome CDP 调试地址（如 http://localhost:9222），启用则优先用用户 Chrome")
+@click.option("--cdp-url", default=None, help="Chrome CDP 调试地址（如 http://localhost:9229），启用则优先用用户 Chrome")
 @click.option("--platform", "platform_name", default=None, help="指定招聘平台适配器（默认 zhipin，即 BOSS 直聘）")
 @click.option("--role", default=None, type=click.Choice(["candidate", "recruiter"]), help="角色模式：candidate（求职者，默认）/ recruiter（招聘者）")
 @click.option("--log-level", default=None, type=click.Choice(["error", "warning", "info", "debug"]))

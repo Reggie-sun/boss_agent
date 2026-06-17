@@ -6,7 +6,7 @@ import react from "@vitejs/plugin-react";
 
 const BOSS_GEEK_CHAT_URL = "https://www.zhipin.com/web/geek/chat";
 const CDP_REQUIRED_FOR_BOSS_DELIVERY_MESSAGE =
-  "Boss 自动开聊/发送需要 CDP 真实 Chrome（127.0.0.1:9222）。当前只检测到 Bridge 扩展；为保护账号，已停止本次自动触达。请用 --remote-debugging-port=9222 打开真实 Chrome 后刷新本页面。";
+  "Boss 自动开聊/发送需要 CDP 真实 Chrome（127.0.0.1:9229）。当前只检测到 Bridge 扩展；为保护账号，已停止本次自动触达。请用 --remote-debugging-port=9229 打开真实 Chrome 后刷新本页面。";
 const DELIVERY_PROBE_CACHE_TTL_MS = 10_000;
 let cachedDeliveryProbe = null;
 let pendingDeliveryProbe = null;
@@ -45,7 +45,7 @@ function loadBridgeConfig() {
       ? Math.max(parsedCommandTimeout, 5) * 1000
       : null,
     baseUrl: get("BOSS_RAG_RAG_BASE_URL", "").replace(/\/$/, ""),
-    cdpUrl: get("BOSS_RAG_CDP_URL", get("BOSS_CDP_URL", "http://localhost:9222")).replace(/\/$/, ""),
+    cdpUrl: get("BOSS_RAG_CDP_URL", get("BOSS_CDP_URL", "http://localhost:9229")).replace(/\/$/, ""),
     bridgeUrl: get("BOSS_RAG_BRIDGE_URL", "http://127.0.0.1:19826").replace(/\/$/, ""),
     authMode: get("BOSS_RAG_RAG_AUTH_MODE", "none").toLowerCase(),
     apiKey:
@@ -425,7 +425,7 @@ async function runCdpDeliveryProbe(config, baseState, cacheKey) {
       lastObservedTitle: String(probeResult.title || ""),
       redirectUrl: String(redirectEvent?.url || probeResult?.href || ""),
       errorMessage:
-        "Boss 聊天页当前不可达：CDP Chrome 访问 `/web/geek/chat` 时被重定向到了 `/web/user/`。这通常表示当前 9222 profile 的 Boss 聊天登录前置态无效。",
+        "Boss 聊天页当前不可达：CDP Chrome 访问 `/web/geek/chat` 时被重定向到了 `/web/user/`。这通常表示当前 9229 profile 的 Boss 聊天登录前置态无效。",
     };
   } else {
     resolved = {

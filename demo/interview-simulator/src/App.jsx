@@ -47,7 +47,7 @@ const defaultBrowserChannel = {
   mode: "none",
   cdpAvailable: false,
   bridgeAvailable: false,
-  cdpUrl: "http://localhost:9222",
+  cdpUrl: "http://localhost:9229",
   bridgeUrl: "http://127.0.0.1:19826",
   chatPageUrl: "https://www.zhipin.com/web/geek/chat",
   preflightStatus: "none",

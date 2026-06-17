@@ -315,7 +315,8 @@ def test_start_headless_tolerates_networkidle_timeout():
 		"networkidle",
 		timeout=_HEADLESS_NETWORKIDLE_GRACE_MS,
 	)
-	logger.info.assert_any_call("[boss] CDP 不可用（提示：需以 --remote-debugging-port=9222 启动 Chrome），降级到 headless patchright")
+	expected_log = "[boss] CDP 不可用（提示：需以 --remote-debugging-port=9229 启动 Chrome），降级到 headless patchright"
+	logger.info.assert_any_call(expected_log)
 	assert any(
 		"headless 首页未进入 networkidle" in call.args[0]
 		for call in logger.info.call_args_list
@@ -367,6 +368,43 @@ def test_ensure_started_prefers_cdp_over_bridge_when_available():
 	mock_try_bridge.assert_not_called()
 	mock_pw.stop.assert_not_called()
 	mock_start_headless.assert_not_called()
+
+
+def test_ensure_started_uses_raw_cdp_when_cdp_url_is_configured():
+	session = BrowserSession(cookies={}, user_agent="", cdp_url="http://127.0.0.1:9229")
+
+	with (
+		patch(
+			"boss_agent_cli.api.browser_client._pick_zhipin_target_ws",
+			return_value="ws://127.0.0.1:9229/devtools/page/abc",
+		) as mock_pick,
+		patch("boss_agent_cli.api.browser_client._sync_playwright") as mock_sync_playwright,
+		patch.object(session, "_try_bridge", return_value=True) as mock_try_bridge,
+	):
+		session._ensure_started()
+
+	assert session._started is True
+	assert session._is_cdp is True
+	assert session._is_bridge is False
+	assert session._raw_cdp_url == "http://127.0.0.1:9229"
+	mock_pick.assert_called_once_with("http://127.0.0.1:9229")
+	mock_sync_playwright.assert_not_called()
+	mock_try_bridge.assert_not_called()
+
+
+def test_ensure_started_fails_closed_when_configured_raw_cdp_is_unavailable():
+	session = BrowserSession(cookies={}, user_agent="", cdp_url="http://127.0.0.1:9229")
+
+	with (
+		patch("boss_agent_cli.api.browser_client._pick_zhipin_target_ws", side_effect=RuntimeError("no cdp tab")),
+		patch("boss_agent_cli.api.browser_client._open_cdp_tab", side_effect=RuntimeError("cdp down")),
+		patch.object(session, "_try_bridge", return_value=True) as mock_try_bridge,
+	):
+		with pytest.raises(BrowserChannelUnavailable):
+			session._ensure_started()
+
+	assert session._started is False
+	mock_try_bridge.assert_not_called()
 
 
 def test_ensure_started_falls_back_to_bridge_after_cdp_fails():
@@ -487,6 +525,30 @@ def test_request_returns_browser_evaluation_json_and_marks_throttle():
 		"referer": "https://www.zhipin.com/web/geek/job",
 		"timeoutMs": _BROWSER_FETCH_TIMEOUT_MS,
 	}
+
+
+def test_request_uses_raw_cdp_evaluation_when_configured():
+	session = BrowserSession(cookies={}, user_agent="", cdp_url="http://127.0.0.1:9229")
+	session._started = True
+	session._is_cdp = True
+	session._raw_cdp_url = "http://127.0.0.1:9229"
+	session._throttle = MagicMock()
+	expected = {"code": 0, "zpData": {"jobs": []}}
+
+	with patch("boss_agent_cli.api.browser_client._cdp_evaluate_in_zhipin_tab", return_value=expected) as mock_evaluate:
+		result = session.request(
+			"GET",
+			"https://www.zhipin.com/wapi/zpgeek/search/joblist.json",
+			params={"query": "rag"},
+		)
+
+	assert result == expected
+	session._throttle.wait.assert_called_once()
+	session._throttle.mark.assert_called_once()
+	evaluate_script, evaluate_args = mock_evaluate.call_args.args[1:]
+	assert "fetch(fetchUrl, options)" in evaluate_script
+	assert evaluate_args["method"] == "GET"
+	assert evaluate_args["params"] == {"query": "rag"}
 
 
 def test_request_passes_fetch_timeout_to_browser_evaluation():

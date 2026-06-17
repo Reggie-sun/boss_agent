@@ -27,7 +27,7 @@ def test_stack_readiness_defines_required_checks():
 def test_load_config_reads_repo_defaults():
 	module = load_module()
 	config = module.load_config_from_repo(ROOT)
-	assert config.cdp_url == "http://localhost:9222"
+	assert config.cdp_url == "http://localhost:9229"
 	assert config.agent_base_url == "http://127.0.0.1:5175"
 	assert config.rag_base_url == "http://127.0.0.1:8020"
 	assert config.rag_auth_mode == "bearer"
@@ -85,7 +85,7 @@ def test_evaluate_boss_auth_partial_warns():
 def test_runner_marks_all_ready_only_when_everything_passes():
 	module = load_module()
 	config = module.ReadinessConfig(
-		cdp_url="http://localhost:9222",
+		cdp_url="http://localhost:9229",
 		agent_base_url="http://127.0.0.1:5175",
 		rag_base_url="http://127.0.0.1:8020",
 		rag_auth_mode="bearer",
@@ -99,7 +99,7 @@ def test_runner_marks_all_ready_only_when_everything_passes():
 
 	def fake_http_get(url, headers=None, timeout_seconds=3.0):
 		if url.endswith("/json/version"):
-			return 200, {"Browser": "Chrome/147", "webSocketDebuggerUrl": "ws://127.0.0.1:9222/devtools/browser/demo"}
+			return 200, {"Browser": "Chrome/147", "webSocketDebuggerUrl": "ws://127.0.0.1:9229/devtools/browser/demo"}
 		if url.endswith("/api/agent/health"):
 			return 200, {
 				"configured": True,
@@ -137,7 +137,7 @@ def test_runner_marks_all_ready_only_when_everything_passes():
 def test_build_default_checks_uses_live_target_when_enabled():
 	module = load_module()
 	config = module.ReadinessConfig(
-		cdp_url="http://localhost:9222",
+		cdp_url="http://localhost:9229",
 		agent_base_url="http://127.0.0.1:5175",
 		rag_base_url="http://127.0.0.1:8020",
 		rag_auth_mode="bearer",

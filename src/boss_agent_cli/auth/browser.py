@@ -4,7 +4,7 @@ from typing import Any, cast
 
 LOGIN_PAGE_URL = "https://www.zhipin.com/web/user/"
 HOME_URL = "https://www.zhipin.com/"
-_DEFAULT_CDP_URL = "http://localhost:9222"
+_DEFAULT_CDP_URL = "http://localhost:9229"
 
 # 超时常量（秒/毫秒）
 _CDP_PROBE_TIMEOUT = 3           # CDP 探测 HTTP 超时（秒）

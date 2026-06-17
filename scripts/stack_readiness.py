@@ -12,7 +12,7 @@ from urllib import error, request
 
 
 ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_CDP_URL = "http://localhost:9222"
+DEFAULT_CDP_URL = "http://localhost:9229"
 DEFAULT_AGENT_BASE_URL = "http://127.0.0.1:5175"
 DEFAULT_RAG_HEALTH_PATH = "/api/v1/health"
 
@@ -221,7 +221,7 @@ def evaluate_cdp_check(spec: CheckSpec, payload: dict[str, Any]) -> CheckResult:
 		failure_classification=spec.failure_classification,
 		critical=spec.critical,
 		detail="CDP 返回体缺少 webSocketDebuggerUrl。",
-		recovery_action="启动 Chrome 并带上 --remote-debugging-port=9222，或改脚本参数指向正确的 CDP 地址。",
+		recovery_action="启动 Chrome 并带上 --remote-debugging-port=9229，或改脚本参数指向正确的 CDP 地址。",
 		meta={"browser": browser or None},
 	)
 
@@ -424,7 +424,7 @@ class ReadinessRunner:
 				failure_classification=spec.failure_classification,
 				critical=spec.critical,
 				detail=f"无法访问 CDP：{exc}",
-				recovery_action="启动 Chrome 并带上 --remote-debugging-port=9222，或改脚本参数指向正确的 CDP 地址。",
+				recovery_action="启动 Chrome 并带上 --remote-debugging-port=9229，或改脚本参数指向正确的 CDP 地址。",
 			)
 
 	def _run_boss_auth(self, spec: CheckSpec) -> CheckResult:
