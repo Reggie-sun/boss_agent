@@ -408,7 +408,8 @@ class BrowserSession:
 					pass
 				time.sleep(0.5)
 		else:
-			raise RuntimeError(f"browser fetch evaluate failed after navigation retries: {last_error}") from last_error
+			self._log(f"[boss] browser fetch evaluate navigation retries exhausted: {last_error}")
+			result = {"code": -1, "message": "Failed to fetch", "zpData": {}}
 
 		self._throttle.mark()
 		return cast("dict[str, Any]", result)

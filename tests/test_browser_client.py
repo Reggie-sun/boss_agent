@@ -475,3 +475,26 @@ def test_request_retries_when_browser_evaluation_context_is_destroyed():
 	assert session._page.evaluate.call_count == 2
 	session._page.wait_for_load_state.assert_called_once_with("domcontentloaded", timeout=5000)
 	session._throttle.mark.assert_called_once()
+
+
+def test_request_returns_failed_fetch_when_browser_evaluation_context_keeps_navigating():
+	session = BrowserSession(cookies={}, user_agent="")
+	session._started = True
+	session._page = MagicMock()
+	session._throttle = MagicMock()
+	session._page.evaluate.side_effect = [
+		Exception("Page.evaluate: Execution context was destroyed, most likely because of a navigation."),
+		Exception("Cannot find context with specified id"),
+		Exception("Page.evaluate: Execution context was destroyed, most likely because of a navigation."),
+	]
+
+	result = session.request(
+		"GET",
+		"https://www.zhipin.com/wapi/zpgeek/search/joblist.json",
+		params={"query": "RAG", "city": "101210100", "salary": "405"},
+	)
+
+	assert result == {"code": -1, "message": "Failed to fetch", "zpData": {}}
+	assert session._page.evaluate.call_count == 3
+	assert session._page.wait_for_load_state.call_count == 3
+	session._throttle.mark.assert_called_once()

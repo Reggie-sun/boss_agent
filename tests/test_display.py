@@ -161,6 +161,28 @@ class TestHandleAuthErrors:
 			assert "patchright install" in call_kwargs[1]["message"]
 			assert "Patchright Team" not in call_kwargs[1]["message"]
 
+	def test_browser_fetch_navigation_retry_exhaustion_is_normalized(self):
+		ctx = MagicMock()
+		ctx.obj = {"json_output": True}
+
+		@handle_auth_errors("batch-greet")
+		def impl(ctx):
+			raise RuntimeError(
+				"browser fetch evaluate failed after navigation retries: "
+				"Page.evaluate: Execution context was destroyed, "
+				"most likely because of a navigation."
+			)
+
+		with patch("boss_agent_cli.display.handle_error_output") as mock_err:
+			impl(ctx)
+			mock_err.assert_called_once()
+			call_kwargs = mock_err.call_args
+			assert call_kwargs[1]["code"] == "NETWORK_ERROR"
+			assert "浏览器页面正在跳转或刷新" in call_kwargs[1]["message"]
+			assert "刷新登录状态" in call_kwargs[1]["message"]
+			assert "Page.evaluate" not in call_kwargs[1]["message"]
+			assert "Execution context was destroyed" not in call_kwargs[1]["message"]
+
 	def test_success_passthrough(self):
 		ctx = MagicMock()
 		ctx.obj = {"json_output": True}

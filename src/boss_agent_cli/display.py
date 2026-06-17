@@ -144,6 +144,13 @@ def _normalize_unexpected_error_message(command_name: str, exc: Exception) -> st
 			f"{command_name} 失败: 浏览器内核未安装，无法发起 Boss 浏览器请求。"
 			f"请运行 `{install_command}` 后重试。"
 		)
+	if "browser fetch evaluate failed after navigation retries" in lower or (
+		"execution context was destroyed" in lower and "navigation" in lower
+	):
+		return (
+			f"{command_name} 失败: 浏览器页面正在跳转或刷新，平台请求未完成。"
+			"请刷新登录状态，确认 BOSS 页面稳定后重试。"
+		)
 	return f"{command_name} 失败: {raw}"
 
 
