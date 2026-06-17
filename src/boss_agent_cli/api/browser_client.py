@@ -307,6 +307,15 @@ class BrowserSession:
 
 	# ── Core request via browser fetch() ─────────────────────────────
 
+	@staticmethod
+	def _is_navigation_context_error(exc: Exception) -> bool:
+		message = str(exc)
+		return (
+			"Execution context was destroyed" in message
+			or "most likely because of a navigation" in message
+			or "Cannot find context with specified id" in message
+		)
+
 	def request(self, method: str, url: str, *, params: dict[str, Any] | None = None, data: dict[str, Any] | None = None) -> dict[str, Any]:
 		self._ensure_started()
 		self._throttle.wait()
@@ -328,8 +337,7 @@ class BrowserSession:
 			self._throttle.mark()
 			return cast("dict[str, Any]", result)
 
-		# Playwright 模式（CDP 或 headless）
-		result = self._page.evaluate("""
+		evaluate_script = """
 			async ({method, url, params, data, referer, timeoutMs}) => {
 				const controller = new AbortController();
 				const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
@@ -374,14 +382,33 @@ class BrowserSession:
 					clearTimeout(timeoutId);
 				}
 			}
-		""", {
+		"""
+		evaluate_args = {
 			"method": method,
 			"url": url,
 			"params": params or {},
 			"data": data,
 			"referer": referer,
 			"timeoutMs": _BROWSER_FETCH_TIMEOUT_MS,
-		})
+		}
+
+		# Playwright 模式（CDP 或 headless）
+		last_error: Exception | None = None
+		for _ in range(3):
+			try:
+				result = self._page.evaluate(evaluate_script, evaluate_args)
+				break
+			except Exception as exc:
+				if not self._is_navigation_context_error(exc):
+					raise
+				last_error = exc
+				try:
+					self._page.wait_for_load_state("domcontentloaded", timeout=5000)
+				except Exception:
+					pass
+				time.sleep(0.5)
+		else:
+			raise RuntimeError(f"browser fetch evaluate failed after navigation retries: {last_error}") from last_error
 
 		self._throttle.mark()
 		return cast("dict[str, Any]", result)

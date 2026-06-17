@@ -452,3 +452,26 @@ def test_request_passes_fetch_timeout_to_browser_evaluation():
 	assert "setTimeout" in evaluate_script
 	assert "clearTimeout(timeoutId)" in evaluate_script
 	assert evaluate_args["timeoutMs"] == _BROWSER_FETCH_TIMEOUT_MS
+
+
+def test_request_retries_when_browser_evaluation_context_is_destroyed():
+	session = BrowserSession(cookies={}, user_agent="")
+	session._started = True
+	session._page = MagicMock()
+	session._throttle = MagicMock()
+	expected = {"code": 0, "zpData": {"jobs": [{"securityId": "abc"}]}}
+	session._page.evaluate.side_effect = [
+		Exception("Page.evaluate: Execution context was destroyed, most likely because of a navigation."),
+		expected,
+	]
+
+	result = session.request(
+		"GET",
+		"https://www.zhipin.com/wapi/zpgeek/search/joblist.json",
+		params={"query": "AI Agent"},
+	)
+
+	assert result == expected
+	assert session._page.evaluate.call_count == 2
+	session._page.wait_for_load_state.assert_called_once_with("domcontentloaded", timeout=5000)
+	session._throttle.mark.assert_called_once()
