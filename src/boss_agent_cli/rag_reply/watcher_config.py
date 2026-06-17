@@ -34,10 +34,16 @@ class WatcherConfig:
             resume_attachment_path=str(
                 values.get("boss_rag_resume_attachment_path") or ""
             ).strip(),
-            poll_seconds=max(5, int(values.get("boss_rag_watcher_poll_seconds") or 20)),
+            poll_seconds=max(
+                5,
+                _int_or_default(values.get("boss_rag_watcher_poll_seconds"), 20),
+            ),
             max_failures_per_conversation=max(
                 1,
-                int(values.get("boss_rag_watcher_max_failures_per_conversation") or 3),
+                _int_or_default(
+                    values.get("boss_rag_watcher_max_failures_per_conversation"),
+                    3,
+                ),
             ),
             live_sync=bool(values.get("boss_rag_watcher_live_sync", False)),
             require_send_enabled=bool(
@@ -45,6 +51,12 @@ class WatcherConfig:
             ),
             send_enabled=bool(values.get("boss_rag_send_enabled", False)),
         )
+
+
+def _int_or_default(value: object, default: int) -> int:
+    if value is None or value == "":
+        return default
+    return int(value)
 
 
 def _require_unique(value: str, key: str) -> str:

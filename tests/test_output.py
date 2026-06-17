@@ -214,6 +214,8 @@ def test_load_config_reads_watcher_env_aliases(monkeypatch, tmp_path):
 	monkeypatch.setenv("BOSS_RAG_WATCHER_DRY_RUN", "false")
 	monkeypatch.setenv("BOSS_RAG_WATCHER_LIVE_SYNC", "true")
 	monkeypatch.setenv("BOSS_RAG_WATCHER_POLL_SECONDS", "7")
+	monkeypatch.setenv("BOSS_RAG_WATCHER_MAX_FAILURES_PER_CONVERSATION", "2")
+	monkeypatch.setenv("BOSS_RAG_WATCHER_REQUIRE_SEND_ENABLED", "false")
 	monkeypatch.setenv("BOSS_RAG_CONTACT_PHONE", "13800138000")
 	monkeypatch.setenv("BOSS_RAG_CONTACT_WECHAT", "reggie-ai")
 	monkeypatch.setenv("BOSS_RAG_INTERVIEW_WINDOWS", "工作日 20:00 后")
@@ -227,6 +229,8 @@ def test_load_config_reads_watcher_env_aliases(monkeypatch, tmp_path):
 	assert cfg["boss_rag_watcher_dry_run"] is False
 	assert cfg["boss_rag_watcher_live_sync"] is True
 	assert cfg["boss_rag_watcher_poll_seconds"] == 7
+	assert cfg["boss_rag_watcher_max_failures_per_conversation"] == 2
+	assert cfg["boss_rag_watcher_require_send_enabled"] is False
 	assert cfg["boss_rag_contact_phone"] == "13800138000"
 	assert cfg["boss_rag_contact_wechat"] == "reggie-ai"
 	assert cfg["boss_rag_interview_windows"] == "工作日 20:00 后"

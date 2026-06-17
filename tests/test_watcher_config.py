@@ -111,3 +111,15 @@ def test_watcher_config_reads_full_auto_flags():
     assert config.max_failures_per_conversation == 2
     assert config.require_send_enabled is True
     assert config.send_enabled is True
+
+
+def test_watcher_config_clamps_explicit_zero_values():
+    config = WatcherConfig.from_mapping(
+        {
+            "boss_rag_watcher_poll_seconds": 0,
+            "boss_rag_watcher_max_failures_per_conversation": 0,
+        }
+    )
+
+    assert config.poll_seconds == 5
+    assert config.max_failures_per_conversation == 1
