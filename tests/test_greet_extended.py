@@ -221,6 +221,88 @@ def test_batch_greet_token_refresh_failed_stops_remaining(mock_cache_cls, mock_a
 @patch("boss_agent_cli.commands.greet.get_platform_instance")
 @patch("boss_agent_cli.commands.greet.AuthManager")
 @patch("boss_agent_cli.commands.greet.CacheStore")
+def test_batch_greet_auth_expired_preserves_prior_success(mock_cache_cls, mock_auth_cls, mock_client_cls, mock_time, legacy_args):
+	"""第 1 个成功后遇到 AUTH_EXPIRED，应保留成功数并停止剩余候选。"""
+	mock_cache = _ctx_mock(mock_cache_cls)
+	mock_cache.is_greeted.return_value = False
+	mock_client = _ctx_mock(mock_client_cls)
+	mock_client.search_jobs.return_value = {
+		"zpData": {"jobList": [
+			_make_raw_job("A", "s1"),
+			_make_raw_job("B", "s2"),
+			_make_raw_job("C", "s3"),
+		]}
+	}
+
+	def greet_side_effect(sid, jid, msg=""):
+		if sid == "s1":
+			return {"code": 0, "zpData": {}}
+		return {"code": 401, "message": "登录态过期"}
+
+	mock_client.greet.side_effect = greet_side_effect
+	mock_client.is_success.side_effect = lambda response: response.get("code", 0) == 0
+	mock_client.parse_error.side_effect = lambda response: (
+		"AUTH_EXPIRED",
+		response.get("message", ""),
+	)
+	mock_time.sleep = MagicMock()
+
+	runner = CliRunner()
+	result = runner.invoke(cli, [*legacy_args, "batch-greet", "test", "--count", "3"])
+	assert result.exit_code == 0
+	parsed = json.loads(result.output)
+	assert parsed["data"]["total_greeted"] == 1
+	assert parsed["data"]["total_failed"] == 0
+	assert parsed["data"]["stopped_reason"] == "AUTH_EXPIRED"
+	assert "登录态过期" in parsed["data"]["stopped_error"]
+	assert mock_client.greet.call_count == 2
+
+
+@patch("boss_agent_cli.commands.greet.time")
+@patch("boss_agent_cli.commands.greet.get_platform_instance")
+@patch("boss_agent_cli.commands.greet.AuthManager")
+@patch("boss_agent_cli.commands.greet.CacheStore")
+def test_batch_greet_browser_fetch_network_error_preserves_prior_success(mock_cache_cls, mock_auth_cls, mock_client_cls, mock_time, legacy_args):
+	"""第 1 个成功后遇到 browser fetch NETWORK_ERROR，应保留成功数并停止剩余候选。"""
+	mock_cache = _ctx_mock(mock_cache_cls)
+	mock_cache.is_greeted.return_value = False
+	mock_client = _ctx_mock(mock_client_cls)
+	mock_client.search_jobs.return_value = {
+		"zpData": {"jobList": [
+			_make_raw_job("A", "s1"),
+			_make_raw_job("B", "s2"),
+			_make_raw_job("C", "s3"),
+		]}
+	}
+
+	def greet_side_effect(sid, jid, msg=""):
+		if sid == "s1":
+			return {"code": 0, "zpData": {}}
+		return {"code": 500, "message": "Failed to fetch"}
+
+	mock_client.greet.side_effect = greet_side_effect
+	mock_client.is_success.side_effect = lambda response: response.get("code", 0) == 0
+	mock_client.parse_error.side_effect = lambda response: (
+		"NETWORK_ERROR",
+		"平台请求失败：浏览器 fetch 未完成，请重试；如果连续失败，请刷新登录状态。",
+	)
+	mock_time.sleep = MagicMock()
+
+	runner = CliRunner()
+	result = runner.invoke(cli, [*legacy_args, "batch-greet", "test", "--count", "3"])
+	assert result.exit_code == 0
+	parsed = json.loads(result.output)
+	assert parsed["data"]["total_greeted"] == 1
+	assert parsed["data"]["total_failed"] == 0
+	assert parsed["data"]["stopped_reason"] == "NETWORK_ERROR"
+	assert "浏览器 fetch 未完成" in parsed["data"]["stopped_error"]
+	assert mock_client.greet.call_count == 2
+
+
+@patch("boss_agent_cli.commands.greet.time")
+@patch("boss_agent_cli.commands.greet.get_platform_instance")
+@patch("boss_agent_cli.commands.greet.AuthManager")
+@patch("boss_agent_cli.commands.greet.CacheStore")
 def test_batch_greet_greet_limit_stops_remaining(mock_cache_cls, mock_auth_cls, mock_client_cls, mock_time):
 	"""GREET_LIMIT 错误关键字也应触发停止。"""
 	mock_cache = _ctx_mock(mock_cache_cls)

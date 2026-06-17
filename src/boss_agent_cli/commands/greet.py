@@ -34,6 +34,7 @@ _BATCH_GREET_STOP_ERROR_CODES = (
 	"RATE_LIMITED",
 	"GREET_LIMIT",
 	"TOKEN_REFRESH_FAILED",
+	"NETWORK_ERROR",
 	"AUTH_EXPIRED",
 	"ACCOUNT_RISK",
 )
@@ -53,6 +54,8 @@ def _batch_greet_stop_reason(error_msg: str) -> str | None:
 		return "RATE_LIMITED"
 	if any(token in error_msg for token in ("上限", "今日已达")):
 		return "GREET_LIMIT"
+	if "failed to fetch" in lower_msg or "浏览器 fetch" in lower_msg:
+		return "NETWORK_ERROR"
 	if any(token in lower_msg for token in ("stoken", "token", "unauthorized")) or any(
 		token in error_msg for token in ("登录", "登陆", "未认证")
 	):
