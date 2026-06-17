@@ -10,10 +10,12 @@ const DAEMON_WS_URL = `ws://127.0.0.1:${DAEMON_PORT}/ext`;
 const DAEMON_PING_URL = `http://127.0.0.1:${DAEMON_PORT}/ping`;
 const BOSS_WORKSPACE_URL = 'https://www.zhipin.com/';
 const WINDOW_IDLE_TIMEOUT = 30000;
+const KEEPALIVE_INTERVAL_MS = 20000;
 
 let ws = null;
 let reconnectTimer = null;
 let reconnectAttempts = 0;
+let heartbeatTimer = null;
 const MAX_EAGER_ATTEMPTS = 6;
 const attached = new Set();
 
@@ -139,6 +141,25 @@ async function resolveTabId(tabId, workspace) {
 
 // ── WebSocket connection ─────────────────────────────────────────────
 
+function startHeartbeat() {
+	if (heartbeatTimer) clearInterval(heartbeatTimer);
+	heartbeatTimer = setInterval(() => {
+		if (ws?.readyState !== WebSocket.OPEN) return;
+		try {
+			ws.send(JSON.stringify({ type: 'ping', ts: Date.now() }));
+		} catch {
+			try { ws?.close(); } catch {}
+		}
+	}, KEEPALIVE_INTERVAL_MS);
+}
+
+function stopHeartbeat() {
+	if (heartbeatTimer) {
+		clearInterval(heartbeatTimer);
+		heartbeatTimer = null;
+	}
+}
+
 async function connect() {
 	if (ws?.readyState === WebSocket.OPEN || ws?.readyState === WebSocket.CONNECTING) return;
 
@@ -161,6 +182,7 @@ async function connect() {
 		reconnectAttempts = 0;
 		if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
 		ws?.send(JSON.stringify({ type: 'hello', version: chrome.runtime.getManifest().version }));
+		startHeartbeat();
 	};
 
 	ws.onmessage = async (event) => {
@@ -174,6 +196,7 @@ async function connect() {
 	};
 
 	ws.onclose = () => {
+		stopHeartbeat();
 		ws = null;
 		scheduleReconnect();
 	};
@@ -279,3 +302,5 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
 	}
 	return false;
 });
+
+initialize();
