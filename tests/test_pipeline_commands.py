@@ -1,10 +1,13 @@
 import json
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
 from click.testing import CliRunner
 
 from boss_agent_cli.main import cli
+from boss_agent_cli.rag_reply.models import AuditLogRecord
+from boss_agent_cli.rag_reply.store import RagReplyStore
 
 
 def _ctx_mock(mock_cls):
@@ -164,6 +167,7 @@ def test_follow_up_send_read_no_reply_defaults_to_dry_run(mock_auth_cls, mock_cl
 	assert result.exit_code == 0
 	parsed = json.loads(result.output)
 	assert parsed["ok"] is True
+	assert parsed["data"]["message"].startswith("我是候选人的求职助理 Agent，")
 	assert parsed["data"]["send_results"] == [
 		{
 			"security_id": "sec_read",
@@ -273,6 +277,59 @@ def test_follow_up_live_send_read_no_reply_uses_chat_reply_when_enabled(mock_aut
 	]
 	mock_send.assert_called_once()
 	assert mock_send.call_args.kwargs["security_id"] == "sec_read"
+	assert mock_send.call_args.kwargs["message"] == (
+		"我是候选人的求职助理 Agent，您好，想跟进一下这个岗位。"
+	)
+
+
+@patch("boss_agent_cli.commands.pipeline.execute_chat_reply")
+@patch("boss_agent_cli.commands.pipeline.get_platform_instance")
+@patch("boss_agent_cli.commands.pipeline.AuthManager")
+def test_follow_up_read_no_reply_does_not_repeat_agent_disclosure_after_prior_send(mock_auth_cls, mock_client_cls, mock_send, legacy_args, monkeypatch):
+	monkeypatch.setenv("BOSS_RAG_SEND_ENABLED", "true")
+	data_dir = Path(legacy_args[1])
+	store = RagReplyStore(data_dir / "boss-rag.sqlite3")
+	store.initialize()
+	store.append_audit_log(
+		AuditLogRecord.new(
+			event_type="read_no_reply_followup",
+			entity_type="security_id",
+			entity_id="sec_read",
+			payload={"security_id": "sec_read", "status": "sent", "agent_disclosed": True},
+		)
+	)
+	mock_send.return_value = SimpleNamespace(message_sent=True, error_message="")
+	mock_client = _ctx_mock(mock_client_cls)
+	mock_client.friend_list.return_value = _friend_list_response(
+		[
+			_chat_item(
+				security_id="sec_read",
+				relation_type=2,
+				unread=0,
+				message_status=2,
+				last_ts=1700000000000,
+			)
+		]
+	)
+	mock_client.interview_data.return_value = {"zpData": {"interviewList": []}}
+
+	runner = CliRunner()
+	result = runner.invoke(
+		cli,
+		[
+			"--json",
+			*legacy_args,
+			"follow-up",
+			"--now-ts-ms",
+			str(1700000000000 + 5 * 24 * 3600 * 1000),
+			"--send-read-no-reply",
+			"--message",
+			"您好，想跟进一下这个岗位。",
+			"--live-send",
+		],
+	)
+
+	assert result.exit_code == 0
 	assert mock_send.call_args.kwargs["message"] == "您好，想跟进一下这个岗位。"
 
 

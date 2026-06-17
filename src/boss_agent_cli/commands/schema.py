@@ -757,12 +757,12 @@ SCHEMA_DATA = {
 				"--send-read-no-reply": {
 					"type": "bool",
 					"default": False,
-					"description": "对 read_no_reply 候选生成或发送主动跟进消息；默认仍只返回候选列表",
+					"description": "对 read_no_reply 候选生成或发送主动跟进消息；首次会说明这是候选人的求职助理 Agent，后续成功记录存在时不重复说明",
 				},
 				"--message": {
 					"type": "string",
 					"default": "您好，想跟进一下这个岗位目前是否还在招聘？如果方便的话可以继续沟通，我这边对岗位方向比较感兴趣。",
-					"description": "read_no_reply 主动跟进消息",
+					"description": "read_no_reply 主动跟进正文；首次发送前会自动加一次 Agent 身份说明",
 				},
 				"--max-send": {
 					"type": "int",

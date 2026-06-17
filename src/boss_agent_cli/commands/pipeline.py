@@ -1,4 +1,5 @@
 import time
+from pathlib import Path
 from typing import Any
 
 import click
@@ -10,9 +11,13 @@ from boss_agent_cli.commands.friend_list_pages import collect_friend_list_items
 from boss_agent_cli.commands._platform import get_platform_instance
 from boss_agent_cli.display import error_contract_for_code, handle_auth_errors, handle_error_output, handle_output, render_simple_list
 from boss_agent_cli.pipeline_state import build_pipeline_items, select_follow_up_candidates, select_read_no_reply_candidates
+from boss_agent_cli.rag_reply.models import AuditLogRecord
+from boss_agent_cli.rag_reply.store import RagReplyStore
 
 
 _DEFAULT_READ_NO_REPLY_MESSAGE = "您好，想跟进一下这个岗位目前是否还在招聘？如果方便的话可以继续沟通，我这边对岗位方向比较感兴趣。"
+_READ_NO_REPLY_AGENT_DISCLOSURE = "我是候选人的求职助理 Agent"
+_READ_NO_REPLY_FOLLOWUP_EVENT = "read_no_reply_followup"
 
 
 def _collect_pipeline_items(ctx: click.Context, *, command_name: str, now_ts_ms: int | None, stale_days: int) -> list[dict[str, Any]]:
@@ -73,6 +78,34 @@ def _render_pipeline(data: list[dict[str, Any]], title: str) -> None:
 	)
 
 
+def _resolve_follow_up_store(ctx: click.Context) -> RagReplyStore:
+	config = ctx.obj.get("config", {}) if ctx and ctx.obj else {}
+	configured = config.get("boss_rag_db_path")
+	db_path = ctx.obj["data_dir"] / "boss-rag.sqlite3"
+	if configured:
+		db_path = Path(str(configured)).expanduser()
+	store = RagReplyStore(db_path)
+	store.initialize()
+	return store
+
+
+def _has_read_no_reply_agent_disclosure(store: RagReplyStore, security_id: str) -> bool:
+	for entry in store.list_audit_logs(security_id):
+		if entry.event_type != _READ_NO_REPLY_FOLLOWUP_EVENT:
+			continue
+		if entry.payload.get("status") != "sent":
+			continue
+		if entry.payload.get("agent_disclosed") is True:
+			return True
+	return False
+
+
+def _read_no_reply_message(base_message: str, *, disclose_agent: bool) -> str:
+	if not disclose_agent or _READ_NO_REPLY_AGENT_DISCLOSURE in base_message:
+		return base_message
+	return f"{_READ_NO_REPLY_AGENT_DISCLOSURE}，{base_message}"
+
+
 def _send_read_no_reply_followups(
 	ctx: click.Context,
 	*,
@@ -80,6 +113,7 @@ def _send_read_no_reply_followups(
 	message: str,
 	max_send: int,
 	dry_run: bool,
+	store: RagReplyStore,
 ) -> list[dict[str, object]]:
 	targets = select_read_no_reply_candidates(items)[:max_send]
 	results: list[dict[str, object]] = []
@@ -94,15 +128,32 @@ def _send_read_no_reply_followups(
 		if not security_id:
 			results.append({**base_result, "status": "missing_security_id"})
 			continue
+		final_message = _read_no_reply_message(
+			message,
+			disclose_agent=not _has_read_no_reply_agent_disclosure(store, security_id),
+		)
 		if dry_run:
 			results.append({**base_result, "status": "dry_run"})
 			continue
 		result = execute_chat_reply(
 			ctx,
 			security_id=security_id,
-			message=message,
+			message=final_message,
 			send_resume=False,
 		)
+		if result.message_sent:
+			store.append_audit_log(
+				AuditLogRecord.new(
+					event_type=_READ_NO_REPLY_FOLLOWUP_EVENT,
+					entity_type="security_id",
+					entity_id=security_id,
+					payload={
+						"security_id": security_id,
+						"status": "sent",
+						"agent_disclosed": _READ_NO_REPLY_AGENT_DISCLOSURE in final_message,
+					},
+				)
+			)
 		results.append(
 			{
 				**base_result,
@@ -168,6 +219,7 @@ def follow_up_cmd(
 				recovery_action="传入非空 --message 后重试",
 			)
 			return
+		store = _resolve_follow_up_store(ctx)
 		if not dry_run and not bool(ctx.obj.get("config", {}).get("boss_rag_send_enabled", False)):
 			handle_error_output(
 				ctx,
@@ -178,12 +230,22 @@ def follow_up_cmd(
 				recovery_action="先 dry-run 复核，确认后设置 boss_rag_send_enabled=true 再加 --live-send。",
 			)
 			return
+		read_no_reply_targets = select_read_no_reply_candidates(candidates)
+		display_message = clean_message
+		if read_no_reply_targets:
+			first_security_id = str(read_no_reply_targets[0].get("security_id") or "").strip()
+			display_message = _read_no_reply_message(
+				clean_message,
+				disclose_agent=bool(first_security_id)
+				and not _has_read_no_reply_agent_disclosure(store, first_security_id),
+			)
 		send_results = _send_read_no_reply_followups(
 			ctx,
 			items=candidates,
 			message=clean_message,
 			max_send=max_send,
 			dry_run=dry_run,
+			store=store,
 		)
 		handle_output(
 			ctx,
@@ -192,7 +254,7 @@ def follow_up_cmd(
 				"candidates": candidates,
 				"send_results": send_results,
 				"dry_run": dry_run,
-				"message": clean_message,
+				"message": display_message,
 				"max_send": max_send,
 			},
 			render=lambda data: _render_pipeline(data["candidates"], "follow-up"),
