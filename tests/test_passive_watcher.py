@@ -2,6 +2,10 @@ from pathlib import Path
 
 import pytest
 
+from boss_agent_cli.rag_reply.auto_actions import (
+    AutoReplyAction,
+    build_action_for_draft,
+)
 from boss_agent_cli.rag_reply.models import (
     AuditLogRecord,
     ConversationRecord,
@@ -10,11 +14,7 @@ from boss_agent_cli.rag_reply.models import (
 )
 from boss_agent_cli.rag_reply.service import BossRagReplyService
 from boss_agent_cli.rag_reply.store import RagReplyStore
-from boss_agent_cli.rag_reply.watcher import (
-    BossPassiveWatcher,
-    WatcherAction,
-    build_action_for_draft,
-)
+from boss_agent_cli.rag_reply.watcher import BossPassiveWatcher
 from boss_agent_cli.rag_reply.watcher_config import WatcherConfig, WatcherConfigError
 
 
@@ -38,6 +38,8 @@ def _config(tmp_path: Path) -> WatcherConfig:
         contact_wechat="reggie-ai",
         interview_windows="工作日 20:00 后，周末全天",
         resume_attachment_path=str(resume),
+        send_enabled=True,
+        require_send_enabled=True,
     )
 
 
@@ -58,7 +60,7 @@ def _draft(intent: str, text: str = "草稿") -> DraftRecord:
 def test_draft_text_intents_send_non_empty_draft_text(tmp_path, intent):
     action = build_action_for_draft(_draft(intent, "我是项目回答"), _config(tmp_path))
 
-    assert action == WatcherAction(
+    assert action == AutoReplyAction(
         kind="send_text",
         message="我是项目回答",
         status_after_send="sent",
@@ -71,7 +73,7 @@ def test_draft_text_intents_send_non_empty_draft_text(tmp_path, intent):
 def test_draft_text_intents_block_empty_drafts(tmp_path, intent):
     action = build_action_for_draft(_draft(intent, "  "), _config(tmp_path))
 
-    assert action == WatcherAction(
+    assert action == AutoReplyAction(
         kind="block",
         status_after_send="rag_failed",
         blocked_reason="empty_draft",
@@ -109,7 +111,7 @@ def test_resume_share_request_rejects_pdf_directory(tmp_path):
 def test_interview_intents_use_configured_window_reply(tmp_path, intent):
     action = build_action_for_draft(_draft(intent, ""), _config(tmp_path))
 
-    assert action == WatcherAction(
+    assert action == AutoReplyAction(
         kind="send_text",
         message=(
             "可以的，我这边通常工作日 20:00 后，周末全天方便面试。"
@@ -167,6 +169,23 @@ class _FakeRagAdapter:
         return _FakeRagResult()
 
 
+class _IntegrationRagResult:
+    ok = True
+    answer = "您好，我主要负责企业级 RAG 的检索链路和回答编排。"
+    citations = []
+    reasoning_summary = None
+    raw_response = {}
+    error_message = None
+    audit_status = "draft_created"
+    send_allowed = False
+    approval_required = True
+
+
+class _IntegrationRagAdapter:
+    def answer(self, **kwargs):
+        return _IntegrationRagResult()
+
+
 class _RecordingDelivery:
     def __init__(self):
         self.calls = []
@@ -199,6 +218,29 @@ class _RecordingDelivery:
         }
 
 
+class _Syncer:
+    def __init__(self, store=None):
+        self.calls = 0
+        self.store = store
+
+    def sync_messages(self, *, conversation_id=None):
+        self.calls += 1
+        if self.store is not None:
+            self.store.save_message(
+                MessageRecord(
+                    message_id="msg_001",
+                    conversation_id="conv_001",
+                    message_text="介绍下你的 RAG 项目",
+                    direction="inbound",
+                )
+            )
+        return {
+            "count": 1,
+            "conversation_ids": ["conv_001"],
+            "message_ids": ["msg_001"],
+        }
+
+
 def _store(tmp_path):
     store = RagReplyStore(tmp_path / "boss-rag.sqlite3")
     store.initialize()
@@ -207,6 +249,10 @@ def _store(tmp_path):
 
 def _service(store):
     return BossRagReplyService(store=store, rag_adapter=_FakeRagAdapter())
+
+
+def _integration_service(store):
+    return BossRagReplyService(store=store, rag_adapter=_IntegrationRagAdapter())
 
 
 def test_run_once_sends_contact_reply_and_writes_audit(tmp_path):
@@ -314,4 +360,77 @@ def test_run_once_skips_already_processed_message(tmp_path):
 
     assert result.processed == 0
     assert result.skipped == 1
+    assert delivery.calls == []
+
+
+def test_passive_watcher_syncs_live_messages_before_processing(tmp_path):
+    store = _store(tmp_path)
+    store.save_conversation(
+        ConversationRecord(
+            conversation_id="conv_001",
+            source="boss_sync",
+            state={"security_id": "sec_001"},
+        )
+    )
+    syncer = _Syncer(store)
+    delivery = _RecordingDelivery()
+    config = _config(tmp_path)
+    config.live_sync = True
+    watcher = BossPassiveWatcher(
+        store=store,
+        service=_integration_service(store),
+        config=config,
+        delivery=delivery,
+        message_syncer=syncer,
+    )
+
+    result = watcher.run_once(live_sync=True)
+
+    assert syncer.calls == 1
+    assert result.processed == 1
+    assert result.blocked == 0
+    assert delivery.calls[0]["security_id"] == "sec_001"
+    assert delivery.calls[0]["message"].startswith("您好，我主要负责")
+
+
+def test_passive_watcher_respects_pause_control(tmp_path):
+    store = _store(tmp_path)
+    store.save_conversation(
+        ConversationRecord(
+            conversation_id="conv_001",
+            source="boss_sync",
+            state={"security_id": "sec_001"},
+        )
+    )
+    store.save_message(
+        MessageRecord(
+            message_id="msg_001",
+            conversation_id="conv_001",
+            message_text="介绍下你的 RAG 项目",
+            direction="inbound",
+        )
+    )
+    store.append_audit_log(
+        AuditLogRecord.new(
+            event_type="watcher_control",
+            entity_type="conversation",
+            entity_id="conv_001",
+            payload={"action": "pause", "conversation_id": "conv_001"},
+        )
+    )
+    delivery = _RecordingDelivery()
+    config = _config(tmp_path)
+    config.live_sync = False
+    watcher = BossPassiveWatcher(
+        store=store,
+        service=_integration_service(store),
+        config=config,
+        delivery=delivery,
+    )
+
+    result = watcher.run_once(live_sync=False)
+
+    assert result.processed == 0
+    assert result.blocked == 1
+    assert result.tasks[0]["status"] == "paused"
     assert delivery.calls == []

@@ -3,19 +3,14 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Protocol
 
-from boss_agent_cli.rag_reply.models import AuditLogRecord, DraftRecord, MessageRecord
+from boss_agent_cli.rag_reply.auto_actions import AutoReplyAction
+from boss_agent_cli.rag_reply.auto_graph import run_auto_reply_graph
+from boss_agent_cli.rag_reply.models import AuditLogRecord, MessageRecord
 from boss_agent_cli.rag_reply.service import BossRagReplyService
 from boss_agent_cli.rag_reply.store import RagReplyStore
-from boss_agent_cli.rag_reply.watcher_config import (
-    WatcherConfig,
-    WatcherConfigError,
-    build_contact_reply,
-    build_interview_window_reply,
-    salary_handoff_reply,
-)
+from boss_agent_cli.rag_reply.watcher_config import WatcherConfig
 
 
 WATCHER_STATUSES = {
@@ -33,75 +28,6 @@ WATCHER_STATUSES = {
 }
 
 
-@dataclass(slots=True)
-class WatcherAction:
-    kind: str
-    message: str = ""
-    status_after_send: str = "sent"
-    send_attachment_resume: bool = False
-    resume_file: str = ""
-    blocked_reason: str = ""
-
-
-def build_action_for_draft(draft: DraftRecord, config: WatcherConfig) -> WatcherAction:
-    intent = draft.intent
-    draft_text = (draft.draft_text or "").strip()
-    if intent in {
-        "project_question",
-        "resume_question",
-        "smalltalk",
-        "resignation_status",
-        "personal_status",
-        "job_location_acceptance",
-    }:
-        if not draft_text:
-            return WatcherAction(
-                kind="block", status_after_send="rag_failed", blocked_reason="empty_draft"
-            )
-        return WatcherAction(kind="send_text", message=draft_text)
-    if intent == "resume_share_request":
-        resume_file = _require_resume_file(config.resume_attachment_path)
-        message = draft_text or "可以的，我这边通过 BOSS 直聘发送附件简历给您。"
-        return WatcherAction(
-            kind="send_text",
-            message=message,
-            send_attachment_resume=True,
-            resume_file=resume_file,
-        )
-    if intent in {"interview_time", "availability_or_schedule"}:
-        return WatcherAction(
-            kind="send_text", message=build_interview_window_reply(config)
-        )
-    if intent == "contact_exchange":
-        return WatcherAction(kind="send_text", message=build_contact_reply(config))
-    if intent == "salary_or_offer":
-        if draft_text and draft_text != salary_handoff_reply():
-            return WatcherAction(kind="send_text", message=draft_text)
-        return WatcherAction(
-            kind="send_text",
-            message=salary_handoff_reply(),
-            status_after_send="blocked_manual_required",
-        )
-    return WatcherAction(
-        kind="block",
-        status_after_send="blocked_manual_required",
-        blocked_reason="intent_not_allowlisted",
-    )
-
-
-def _require_resume_file(value: str) -> str:
-    path = Path(value).expanduser()
-    if not value.strip() or not path.is_file():
-        raise WatcherConfigError(
-            "boss_rag_resume_attachment_path must point to an existing PDF file."
-        )
-    if path.suffix.lower() != ".pdf":
-        raise WatcherConfigError(
-            "boss_rag_resume_attachment_path must point to a PDF file."
-        )
-    return str(path)
-
-
 class WatcherDelivery(Protocol):
     def send(
         self,
@@ -112,6 +38,11 @@ class WatcherDelivery(Protocol):
         resume_file: str = "",
         target: dict[str, str] | None = None,
     ) -> dict[str, object]:
+        ...
+
+
+class WatcherMessageSyncer(Protocol):
+    def sync_messages(self, *, conversation_id: str | None = None) -> dict[str, object]:
         ...
 
 
@@ -131,18 +62,35 @@ class BossPassiveWatcher:
         service: BossRagReplyService,
         config: WatcherConfig,
         delivery: WatcherDelivery,
+        message_syncer: WatcherMessageSyncer | None = None,
     ) -> None:
         self.store = store
         self.service = service
         self.config = config
         self.delivery = delivery
+        self.message_syncer = message_syncer
 
-    def run_once(self) -> WatcherRunResult:
+    def run_once(self, *, live_sync: bool | None = None) -> WatcherRunResult:
+        if live_sync is None:
+            live_sync = self.config.live_sync
+        if live_sync and self.message_syncer is not None:
+            self.message_syncer.sync_messages()
         processed = 0
         skipped = 0
         blocked = 0
         tasks: list[dict[str, object]] = []
         for message in self._candidate_messages():
+            if self._is_paused(message.conversation_id):
+                blocked += 1
+                task = self._record_task(
+                    message=message,
+                    status="paused",
+                    intent="unknown",
+                    draft_id="",
+                    error_message="conversation_paused",
+                )
+                tasks.append(task)
+                continue
             if self._already_processed(message.message_id):
                 skipped += 1
                 tasks.append(
@@ -153,7 +101,7 @@ class BossPassiveWatcher:
             tasks.append(task)
             if task["status"] == "sent":
                 processed += 1
-            elif task["status"] == "blocked_manual_required":
+            elif task["status"] in {"blocked_manual_required", "paused"}:
                 blocked += 1
             else:
                 processed += 1
@@ -173,65 +121,30 @@ class BossPassiveWatcher:
             if (
                 entry.event_type == "watcher_task"
                 and entry.payload.get("message_id") == message_id
+                and entry.payload.get("status") != "paused"
             ):
                 return True
         return False
 
     def _process_message(self, message: MessageRecord) -> dict[str, object]:
         draft = self.service.create_draft_for_message(message.message_id)
-        try:
-            action = build_action_for_draft(draft, self.config)
-        except WatcherConfigError as exc:
-            return self._record_task(
-                message=message,
-                status="blocked_manual_required",
-                intent=draft.intent,
-                draft_id=draft.draft_id,
-                error_message=str(exc),
-            )
-        if action.kind == "block":
-            return self._record_task(
-                message=message,
-                status=action.status_after_send,
-                intent=draft.intent,
-                draft_id=draft.draft_id,
-                error_message=action.blocked_reason,
-            )
-        security_id = self._resolve_security_id(message.conversation_id)
-        if not security_id:
-            return self._record_task(
-                message=message,
-                status="blocked_manual_required",
-                intent=draft.intent,
-                draft_id=draft.draft_id,
-                error_message="missing_security_id",
-            )
-        target = self._target_payload(message.conversation_id)
-        if self.config.dry_run:
-            return self._record_task(
-                message=message,
-                status=action.status_after_send,
-                intent=draft.intent,
-                draft_id=draft.draft_id,
-                dry_run=True,
-                action=action,
-                delivery={"ok": True, "status": "dry_run"},
-            )
-        delivery = self.delivery.send(
-            security_id=security_id,
-            message=action.message,
-            send_attachment_resume=action.send_attachment_resume,
-            resume_file=action.resume_file,
-            target=target,
+        result = run_auto_reply_graph(
+            message=message,
+            draft=draft,
+            config=self.config,
+            resolve_security_id=self._resolve_security_id,
+            target_payload=self._target_payload,
+            delivery=self.delivery,
         )
-        status = action.status_after_send if delivery.get("ok") else "send_failed"
         return self._record_task(
             message=message,
-            status=status,
-            intent=draft.intent,
+            status=result.status,
+            intent=result.intent,
             draft_id=draft.draft_id,
-            action=action,
-            delivery=delivery,
+            error_message=result.error_message,
+            dry_run=result.dry_run,
+            action=_action_from_payload(result.action),
+            delivery=result.delivery,
         )
 
     def _record_task(
@@ -243,7 +156,7 @@ class BossPassiveWatcher:
         draft_id: str,
         error_message: str = "",
         dry_run: bool = False,
-        action: WatcherAction | None = None,
+        action: AutoReplyAction | None = None,
         delivery: dict[str, object] | None = None,
     ) -> dict[str, object]:
         payload = {
@@ -267,6 +180,21 @@ class BossPassiveWatcher:
         )
         return payload
 
+    def _is_paused(self, conversation_id: str) -> bool:
+        paused = False
+        for entry in self.store.list_audit_logs(conversation_id):
+            if entry.event_type != "watcher_control":
+                continue
+            payload_conversation_id = entry.payload.get("conversation_id")
+            if payload_conversation_id and payload_conversation_id != conversation_id:
+                continue
+            action = str(entry.payload.get("action") or "").lower()
+            if action == "pause":
+                paused = True
+            elif action == "resume":
+                paused = False
+        return paused
+
     def _resolve_security_id(self, conversation_id: str) -> str:
         conversation = self.store.get_conversation(conversation_id)
         if conversation and isinstance(conversation.state, dict):
@@ -287,7 +215,7 @@ class BossPassiveWatcher:
         }
 
 
-def _action_payload(action: WatcherAction | None) -> dict[str, object]:
+def _action_payload(action: AutoReplyAction | None) -> dict[str, object]:
     if action is None:
         return {}
     return {
@@ -298,3 +226,16 @@ def _action_payload(action: WatcherAction | None) -> dict[str, object]:
         "resume_file": action.resume_file,
         "blocked_reason": action.blocked_reason,
     }
+
+
+def _action_from_payload(payload: dict[str, object]) -> AutoReplyAction | None:
+    if not payload:
+        return None
+    return AutoReplyAction(
+        kind=str(payload.get("kind") or ""),
+        message=str(payload.get("message") or ""),
+        status_after_send=str(payload.get("status_after_send") or "sent"),
+        send_attachment_resume=bool(payload.get("send_attachment_resume") or False),
+        resume_file=str(payload.get("resume_file") or ""),
+        blocked_reason=str(payload.get("blocked_reason") or ""),
+    )
