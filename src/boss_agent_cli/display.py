@@ -133,6 +133,20 @@ def handle_platform_error_output(
 	)
 
 
+def _normalize_unexpected_error_message(command_name: str, exc: Exception) -> str:
+	raw = str(exc)
+	lower = raw.lower()
+	if "executable doesn't exist" in lower and (
+		"patchright install" in lower or "playwright install" in lower
+	):
+		install_command = "patchright install" if "patchright install" in lower else "playwright install"
+		return (
+			f"{command_name} 失败: 浏览器内核未安装，无法发起 Boss 浏览器请求。"
+			f"请运行 `{install_command}` 后重试。"
+		)
+	return f"{command_name} 失败: {raw}"
+
+
 # ── Table builders ──────────────────────────────────────────────────
 
 
@@ -392,7 +406,7 @@ def handle_auth_errors(command_name: str) -> Callable[[Callable[..., Any]], Call
 			except Exception as e:
 				handle_error_output(
 					ctx, command_name, code="NETWORK_ERROR",
-					message=f"{command_name} 失败: {e}",
+					message=_normalize_unexpected_error_message(command_name, e),
 					recoverable=True, recovery_action="重试",
 				)
 		return wrapper

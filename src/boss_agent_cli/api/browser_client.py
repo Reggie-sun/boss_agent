@@ -33,6 +33,10 @@ def _sync_playwright() -> Any:
 	return sync_playwright
 
 
+def _is_patchright_runtime(sync_playwright: Any) -> bool:
+	return str(getattr(sync_playwright, "__module__", "")).startswith("patchright.")
+
+
 class RecruiterChatTabRequired(RuntimeError):
 	"""招聘者操作（issue #217 修复路径）需要用户已打开 chat/index 页。
 
@@ -49,8 +53,10 @@ class RecruiterChatTabRequired(RuntimeError):
 
 # 超时常量
 _CDP_PROBE_TIMEOUT = 3           # CDP 探测 HTTP 超时（秒）
+_CDP_CONNECT_TIMEOUT_MS = 10000  # CDP 握手超时，避免 Chrome 端口存在但连接挂住
 _NAV_TIMEOUT_MS = 15000          # 页面导航超时（毫秒）
 _HEADLESS_NETWORKIDLE_GRACE_MS = 3000  # headless 预热的额外宽限，避免卡满 30s
+_BROWSER_FETCH_TIMEOUT_MS = 30000  # 页面内 fetch 超时，避免 CLI / 前端无限等待
 
 # macOS / Linux / Windows Chrome user data 默认路径
 _CHROME_USER_DATA_CANDIDATES = [
@@ -98,10 +104,11 @@ class BrowserSession:
 		if self._try_bridge():
 			return
 
-		self._pw = _sync_playwright()().start()
+		sync_playwright = _sync_playwright()
+		self._pw = sync_playwright().start()
 
 		# 第二优先：CDP 连接用户 Chrome（登录态兼容）
-		if self._try_cdp():
+		if not _is_patchright_runtime(sync_playwright) and self._try_cdp():
 			return
 
 		# 兜底：启动 headless patchright
@@ -144,14 +151,20 @@ class BrowserSession:
 		if ws_url:
 			urls_to_try.append(ws_url)
 
+		tried: set[str] = set()
 		for url in urls_to_try:
+			if url in tried:
+				continue
+			tried.add(url)
 			if self._try_connect(url):
 				return True
 			# HTTP URL 连接失败时，尝试从 /json/version 获取 WS URL
 			if url.startswith("http"):
 				ws = self._fetch_ws_url(url)
-				if ws and self._try_connect(ws):
-					return True
+				if ws and ws not in tried:
+					tried.add(ws)
+					if self._try_connect(ws):
+						return True
 		return False
 
 	def _try_connect(self, url: str) -> bool:
@@ -162,7 +175,10 @@ class BrowserSession:
 		new context when none exists.
 		"""
 		try:
-			self._browser = self._pw.chromium.connect_over_cdp(url)
+			self._browser = self._pw.chromium.connect_over_cdp(
+				url,
+				timeout=_CDP_CONNECT_TIMEOUT_MS,
+			)
 			contexts = self._browser.contexts
 
 			if contexts:
@@ -284,7 +300,9 @@ class BrowserSession:
 
 		# Playwright 模式（CDP 或 headless）
 		result = self._page.evaluate("""
-			async ({method, url, params, data, referer}) => {
+			async ({method, url, params, data, referer, timeoutMs}) => {
+				const controller = new AbortController();
+				const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 				try {
 					let fetchUrl = url;
 					if (params && Object.keys(params).length > 0) {
@@ -303,6 +321,7 @@ class BrowserSession:
 							'Referer': referer,
 							'X-Requested-With': 'XMLHttpRequest',
 						},
+						signal: controller.signal,
 					};
 
 					if (method === 'POST' && data) {
@@ -317,10 +336,22 @@ class BrowserSession:
 					const resp = await fetch(fetchUrl, options);
 					return await resp.json();
 				} catch (e) {
-					return {code: -1, message: e.message, zpData: {}};
+					const message = e.name === 'AbortError'
+						? `browser fetch timeout after ${timeoutMs}ms`
+						: e.message;
+					return {code: -1, message, zpData: {}};
+				} finally {
+					clearTimeout(timeoutId);
 				}
 			}
-		""", {"method": method, "url": url, "params": params or {}, "data": data, "referer": referer})
+		""", {
+			"method": method,
+			"url": url,
+			"params": params or {},
+			"data": data,
+			"referer": referer,
+			"timeoutMs": _BROWSER_FETCH_TIMEOUT_MS,
+		})
 
 		self._throttle.mark()
 		return cast("dict[str, Any]", result)

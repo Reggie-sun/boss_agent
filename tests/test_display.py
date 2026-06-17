@@ -139,6 +139,28 @@ class TestHandleAuthErrors:
 			call_kwargs = mock_err.call_args
 			assert call_kwargs[1]["code"] == "NETWORK_ERROR"
 
+	def test_browser_runtime_missing_exception_is_normalized(self):
+		ctx = MagicMock()
+		ctx.obj = {"json_output": True}
+
+		@handle_auth_errors("search")
+		def impl(ctx):
+			raise RuntimeError(
+				"BrowserType.launch: Executable doesn't exist at /tmp/chrome\n"
+				"Please run the following command to download new browsers:\n"
+				"    patchright install\n"
+				"<3 Patchright Team"
+			)
+
+		with patch("boss_agent_cli.display.handle_error_output") as mock_err:
+			impl(ctx)
+			mock_err.assert_called_once()
+			call_kwargs = mock_err.call_args
+			assert call_kwargs[1]["code"] == "NETWORK_ERROR"
+			assert "浏览器内核未安装" in call_kwargs[1]["message"]
+			assert "patchright install" in call_kwargs[1]["message"]
+			assert "Patchright Team" not in call_kwargs[1]["message"]
+
 	def test_success_passthrough(self):
 		ctx = MagicMock()
 		ctx.obj = {"json_output": True}

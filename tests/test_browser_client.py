@@ -5,6 +5,8 @@ import httpx
 from boss_agent_cli.api.browser_client import (
 	CDP_DEFAULT_URL,
 	HOME_URL,
+	_BROWSER_FETCH_TIMEOUT_MS,
+	_CDP_CONNECT_TIMEOUT_MS,
 	_HEADLESS_NETWORKIDLE_GRACE_MS,
 	_NAV_TIMEOUT_MS,
 	BrowserSession,
@@ -187,6 +189,10 @@ def test_try_connect_reuses_existing_context():
 	assert session._own_context is False  # 复用，非自建
 	assert session._context is mock_user_context  # 直接使用用户 context
 	# 验证：没有创建新 context
+	session._pw.chromium.connect_over_cdp.assert_called_once_with(
+		"ws://localhost:9222/test",
+		timeout=_CDP_CONNECT_TIMEOUT_MS,
+	)
 	mock_browser.new_context.assert_not_called()
 	# 验证：不会把本地旧 cookie 回灌到用户 context，避免污染真实登录态
 	mock_user_context.add_cookies.assert_not_called()
@@ -213,6 +219,10 @@ def test_try_connect_creates_new_context_when_none_exists():
 	assert result is True
 	assert session._is_cdp is True
 	assert session._own_context is True  # 自建
+	session._pw.chromium.connect_over_cdp.assert_called_once_with(
+		"ws://localhost:9222/test",
+		timeout=_CDP_CONNECT_TIMEOUT_MS,
+	)
 	# 验证：创建了新 context
 	mock_browser.new_context.assert_called_once()
 	# 验证：cookies 被注入
@@ -283,6 +293,28 @@ def test_ensure_started_falls_back_to_patchright_when_bridge_and_cdp_fail():
 	mock_start_headless.assert_called_once()
 
 
+def test_ensure_started_skips_patchright_cdp_attach():
+	session = BrowserSession(cookies={}, user_agent="")
+	mock_pw = MagicMock()
+
+	def fake_sync_playwright():
+		return MagicMock(start=MagicMock(return_value=mock_pw))
+	fake_sync_playwright.__module__ = "patchright.sync_api"
+
+	with (
+		patch.object(session, "_try_bridge", return_value=False) as mock_try_bridge,
+		patch("boss_agent_cli.api.browser_client._sync_playwright", return_value=fake_sync_playwright) as mock_sync_playwright,
+		patch.object(session, "_try_cdp", return_value=True) as mock_try_cdp,
+		patch.object(session, "_start_headless") as mock_start_headless,
+	):
+		session._ensure_started()
+
+	mock_try_bridge.assert_called_once()
+	mock_sync_playwright.assert_called_once()
+	mock_try_cdp.assert_not_called()
+	mock_start_headless.assert_called_once()
+
+
 def test_try_cdp_attempts_http_ws_and_devtools_urls_before_falling_back():
 	session = BrowserSession(cookies={}, user_agent="", cdp_url="http://127.0.0.1:9333")
 
@@ -305,6 +337,25 @@ def test_try_cdp_attempts_http_ws_and_devtools_urls_before_falling_back():
 		"http://127.0.0.1:9333",
 		CDP_DEFAULT_URL,
 	]
+
+
+def test_try_cdp_deduplicates_devtools_active_port_url():
+	session = BrowserSession(cookies={}, user_agent="")
+
+	with (
+		patch.object(session, "_try_connect", return_value=False) as mock_try_connect,
+		patch.object(BrowserSession, "_fetch_ws_url", return_value="ws://127.0.0.1:9222/devtools/browser/default") as mock_fetch_ws_url,
+		patch.object(BrowserSession, "_read_devtools_active_port", return_value="ws://127.0.0.1:9222/devtools/browser/default") as mock_read_port,
+	):
+		result = session._try_cdp()
+
+	assert result is False
+	mock_read_port.assert_called_once()
+	assert [call.args[0] for call in mock_try_connect.call_args_list] == [
+		CDP_DEFAULT_URL,
+		"ws://127.0.0.1:9222/devtools/browser/default",
+	]
+	assert [call.args[0] for call in mock_fetch_ws_url.call_args_list] == [CDP_DEFAULT_URL]
 
 
 def test_request_returns_browser_evaluation_json_and_marks_throttle():
@@ -333,4 +384,25 @@ def test_request_returns_browser_evaluation_json_and_marks_throttle():
 		"params": {"query": "python", "page": 1},
 		"data": {"city": "101020100"},
 		"referer": "https://www.zhipin.com/web/geek/job",
+		"timeoutMs": _BROWSER_FETCH_TIMEOUT_MS,
 	}
+
+
+def test_request_passes_fetch_timeout_to_browser_evaluation():
+	session = BrowserSession(cookies={}, user_agent="")
+	session._started = True
+	session._page = MagicMock()
+	session._throttle = MagicMock()
+	session._page.evaluate.return_value = {"code": -1, "message": "browser fetch timeout after 30000ms", "zpData": {}}
+
+	session.request(
+		"GET",
+		"https://www.zhipin.com/wapi/zpgeek/search/joblist.json",
+		params={"query": "rag"},
+	)
+
+	evaluate_script, evaluate_args = session._page.evaluate.call_args.args
+	assert "AbortController" in evaluate_script
+	assert "setTimeout" in evaluate_script
+	assert "clearTimeout(timeoutId)" in evaluate_script
+	assert evaluate_args["timeoutMs"] == _BROWSER_FETCH_TIMEOUT_MS
