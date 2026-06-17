@@ -354,9 +354,9 @@ class BrowserSession:
 					const options = {
 						method: method,
 						credentials: 'include',
+						referrer: referer,
 						headers: {
 							'Accept': 'application/json, text/plain, */*',
-							'Referer': referer,
 							'X-Requested-With': 'XMLHttpRequest',
 						},
 						signal: controller.signal,

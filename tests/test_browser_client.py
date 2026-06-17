@@ -454,6 +454,25 @@ def test_request_passes_fetch_timeout_to_browser_evaluation():
 	assert evaluate_args["timeoutMs"] == _BROWSER_FETCH_TIMEOUT_MS
 
 
+def test_request_sets_fetch_referrer_option_instead_of_forbidden_header():
+	session = BrowserSession(cookies={}, user_agent="")
+	session._started = True
+	session._page = MagicMock()
+	session._throttle = MagicMock()
+	session._page.evaluate.return_value = {"code": 0, "zpData": {}}
+
+	session.request(
+		"POST",
+		"https://www.zhipin.com/wapi/zpgeek/friend/add.json",
+		data={"securityId": "sec_1", "jobId": "job_1"},
+	)
+
+	evaluate_script, evaluate_args = session._page.evaluate.call_args.args
+	assert "referrer: referer" in evaluate_script
+	assert "'Referer': referer" not in evaluate_script
+	assert evaluate_args["referer"] == "https://www.zhipin.com/web/geek/chat"
+
+
 def test_request_retries_when_browser_evaluation_context_is_destroyed():
 	session = BrowserSession(cookies={}, user_agent="")
 	session._started = True
