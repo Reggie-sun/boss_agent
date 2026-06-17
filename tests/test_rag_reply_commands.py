@@ -766,6 +766,87 @@ def test_agent_watcher_run_once_live_sync_passes_flag(monkeypatch, tmp_path: Pat
 	assert payload["data"]["processed"] == 1
 
 
+def test_agent_watcher_run_once_no_live_sync_overrides_config(monkeypatch, tmp_path: Path):
+	(tmp_path / "config.json").write_text(
+		json.dumps(
+			{
+				"boss_rag_watcher_enabled": True,
+				"boss_rag_watcher_live_sync": True,
+			}
+		),
+		encoding="utf-8",
+	)
+	called = {"live_sync": None}
+
+	class _FakeWatcher:
+		def run_once(self, *, live_sync=None):
+			called["live_sync"] = live_sync
+			return rag_commands.WatcherRunResult(
+				processed=1,
+				skipped=0,
+				blocked=0,
+				tasks=[{"message_id": "msg_001", "status": "sent"}],
+			)
+
+	monkeypatch.setattr(rag_commands, "_build_passive_watcher", lambda ctx: _FakeWatcher())
+	runner = CliRunner()
+
+	result = runner.invoke(
+		cli,
+		[
+			"--json",
+			"--data-dir",
+			str(tmp_path),
+			"agent",
+			"watcher-run",
+			"--once",
+			"--no-live-sync",
+		],
+	)
+
+	assert result.exit_code == 0
+	assert called["live_sync"] is False
+	payload = json.loads(result.output)
+	assert payload["ok"] is True
+	assert payload["data"]["processed"] == 1
+
+
+def test_agent_watcher_run_loop_rejects_zero_max_cycles(monkeypatch, tmp_path: Path):
+	(tmp_path / "config.json").write_text(
+		json.dumps({"boss_rag_watcher_enabled": True}),
+		encoding="utf-8",
+	)
+	called = {"build_watcher": False}
+
+	def _build_watcher(ctx):
+		called["build_watcher"] = True
+		return object()
+
+	monkeypatch.setattr(rag_commands, "_build_passive_watcher", _build_watcher)
+	runner = CliRunner()
+
+	result = runner.invoke(
+		cli,
+		[
+			"--json",
+			"--data-dir",
+			str(tmp_path),
+			"agent",
+			"watcher-run",
+			"--loop",
+			"--max-cycles",
+			"0",
+		],
+	)
+
+	assert result.exit_code == 1
+	assert called["build_watcher"] is False
+	payload = json.loads(result.output)
+	assert payload["ok"] is False
+	assert payload["command"] == "agent-watcher-run"
+	assert payload["error"]["code"] == "INVALID_PARAM"
+
+
 def test_agent_watcher_run_loop_stops_at_max_cycles(monkeypatch, tmp_path: Path):
 	(tmp_path / "config.json").write_text(
 		json.dumps(
@@ -815,6 +896,58 @@ def test_agent_watcher_run_loop_stops_at_max_cycles(monkeypatch, tmp_path: Path)
 	assert payload["data"]["status"] == "completed"
 	assert payload["data"]["cycles"] == 2
 	assert payload["data"]["processed"] == 2
+
+
+def test_agent_watcher_run_loop_keeps_last_twenty_tasks(monkeypatch, tmp_path: Path):
+	(tmp_path / "config.json").write_text(
+		json.dumps(
+			{
+				"boss_rag_watcher_enabled": True,
+				"boss_rag_watcher_poll_seconds": 5,
+			}
+		),
+		encoding="utf-8",
+	)
+	calls = {"run_once": 0, "sleep": []}
+
+	class _FakeWatcher:
+		def run_once(self, *, live_sync=None):
+			calls["run_once"] += 1
+			return rag_commands.WatcherRunResult(
+				processed=1,
+				skipped=0,
+				blocked=0,
+				tasks=[{"message_id": f"msg_{calls['run_once']}", "status": "sent"}],
+			)
+
+	monkeypatch.setattr(rag_commands, "_build_passive_watcher", lambda ctx: _FakeWatcher())
+	monkeypatch.setattr(rag_commands.time, "sleep", lambda seconds: calls["sleep"].append(seconds))
+	runner = CliRunner()
+
+	result = runner.invoke(
+		cli,
+		[
+			"--json",
+			"--data-dir",
+			str(tmp_path),
+			"agent",
+			"watcher-run",
+			"--loop",
+			"--max-cycles",
+			"25",
+		],
+	)
+
+	assert result.exit_code == 0
+	assert calls["run_once"] == 25
+	assert calls["sleep"] == [5] * 24
+	payload = json.loads(result.output)
+	tasks = payload["data"]["tasks"]
+	assert payload["data"]["cycles"] == 25
+	assert payload["data"]["processed"] == 25
+	assert len(tasks) == 20
+	assert tasks[0]["message_id"] == "msg_6"
+	assert tasks[-1]["message_id"] == "msg_25"
 
 
 def test_cli_watcher_message_syncer_normalizes_read_disabled_and_success(monkeypatch):

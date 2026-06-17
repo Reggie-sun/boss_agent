@@ -1006,6 +1006,16 @@ def rag_watcher_run_cmd(
 		)
 		return
 	config = _build_watcher_config(ctx)
+	if loop_mode and max_cycles is not None and max_cycles < 1:
+		handle_error_output(
+			ctx,
+			_workflow_command(ctx, "watcher-run"),
+			code="INVALID_PARAM",
+			message="watcher-run --max-cycles must be at least 1.",
+			recoverable=True,
+			recovery_action="Run agent watcher-run --loop --max-cycles 1 or omit --max-cycles for a continuous loop.",
+		)
+		return
 	effective_live_sync = config.live_sync if live_sync is None else live_sync
 	if not config.enabled:
 		handle_output(
