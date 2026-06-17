@@ -412,12 +412,24 @@ export function App() {
   async function runWatcherOnce() {
     setIsWatcherBusy(true);
     try {
-      const response = await fetch("/api/agent/watcher/run", { method: "POST" });
+      const response = await fetch("/api/agent/watcher/run", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ liveSync: true }),
+      });
       const payload = await response.json();
       if (!response.ok || !payload.ok) {
         throw new Error(payload.errorMessage || "运行 watcher 失败。");
       }
+      const runData = payload.data || {};
       await refreshWatcherStatus();
+      if (Array.isArray(runData.tasks) && runData.tasks.length) {
+        setWatcherState((current) => ({
+          ...current,
+          tasks: runData.tasks,
+          errorMessage: "",
+        }));
+      }
     } catch (error) {
       setWatcherState((current) => ({
         ...current,
@@ -427,6 +439,14 @@ export function App() {
       setIsWatcherBusy(false);
     }
   }
+
+  useEffect(() => {
+    if (!watcherState.running || isWatcherBusy) return undefined;
+    const timer = window.setInterval(() => {
+      runWatcherOnce();
+    }, 20_000);
+    return () => window.clearInterval(timer);
+  }, [watcherState.running, isWatcherBusy]);
 
   async function controlWatcher(action, conversationId = "") {
     setIsWatcherBusy(true);

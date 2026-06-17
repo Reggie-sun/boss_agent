@@ -780,7 +780,12 @@ function createRagBridgePlugin() {
     if (req.method === "POST" && isWatcherRun) {
       res.setHeader("Content-Type", "application/json; charset=utf-8");
       try {
-        const payload = await runBossJsonCommand(bridgeConfig, ["agent", "watcher-run", "--once"]);
+        const rawBody = await readBody(req);
+        const body = rawBody ? JSON.parse(rawBody) : {};
+        const liveSync = Boolean(body.liveSync);
+        const args = ["agent", "watcher-run", "--once"];
+        if (liveSync) args.push("--live-sync");
+        const payload = await runBossJsonCommand(bridgeConfig, args);
         res.end(JSON.stringify({ ok: true, data: payload.data || {} }));
       } catch (error) {
         const payload = error?.commandPayload;
