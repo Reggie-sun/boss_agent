@@ -241,6 +241,20 @@ class _Syncer:
         }
 
 
+class _FailingSyncer:
+    def __init__(self):
+        self.calls = 0
+
+    def sync_messages(self, *, conversation_id=None):
+        self.calls += 1
+        return {"ok": False, "status": "read_disabled"}
+
+
+class _RaisingSyncer:
+    def sync_messages(self, *, conversation_id=None):
+        raise RuntimeError("bridge_unavailable")
+
+
 def _store(tmp_path):
     store = RagReplyStore(tmp_path / "boss-rag.sqlite3")
     store.initialize()
@@ -393,6 +407,124 @@ def test_passive_watcher_syncs_live_messages_before_processing(tmp_path):
     assert delivery.calls[0]["message"].startswith("您好，我主要负责")
 
 
+def test_passive_watcher_blocks_live_sync_without_syncer(tmp_path):
+    store = _store(tmp_path)
+    store.save_conversation(
+        ConversationRecord(
+            conversation_id="conv_001",
+            source="boss_sync",
+            state={"security_id": "sec_001"},
+        )
+    )
+    store.save_message(
+        MessageRecord(
+            message_id="msg_001",
+            conversation_id="conv_001",
+            message_text="介绍下你的 RAG 项目",
+            direction="inbound",
+        )
+    )
+    delivery = _RecordingDelivery()
+    config = _config(tmp_path)
+    config.live_sync = True
+    watcher = BossPassiveWatcher(
+        store=store,
+        service=_integration_service(store),
+        config=config,
+        delivery=delivery,
+    )
+
+    result = watcher.run_once(live_sync=True)
+
+    assert result.processed == 0
+    assert result.skipped == 0
+    assert result.blocked == 1
+    assert result.tasks[0]["status"] == "blocked_manual_required"
+    assert result.tasks[0]["error_message"] == "live_sync_unavailable"
+    assert result.tasks[0]["live_sync"] is True
+    assert delivery.calls == []
+    assert store.list_drafts() == []
+
+
+def test_passive_watcher_blocks_failed_live_sync_result(tmp_path):
+    store = _store(tmp_path)
+    store.save_conversation(
+        ConversationRecord(
+            conversation_id="conv_001",
+            source="boss_sync",
+            state={"security_id": "sec_001"},
+        )
+    )
+    store.save_message(
+        MessageRecord(
+            message_id="msg_001",
+            conversation_id="conv_001",
+            message_text="介绍下你的 RAG 项目",
+            direction="inbound",
+        )
+    )
+    syncer = _FailingSyncer()
+    delivery = _RecordingDelivery()
+    config = _config(tmp_path)
+    config.live_sync = True
+    watcher = BossPassiveWatcher(
+        store=store,
+        service=_integration_service(store),
+        config=config,
+        delivery=delivery,
+        message_syncer=syncer,
+    )
+
+    result = watcher.run_once(live_sync=True)
+
+    assert syncer.calls == 1
+    assert result.processed == 0
+    assert result.blocked == 1
+    assert result.tasks[0]["status"] == "blocked_manual_required"
+    assert result.tasks[0]["error_message"] == "read_disabled"
+    assert result.tasks[0]["sync"]["status"] == "read_disabled"
+    assert delivery.calls == []
+    assert store.list_drafts() == []
+
+
+def test_passive_watcher_blocks_live_sync_exception(tmp_path):
+    store = _store(tmp_path)
+    store.save_conversation(
+        ConversationRecord(
+            conversation_id="conv_001",
+            source="boss_sync",
+            state={"security_id": "sec_001"},
+        )
+    )
+    store.save_message(
+        MessageRecord(
+            message_id="msg_001",
+            conversation_id="conv_001",
+            message_text="介绍下你的 RAG 项目",
+            direction="inbound",
+        )
+    )
+    delivery = _RecordingDelivery()
+    config = _config(tmp_path)
+    config.live_sync = True
+    watcher = BossPassiveWatcher(
+        store=store,
+        service=_integration_service(store),
+        config=config,
+        delivery=delivery,
+        message_syncer=_RaisingSyncer(),
+    )
+
+    result = watcher.run_once(live_sync=True)
+
+    assert result.processed == 0
+    assert result.blocked == 1
+    assert result.tasks[0]["status"] == "blocked_manual_required"
+    assert result.tasks[0]["error_message"] == "bridge_unavailable"
+    assert delivery.calls == []
+    assert store.list_drafts() == []
+
+
 def test_passive_watcher_respects_pause_control(tmp_path):
     store = _store(tmp_path)
     store.save_conversation(
@@ -434,3 +566,59 @@ def test_passive_watcher_respects_pause_control(tmp_path):
     assert result.blocked == 1
     assert result.tasks[0]["status"] == "paused"
     assert delivery.calls == []
+
+
+def test_passive_watcher_respects_global_pause_and_resume(tmp_path):
+    store = _store(tmp_path)
+    store.save_conversation(
+        ConversationRecord(
+            conversation_id="conv_001",
+            source="boss_sync",
+            state={"security_id": "sec_001"},
+        )
+    )
+    store.save_message(
+        MessageRecord(
+            message_id="msg_001",
+            conversation_id="conv_001",
+            message_text="介绍下你的 RAG 项目",
+            direction="inbound",
+        )
+    )
+    store.append_audit_log(
+        AuditLogRecord.new(
+            event_type="watcher_control",
+            entity_type="conversation",
+            entity_id="global",
+            payload={"action": "pause", "conversation_id": None, "scope": "global"},
+        )
+    )
+    delivery = _RecordingDelivery()
+    watcher = BossPassiveWatcher(
+        store=store,
+        service=_integration_service(store),
+        config=_config(tmp_path),
+        delivery=delivery,
+    )
+
+    paused = watcher.run_once(live_sync=False)
+
+    assert paused.processed == 0
+    assert paused.blocked == 1
+    assert paused.tasks[0]["status"] == "paused"
+    assert delivery.calls == []
+
+    store.append_audit_log(
+        AuditLogRecord.new(
+            event_type="watcher_control",
+            entity_type="conversation",
+            entity_id="global",
+            payload={"action": "resume", "conversation_id": None, "scope": "global"},
+        )
+    )
+
+    resumed = watcher.run_once(live_sync=False)
+
+    assert resumed.processed == 1
+    assert resumed.blocked == 0
+    assert delivery.calls[0]["message"].startswith("您好，我主要负责")

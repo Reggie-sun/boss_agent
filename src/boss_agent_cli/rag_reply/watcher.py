@@ -73,13 +73,26 @@ class BossPassiveWatcher:
     def run_once(self, *, live_sync: bool | None = None) -> WatcherRunResult:
         if live_sync is None:
             live_sync = self.config.live_sync
-        if live_sync and self.message_syncer is not None:
-            self.message_syncer.sync_messages()
+        if live_sync:
+            sync_error = self._sync_live_messages()
+            if sync_error is not None:
+                return WatcherRunResult(
+                    processed=0,
+                    skipped=0,
+                    blocked=1,
+                    tasks=[sync_error],
+                )
         processed = 0
         skipped = 0
         blocked = 0
         tasks: list[dict[str, object]] = []
         for message in self._candidate_messages():
+            if self._already_processed(message.message_id):
+                skipped += 1
+                tasks.append(
+                    {"message_id": message.message_id, "status": "skipped_duplicate"}
+                )
+                continue
             if self._is_paused(message.conversation_id):
                 blocked += 1
                 task = self._record_task(
@@ -90,12 +103,6 @@ class BossPassiveWatcher:
                     error_message="conversation_paused",
                 )
                 tasks.append(task)
-                continue
-            if self._already_processed(message.message_id):
-                skipped += 1
-                tasks.append(
-                    {"message_id": message.message_id, "status": "skipped_duplicate"}
-                )
                 continue
             task = self._process_message(message)
             tasks.append(task)
@@ -108,6 +115,21 @@ class BossPassiveWatcher:
         return WatcherRunResult(
             processed=processed, skipped=skipped, blocked=blocked, tasks=tasks
         )
+
+    def _sync_live_messages(self) -> dict[str, object] | None:
+        if self.message_syncer is None:
+            return _sync_blocked_task("live_sync_unavailable")
+        try:
+            result = self.message_syncer.sync_messages() or {}
+        except Exception as exc:
+            error_message = str(exc) or exc.__class__.__name__
+            return _sync_blocked_task(error_message, {"error_message": error_message})
+        if result.get("ok") is False:
+            error_message = str(
+                result.get("error_message") or result.get("status") or "live_sync_failed"
+            )
+            return _sync_blocked_task(error_message, result)
+        return None
 
     def _candidate_messages(self) -> list[MessageRecord]:
         return [
@@ -182,11 +204,19 @@ class BossPassiveWatcher:
 
     def _is_paused(self, conversation_id: str) -> bool:
         paused = False
-        for entry in self.store.list_audit_logs(conversation_id):
+        for entry in self.store.list_audit_logs():
             if entry.event_type != "watcher_control":
                 continue
             payload_conversation_id = entry.payload.get("conversation_id")
-            if payload_conversation_id and payload_conversation_id != conversation_id:
+            applies_globally = (
+                entry.entity_id == "global"
+                or entry.payload.get("scope") == "global"
+            )
+            applies_to_conversation = (
+                entry.entity_id == conversation_id
+                or payload_conversation_id == conversation_id
+            )
+            if not (applies_globally or applies_to_conversation):
                 continue
             action = str(entry.payload.get("action") or "").lower()
             if action == "pause":
@@ -213,6 +243,25 @@ class BossPassiveWatcher:
             "company": str(state.get("company") or ""),
             "title": str(state.get("title") or ""),
         }
+
+
+def _sync_blocked_task(
+    error_message: str,
+    sync: dict[str, object] | None = None,
+) -> dict[str, object]:
+    return {
+        "message_id": "",
+        "conversation_id": "",
+        "draft_id": "",
+        "intent": "unknown",
+        "status": "blocked_manual_required",
+        "error_message": error_message,
+        "dry_run": False,
+        "action": {},
+        "delivery": {},
+        "live_sync": True,
+        "sync": sync or {},
+    }
 
 
 def _action_payload(action: AutoReplyAction | None) -> dict[str, object]:
