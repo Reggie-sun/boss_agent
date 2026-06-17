@@ -498,6 +498,13 @@ class BrowserSession:
 		cdp_url = self._cdp_url or CDP_DEFAULT_URL
 		return _cdp_evaluate_in_chat_tab(cdp_url, script, arg)
 
+	def evaluate_js_in_zhipin_tab(self, script: str, arg: Any = None) -> Any:
+		"""Run JS in an existing BOSS candidate tab via raw CDP."""
+		if self._is_bridge:
+			raise RuntimeError("evaluate_js_in_zhipin_tab requires CDP mode")
+		cdp_url = self._raw_cdp_url or self._cdp_url or CDP_DEFAULT_URL
+		return _cdp_evaluate_in_zhipin_tab(cdp_url, script, arg)
+
 	def evaluate_js_with_chat_events(self, script: str, arg: Any = None, *, listen_ms: int = 3000) -> dict[str, Any]:
 		"""Run JS in the recruiter chat tab and collect short-lived chat WS events.
 

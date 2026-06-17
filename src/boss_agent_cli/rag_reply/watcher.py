@@ -155,11 +155,12 @@ class BossPassiveWatcher:
         return None
 
     def _candidate_messages(self) -> list[MessageRecord]:
-        return [
-            message
-            for message in self.store.list_messages()
-            if message.direction == "inbound" and message.message_text.strip()
-        ]
+        latest_by_conversation: dict[str, MessageRecord] = {}
+        for message in self.store.list_messages():
+            if message.direction != "inbound" or not message.message_text.strip():
+                continue
+            latest_by_conversation[message.conversation_id] = message
+        return list(latest_by_conversation.values())
 
     def _already_processed(self, message_id: str) -> bool:
         for entry in self.store.list_audit_logs():
@@ -272,10 +273,23 @@ class BossPassiveWatcher:
             if conversation and isinstance(conversation.state, dict)
             else {}
         )
+        recruiter = None
+        if conversation and conversation.recruiter_id:
+            recruiter = self.store.get_recruiter(str(conversation.recruiter_id))
         return {
-            "recruiter_name": str(state.get("recruiter_name") or ""),
+            "recruiter_name": str(
+                state.get("recruiter_name")
+                or (recruiter.display_name if recruiter else "")
+                or ""
+            ),
             "company": str(state.get("company") or ""),
             "title": str(state.get("title") or ""),
+            "security_id": str(state.get("security_id") or ""),
+            "gid": str(state.get("gid") or ""),
+            "friend_id": str(state.get("friend_id") or ""),
+            "uid": str(state.get("uid") or ""),
+            "encrypt_boss_id": str(state.get("encrypt_boss_id") or ""),
+            "recruiter_id": str(state.get("recruiter_id") or (conversation.recruiter_id if conversation else "") or ""),
         }
 
 

@@ -419,6 +419,106 @@ def test_passive_watcher_syncs_live_messages_before_processing(tmp_path):
     assert delivery.calls[0]["message"].startswith("您好，我主要负责")
 
 
+def test_passive_watcher_passes_live_target_identity_to_delivery(tmp_path):
+    store = _store(tmp_path)
+    store.save_conversation(
+        ConversationRecord(
+            conversation_id="conv_001",
+            source="boss_sync",
+            recruiter_id="boss_recruiter_530232561",
+            state={
+                "security_id": "api_sec_001",
+                "gid": "530232561",
+                "friend_id": "530232561",
+                "uid": "530232561",
+                "encrypt_boss_id": "enc_boss_001",
+                "recruiter_name": "李HR",
+                "company": "测试公司",
+                "title": "HRBP",
+            },
+        )
+    )
+    store.save_message(
+        MessageRecord(
+            message_id="msg_001",
+            conversation_id="conv_001",
+            message_text="介绍下你的 RAG 项目",
+            direction="inbound",
+        )
+    )
+    delivery = _RecordingDelivery()
+    config = _config(tmp_path)
+    config.live_sync = True
+    watcher = BossPassiveWatcher(
+        store=store,
+        service=_integration_service(store),
+        config=config,
+        delivery=delivery,
+        message_syncer=_Syncer(),
+    )
+
+    result = watcher.run_once(live_sync=True)
+
+    assert result.processed == 1
+    assert delivery.calls[0]["security_id"] == "api_sec_001"
+    assert delivery.calls[0]["target"] == {
+        "recruiter_name": "李HR",
+        "company": "测试公司",
+        "title": "HRBP",
+        "security_id": "api_sec_001",
+        "gid": "530232561",
+        "friend_id": "530232561",
+        "uid": "530232561",
+        "encrypt_boss_id": "enc_boss_001",
+        "recruiter_id": "boss_recruiter_530232561",
+    }
+
+
+def test_passive_watcher_processes_only_latest_inbound_per_conversation(tmp_path):
+    store = _store(tmp_path)
+    store.save_conversation(
+        ConversationRecord(
+            conversation_id="conv_001",
+            source="boss_sync",
+            state={"security_id": "sec_001"},
+        )
+    )
+    store.save_message(
+        MessageRecord(
+            message_id="msg_001",
+            conversation_id="conv_001",
+            message_text="你好",
+            direction="inbound",
+            created_at="2026-06-17T08:00:00+00:00",
+        )
+    )
+    store.save_message(
+        MessageRecord(
+            message_id="msg_002",
+            conversation_id="conv_001",
+            message_text="介绍下你的 RAG 项目",
+            direction="inbound",
+            created_at="2026-06-17T08:01:00+00:00",
+        )
+    )
+    delivery = _RecordingDelivery()
+    config = _config(tmp_path)
+    config.live_sync = True
+    watcher = BossPassiveWatcher(
+        store=store,
+        service=_integration_service(store),
+        config=config,
+        delivery=delivery,
+        message_syncer=_Syncer(),
+    )
+
+    result = watcher.run_once(live_sync=True)
+
+    assert result.processed == 1
+    assert len(delivery.calls) == 1
+    assert result.tasks[0]["message_id"] == "msg_002"
+
+
 def test_passive_watcher_blocks_live_sync_without_syncer(tmp_path):
     store = _store(tmp_path)
     store.save_conversation(

@@ -311,14 +311,20 @@ class BossAutomationAdapter:
 
 	def _save_conversation_from_friend_item(self, raw_item: dict[str, Any]) -> ConversationRecord:
 		security_id = str(raw_item.get("securityId") or "")
-		gid = str(raw_item.get("uid") or raw_item.get("encryptUid") or "")
+		uid = str(raw_item.get("uid") or "")
+		friend_id = str(raw_item.get("friendId") or raw_item.get("friend_id") or uid)
+		gid = str(raw_item.get("uid") or raw_item.get("friendId") or raw_item.get("encryptUid") or "")
 		job_id = str(raw_item.get("encryptJobId") or raw_item.get("jobId") or "")
+		encrypt_boss_id = str(raw_item.get("encryptBossId") or raw_item.get("bossId") or "")
 		recruiter_id = self._recruiter_id(raw_item)
+		recruiter_name = str(raw_item.get("name") or raw_item.get("friendName") or "")
+		company = str(raw_item.get("brandName") or raw_item.get("companyName") or "")
+		title = str(raw_item.get("title") or "")
 
 		recruiter = RecruiterRecord(
 			recruiter_id=recruiter_id,
-			display_name=str(raw_item.get("name") or raw_item.get("friendName") or ""),
-			company=str(raw_item.get("brandName") or raw_item.get("companyName") or ""),
+			display_name=recruiter_name,
+			company=company,
 			profile=dict(raw_item),
 		)
 		self.store.save_recruiter(recruiter)
@@ -333,9 +339,14 @@ class BossAutomationAdapter:
 			state={
 				"security_id": security_id,
 				"gid": gid,
+				"uid": uid,
+				"friend_id": friend_id,
+				"encrypt_boss_id": encrypt_boss_id,
+				"recruiter_name": recruiter_name,
+				"recruiter_id": recruiter_id,
 				"last_msg": raw_item.get("lastMsg"),
-				"title": raw_item.get("title"),
-				"company": raw_item.get("brandName"),
+				"title": title,
+				"company": company,
 				"unread_count": raw_item.get("unreadMsgCount") or 0,
 			},
 			updated_at=utc_now_iso(),

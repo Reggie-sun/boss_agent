@@ -284,6 +284,84 @@ def test_agent_send_uses_agent_command_name(monkeypatch, tmp_path: Path):
 	assert parsed["data"]["results"] == ["消息已发送", "在线简历已发送"]
 
 
+def test_cli_watcher_delivery_forwards_target_identity(monkeypatch):
+	seen: dict[str, object] = {}
+
+	def _fake_execute(ctx, **kwargs):
+		seen.update(kwargs)
+		return ChatReplyExecutionResult(
+			security_id=kwargs["security_id"],
+			message=kwargs["message"],
+			send_resume=kwargs["send_resume"],
+			message_sent=True,
+			resume_sent=False,
+			results=["消息已发送"],
+		)
+
+	monkeypatch.setattr(rag_commands, "execute_chat_reply", _fake_execute)
+	delivery = rag_commands._CliWatcherDelivery(SimpleNamespace())
+
+	result = delivery.send(
+		security_id="api_sec_001",
+		message="hello",
+		target={
+			"recruiter_name": "李HR",
+			"company": "测试公司",
+			"title": "HRBP",
+			"gid": "530232561",
+			"friend_id": "530232561",
+			"uid": "530232561",
+			"encrypt_boss_id": "enc_boss_001",
+			"recruiter_id": "boss_recruiter_530232561",
+		},
+	)
+
+	assert result["ok"] is True
+	assert seen["security_id"] == "api_sec_001"
+	assert seen["message"] == "hello"
+	assert seen["target_recruiter_name"] == "李HR"
+	assert seen["target_company"] == "测试公司"
+	assert seen["target_title"] == "HRBP"
+	assert seen["target_gid"] == "530232561"
+	assert seen["target_friend_id"] == "530232561"
+	assert seen["target_uid"] == "530232561"
+	assert seen["target_encrypt_boss_id"] == "enc_boss_001"
+	assert seen["target_recruiter_id"] == "boss_recruiter_530232561"
+
+
+def test_cli_watcher_delivery_maps_attachment_request_to_online_resume(monkeypatch):
+	seen: dict[str, object] = {}
+
+	def _fake_execute(ctx, **kwargs):
+		seen.update(kwargs)
+		return ChatReplyExecutionResult(
+			security_id=kwargs["security_id"],
+			message=kwargs["message"],
+			send_resume=kwargs["send_resume"],
+			message_sent=True,
+			resume_sent=True,
+			results=["消息已发送", "在线简历已发送"],
+		)
+
+	monkeypatch.setattr(rag_commands, "execute_chat_reply", _fake_execute)
+	delivery = rag_commands._CliWatcherDelivery(SimpleNamespace())
+
+	result = delivery.send(
+		security_id="api_sec_001",
+		message="可以的，我发您简历。",
+		send_attachment_resume=True,
+		resume_file="/tmp/resume.pdf",
+	)
+
+	assert result["ok"] is True
+	assert result["resume_sent"] is True
+	assert result["requested_resume_file"] == "/tmp/resume.pdf"
+	assert result["resume_delivery_method"] == "online_resume"
+	assert seen["send_resume"] is True
+	assert seen["send_attachment_resume"] is False
+	assert seen["resume_file_path"] is None
+
+
 def test_agent_send_attachment_resume_does_not_send_draft_text(monkeypatch, tmp_path: Path):
 	store = RagReplyStore(tmp_path / "boss-rag.sqlite3")
 	store.initialize()

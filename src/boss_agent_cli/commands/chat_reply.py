@@ -33,6 +33,11 @@ def execute_chat_reply(
 	target_recruiter_name: str = "",
 	target_company: str = "",
 	target_title: str = "",
+	target_gid: str = "",
+	target_friend_id: str = "",
+	target_uid: str = "",
+	target_encrypt_boss_id: str = "",
+	target_recruiter_id: str = "",
 ) -> ChatReplyExecutionResult:
 	"""Send a chat reply and optionally the online resume through the existing CDP path."""
 	data_dir = ctx.obj["data_dir"]
@@ -92,7 +97,18 @@ def execute_chat_reply(
 				resume_file_path=str(attachment_path),
 			)
 
-		message_response = client.send_chat_message(security_id, message)
+		message_response = client.send_chat_message(
+			security_id,
+			message,
+			target_recruiter_name=target_recruiter_name,
+			target_company=target_company,
+			target_title=target_title,
+			target_gid=target_gid,
+			target_friend_id=target_friend_id,
+			target_uid=target_uid,
+			target_encrypt_boss_id=target_encrypt_boss_id,
+			target_recruiter_id=target_recruiter_id,
+		)
 		if message_response.get("code") != 0:
 			return ChatReplyExecutionResult(
 				security_id=security_id,
@@ -115,7 +131,17 @@ def execute_chat_reply(
 				results=results,
 			)
 
-		resume_response = client.send_resume(security_id)
+		resume_response = client.send_resume(
+			security_id,
+			target_recruiter_name=target_recruiter_name,
+			target_company=target_company,
+			target_title=target_title,
+			target_gid=target_gid,
+			target_friend_id=target_friend_id,
+			target_uid=target_uid,
+			target_encrypt_boss_id=target_encrypt_boss_id,
+			target_recruiter_id=target_recruiter_id,
+		)
 		if resume_response.get("code") == 0:
 			results.append("在线简历已发送")
 			return ChatReplyExecutionResult(

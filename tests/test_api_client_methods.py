@@ -359,6 +359,84 @@ def test_send_resume_reports_login_redirect_before_dom_send():
 	fake_page.evaluate.assert_called()
 
 
+def test_send_chat_message_uses_raw_cdp_candidate_tab():
+	client = BossClient(_StubAuth(), cdp_url="http://localhost:9229")
+	fake_browser = MagicMock()
+	fake_browser._raw_cdp_url = "http://localhost:9229"
+	fake_browser.evaluate_js_in_zhipin_tab.side_effect = [
+		{"ready": True, "href": "https://www.zhipin.com/web/geek/chat", "title": "BOSS直聘"},
+		{"ok": True, "method": "handleOpenChat+dom", "friendName": "李HR"},
+	]
+	client._get_browser = MagicMock(return_value=fake_browser)
+
+	with patch(
+		"boss_agent_cli.api.browser_client.ensure_candidate_chat_page_via_cdp",
+		return_value={
+			"ok": True,
+			"status": "ready",
+			"url": "https://www.zhipin.com/web/geek/chat",
+		},
+	):
+		result = client.send_chat_message(
+			"sid",
+			"hello",
+			target_recruiter_name="李HR",
+			target_company="测试公司",
+			target_title="HRBP",
+			target_gid="530232561",
+			target_friend_id="530232561",
+			target_uid="530232561",
+			target_encrypt_boss_id="enc_boss_001",
+			target_recruiter_id="boss_recruiter_530232561",
+		)
+
+	assert result["code"] == 0
+	assert result["method"] == "handleOpenChat+dom"
+	assert fake_browser.evaluate_js_in_zhipin_tab.call_count == 2
+	script, arg = fake_browser.evaluate_js_in_zhipin_tab.call_args.args
+	assert "findTargetFriend" in script
+	assert arg["sid"] == "sid"
+	assert arg["content"] == "hello"
+	assert arg["target"] == {
+		"security_id": "sid",
+		"recruiter_name": "李HR",
+		"company": "测试公司",
+		"title": "HRBP",
+		"gid": "530232561",
+		"friend_id": "530232561",
+		"uid": "530232561",
+		"encrypt_boss_id": "enc_boss_001",
+		"recruiter_id": "boss_recruiter_530232561",
+	}
+
+
+def test_send_resume_attachment_raw_cdp_reports_file_input_boundary(tmp_path):
+	client = BossClient(_StubAuth(), cdp_url="http://localhost:9229")
+	resume_file = tmp_path / "resume.pdf"
+	resume_file.write_bytes(b"%PDF-1.4\n")
+	fake_browser = MagicMock()
+	fake_browser._raw_cdp_url = "http://localhost:9229"
+	fake_browser.evaluate_js_in_zhipin_tab.return_value = {
+		"ready": True,
+		"href": "https://www.zhipin.com/web/geek/chat",
+		"title": "BOSS直聘",
+	}
+	client._get_browser = MagicMock(return_value=fake_browser)
+
+	with patch(
+		"boss_agent_cli.api.browser_client.ensure_candidate_chat_page_via_cdp",
+		return_value={
+			"ok": True,
+			"status": "ready",
+			"url": "https://www.zhipin.com/web/geek/chat",
+		},
+	):
+		result = client.send_resume_attachment("sid", str(resume_file))
+
+	assert result["code"] == -1
+	assert "附件简历上传需要 Playwright CDP" in result["message"]
+
+
 def test_send_resume_attachment_recovers_from_open_navigation(tmp_path):
 	client = BossClient(_StubAuth())
 	client._navigate_to_chat = MagicMock(return_value={"ok": True, "url": "https://www.zhipin.com/web/geek/chat"})

@@ -294,82 +294,199 @@ class BossClient:
 		data = {"type": exchange_type, "securityId": security_id, "uniqueId": uid, "name": name}
 		return self._browser_request("POST", endpoints.EXCHANGE_REQUEST_URL, data=data)
 
-	_SEND_MSG_SCRIPT = '''(async () => {{
-		const sid = "{security_id}";
-		const content = "{content}";
-		try {{
+	_CHAT_TARGET_HELPER_SCRIPT = '''
+		function findTargetFriend(list, sid, target) {
+			const value = (input) => String(input ?? "").trim();
+			const normalize = (input) => value(input).replace(/\\s+/g, "").replace(/\\.\\.\\.$/, "").toLowerCase();
+			const stripRecruiterPrefix = (input) => value(input).replace(/^boss_recruiter_/, "");
+			const publicSummary = (friend) => ({
+				name: friend.name || friend.bossName || friend.friendName || "",
+				company: friend.brandName || friend.companyName || friend.company || "",
+				title: friend.title || friend.sourceTitle || friend.positionName || friend.jobName || "",
+				friendId: value(friend.friendId || friend.friend_id || friend.uid),
+				uid: value(friend.uid),
+				securityIdPrefix: value(friend.securityId).slice(0, 12),
+				encryptBossIdPrefix: value(friend.encryptBossId).slice(0, 12),
+			});
+			const exactKeys = [
+				target.gid,
+				target.friend_id,
+				target.friendId,
+				target.uid,
+				target.unique_id,
+				target.uniqueId,
+				stripRecruiterPrefix(target.recruiter_id),
+				stripRecruiterPrefix(target.recruiterId),
+			].map(value).filter(Boolean);
+			const encryptedKeys = [
+				sid,
+				target.security_id,
+				target.securityId,
+				target.encrypt_boss_id,
+				target.encryptBossId,
+			].map(value).filter(item => item.length >= 12);
+			const friendIdentityValues = (friend) => ({
+				exact: [
+					friend.friendId,
+					friend.friend_id,
+					friend.uid,
+					friend.gid,
+					friend.uniqueId,
+					friend.mid,
+				].map(value).filter(Boolean),
+				encrypted: [
+					friend.securityId,
+					friend.encryptBossId,
+					friend.encryptUid,
+					friend.encryptJobId,
+				].map(value).filter(Boolean),
+			});
+			const byIdentity = list.filter(friend => {
+				const values = friendIdentityValues(friend);
+				if (exactKeys.some(key => values.exact.includes(key))) return true;
+				return encryptedKeys.some(key => {
+					const keyPrefix = key.slice(0, Math.min(30, key.length));
+					return values.encrypted.some(item =>
+						item.includes(keyPrefix) || (item.length >= 12 && key.includes(item.slice(0, Math.min(30, item.length))))
+					);
+				});
+			});
+			if (byIdentity.length === 1) return { ok: true, friend: byIdentity[0] };
+			if (byIdentity.length > 1) {
+				return {
+					ok: false,
+					error: "target friend ambiguous",
+					candidates: byIdentity.slice(0, 8).map(publicSummary),
+				};
+			}
+
+			const targetName = normalize(target.recruiter_name || target.recruiterName || target.name);
+			const targetCompany = normalize(target.company);
+			const targetTitle = normalize(target.title);
+			if (targetName) {
+				const identityMatches = list.filter(friend => {
+					const item = {
+						name: normalize(friend.name || friend.bossName || friend.friendName),
+						company: normalize(friend.brandName || friend.companyName || friend.company),
+						title: normalize(friend.title || friend.sourceTitle || friend.positionName || friend.jobName),
+					};
+					const nameMatch = item.name === targetName;
+					const companyMatch = targetCompany && item.company && (
+						item.company === targetCompany || item.company.includes(targetCompany) || targetCompany.includes(item.company)
+					);
+					const titleMatch = targetTitle && item.title && (
+						item.title === targetTitle || item.title.includes(targetTitle) || targetTitle.includes(item.title)
+					);
+					return nameMatch && (companyMatch || titleMatch);
+				});
+				if (identityMatches.length === 1) return { ok: true, friend: identityMatches[0] };
+				if (identityMatches.length > 1) {
+					return {
+						ok: false,
+						error: "target friend ambiguous by identity",
+						candidates: identityMatches.slice(0, 8).map(publicSummary),
+					};
+				}
+				const nameMatches = list.filter(friend => normalize(friend.name || friend.bossName || friend.friendName) === targetName);
+				if (nameMatches.length === 1) return { ok: true, friend: nameMatches[0] };
+				if (nameMatches.length > 1) {
+					return {
+						ok: false,
+						error: "target friend ambiguous by name",
+						candidates: nameMatches.slice(0, 8).map(publicSummary),
+					};
+				}
+			}
+			return {
+				ok: false,
+				error: "target friend not found",
+				target: {
+					recruiter_name: target.recruiter_name || target.recruiterName || "",
+					company: target.company || "",
+					title: target.title || "",
+					gid: target.gid || "",
+					friend_id: target.friend_id || target.friendId || "",
+					securityIdPrefix: value(sid).slice(0, 12),
+				},
+				candidates: list.slice(0, 8).map(publicSummary),
+			};
+		}
+	'''
+
+	_SEND_MSG_SCRIPT = '''async ({ sid, content, target }) => {
+%s
+		try {
 			// 1. 通过 boss-list 找到好友并打开对话
 			const ulc = document.querySelector(".user-list-content");
-			if (!ulc || !ulc.__vue__) return {{ ok: false, error: "user-list-content not found" }};
+			if (!ulc || !ulc.__vue__) return { ok: false, error: "user-list-content not found" };
 			const bossList = ulc.__vue__.$parent;
 			const list = bossList.list || [];
-			let friend = list.find(f => (f.securityId || "").includes(sid.substring(0, 30)) || (f.encryptBossId || "").includes(sid.substring(0, 30)));
-			if (!friend) friend = list[0]; // fallback: 第一个好友用于测试
-			if (!friend) return {{ ok: false, error: "no friends in list" }};
+			const match = findTargetFriend(list, sid, target || {});
+			if (!match.ok) return match;
+			const friend = match.friend;
 			bossList.handleOpenChat(friend);
 
 			// 2. 等 chat-input 出现
 			let chatInput = null;
-			for (let i = 0; i < 20; i++) {{
+			for (let i = 0; i < 20; i++) {
 				await new Promise(r => setTimeout(r, 500));
 				chatInput = document.querySelector(".chat-input[contenteditable=\\"true\\"]");
 				if (chatInput) break;
-			}}
-			if (!chatInput) return {{ ok: false, error: "chat-input not found after open" }};
+			}
+			if (!chatInput) return { ok: false, error: "chat-input not found after open" };
 
 			// 3. 填入内容
 			chatInput.focus();
 			chatInput.innerText = content;
-			chatInput.dispatchEvent(new Event("input", {{ bubbles: true }}));
-			chatInput.dispatchEvent(new Event("change", {{ bubbles: true }}));
+			chatInput.dispatchEvent(new Event("input", { bubbles: true }));
+			chatInput.dispatchEvent(new Event("change", { bubbles: true }));
 
 			// 4. 等发送按钮 enabled
 			await new Promise(r => setTimeout(r, 500));
 			const sendBtn = document.querySelector(".btn-send:not(.disabled)");
-			if (sendBtn) {{
+			if (sendBtn) {
 				sendBtn.click();
-				return {{ ok: true, method: "handleOpenChat+dom", friendName: friend.name }};
-			}}
+				return { ok: true, method: "handleOpenChat+dom", friendName: friend.name };
+			}
 
 			// fallback: 按 Enter 发送 (contenteditable + Enter 键)
-			chatInput.dispatchEvent(new KeyboardEvent("keydown", {{ key: "Enter", code: "Enter", keyCode: 13, bubbles: true }}));
-			return {{ ok: true, method: "handleOpenChat+enter", friendName: friend.name }};
-		}} catch(e) {{ return {{ ok: false, error: e.message }}; }}
-	}})()'''
+			chatInput.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", code: "Enter", keyCode: 13, bubbles: true }));
+			return { ok: true, method: "handleOpenChat+enter", friendName: friend.name };
+		} catch(e) { return { ok: false, error: e.message }; }
+	}''' % _CHAT_TARGET_HELPER_SCRIPT
 
-	_SEND_RESUME_SCRIPT = '''(async () => {{
-		const sid = "{security_id}";
-		try {{
+	_SEND_RESUME_SCRIPT = '''async ({ sid, target }) => {
+%s
+		try {
+			const ulc = document.querySelector(".user-list-content");
+			const bossList = ulc && ulc.__vue__ && ulc.__vue__.$parent;
+			const list = (bossList && bossList.list) || [];
+			const match = findTargetFriend(list, sid, target || {});
+			if (!match.ok) return match;
+			const friend = match.friend;
+			if (bossList && friend) bossList.handleOpenChat(friend);
+			await new Promise(r => setTimeout(r, 1000));
 			const ig = window.iGeekRoot;
-			if (!ig || !ig.ChatDialog) return {{ ok: false, error: "no iGeekRoot" }};
-			const cs = window.chatStore;
-			let fd = null;
-			const friends = cs.friends || {{}};
-			for (const [k, v] of Object.entries(friends)) {{
-				if (typeof v === "string" && v.includes(sid)) {{
-					const info = cs.getFriendInfoById(v);
-					if (info) {{ fd = info; break; }}
-				}}
-			}}
-			if (!fd) fd = cs.getFriendInfoById(Object.values(friends)[0]);
-			if (!fd) return {{ ok: false, error: "friend not found" }};
-			ig.ChatDialog.openSendOnlineResume({{
-				securityId: fd.securityId || fd.encryptBossId || sid,
-				mid: fd.mid || "",
-				friendSource: fd.friendSource || 1,
-			}});
+			if (!ig || !ig.ChatDialog) return { ok: false, error: "no iGeekRoot" };
+			ig.ChatDialog.openSendOnlineResume({
+				securityId: friend.securityId || friend.encryptBossId || sid,
+				mid: friend.mid || friend.uid || friend.friendId || "",
+				friendSource: friend.friendSource || 1,
+			});
 			await new Promise(r => setTimeout(r, 2000));
 			const confirmBtns = [...document.querySelectorAll("button")]
 				.filter(b => b.textContent.includes("发送") || b.textContent.includes("确认") || b.textContent.includes("投递"));
-			if (confirmBtns.length > 0) {{ confirmBtns[0].click(); }}
-			return {{ ok: true, method: "openSendOnlineResume" }};
-		}} catch(e) {{ return {{ ok: false, error: e.message }}; }}
-	}})()'''
+			if (confirmBtns.length > 0) { confirmBtns[0].click(); }
+			return { ok: true, method: "openSendOnlineResume" };
+		} catch(e) { return { ok: false, error: e.message }; }
+	}''' % _CHAT_TARGET_HELPER_SCRIPT
 
 	def _navigate_to_chat(self) -> dict[str, Any]:
 		"""确保 CDP 页面在候选人聊天页，等待聊天列表就绪。"""
 		browser = self._get_browser()
 		browser._ensure_started()
+		if self._browser_raw_cdp_url(browser):
+			return self._navigate_to_chat_via_raw_cdp(browser)
 		chat_url = "https://www.zhipin.com/web/geek/chat"
 		# 始终导航到干净的聊天 URL（避免旧 query 参数干扰）
 		try:
@@ -428,31 +545,183 @@ class BossClient:
 			"title": page_title,
 		}
 
-	def send_chat_message(self, security_id: str, content: str) -> dict[str, Any]:
+	def _navigate_to_chat_via_raw_cdp(self, browser: "BrowserSession") -> dict[str, Any]:
+		"""Ensure candidate chat is ready without creating a Playwright page."""
+		from boss_agent_cli.api.browser_client import ensure_candidate_chat_page_via_cdp
+
+		cdp_url = self._browser_raw_cdp_url(browser) or self._cdp_url or ""
+		chat_page = ensure_candidate_chat_page_via_cdp(cdp_url or None)
+		if not chat_page.get("ok"):
+			return {
+				"ok": False,
+				"error": str(chat_page.get("code") or "boss_chat_page_not_ready"),
+				"message": str(chat_page.get("message") or "Boss 聊天页未就绪。"),
+				"url": str(chat_page.get("url") or ""),
+				"title": str(chat_page.get("title") or ""),
+			}
+		ready_script = """(() => {
+			const ulc = document.querySelector('.user-list-content');
+			const vueReady = !!(
+				ulc &&
+				ulc.__vue__ &&
+				ulc.__vue__.$parent &&
+				ulc.__vue__.$parent.list &&
+				ulc.__vue__.$parent.list.length > 0
+			);
+			const domReady = !!(ulc && ulc.querySelector('li'));
+			return {
+				ready: vueReady || domReady,
+				href: location.href,
+				title: document.title,
+			};
+		})()"""
+		for _ in range(15):
+			try:
+				ready = browser.evaluate_js_in_zhipin_tab(ready_script)
+				if isinstance(ready, dict) and ready.get("ready"):
+					return {"ok": True, "url": str(ready.get("href") or chat_page.get("url") or "")}
+			except Exception:
+				pass
+			time.sleep(1)
+		page_url = ""
+		page_title = ""
+		try:
+			ready = browser.evaluate_js_in_zhipin_tab(ready_script)
+			if isinstance(ready, dict):
+				page_url = str(ready.get("href") or "")
+				page_title = str(ready.get("title") or "")
+		except Exception:
+			pass
+		if "/web/user" in page_url or "登录" in page_title or "注册登录" in page_title:
+			return {
+				"ok": False,
+				"error": "boss_chat_login_required",
+				"message": "Boss CDP 登录态已失效，聊天页被重定向到登录页。请先执行 boss login --cdp，或在当前 CDP Chrome 内重新登录 BOSS。",
+				"url": page_url,
+				"title": page_title,
+			}
+		return {
+			"ok": False,
+			"error": "boss_chat_page_not_ready",
+			"message": "Boss 聊天页未就绪，当前无法发送消息。请确认聊天列表已加载，或刷新 CDP 登录态后重试。",
+			"url": page_url,
+			"title": page_title,
+		}
+
+	def _evaluate_candidate_chat_script(self, browser: "BrowserSession", script: str, arg: Any | None = None) -> Any:
+		if self._browser_raw_cdp_url(browser):
+			return browser.evaluate_js_in_zhipin_tab(script, arg)
+		if arg is None:
+			return browser._page.evaluate(script)
+		return browser._page.evaluate(script, arg)
+
+	@staticmethod
+	def _browser_raw_cdp_url(browser: "BrowserSession") -> str:
+		value = getattr(browser, "_raw_cdp_url", None)
+		return value if isinstance(value, str) and value else ""
+
+	@staticmethod
+	def _chat_target_payload(
+		*,
+		security_id: str,
+		target_recruiter_name: str = "",
+		target_company: str = "",
+		target_title: str = "",
+		target_gid: str = "",
+		target_friend_id: str = "",
+		target_uid: str = "",
+		target_encrypt_boss_id: str = "",
+		target_recruiter_id: str = "",
+	) -> dict[str, str]:
+		return {
+			"security_id": str(security_id or "").strip(),
+			"recruiter_name": str(target_recruiter_name or "").strip(),
+			"company": str(target_company or "").strip(),
+			"title": str(target_title or "").strip(),
+			"gid": str(target_gid or "").strip(),
+			"friend_id": str(target_friend_id or "").strip(),
+			"uid": str(target_uid or "").strip(),
+			"encrypt_boss_id": str(target_encrypt_boss_id or "").strip(),
+			"recruiter_id": str(target_recruiter_id or "").strip(),
+		}
+
+	def send_chat_message(
+		self,
+		security_id: str,
+		content: str,
+		*,
+		target_recruiter_name: str = "",
+		target_company: str = "",
+		target_title: str = "",
+		target_gid: str = "",
+		target_friend_id: str = "",
+		target_uid: str = "",
+		target_encrypt_boss_id: str = "",
+		target_recruiter_id: str = "",
+	) -> dict[str, Any]:
 		"""通过 CDP 在候选人聊天页发送文字消息。"""
 		navigation = self._navigate_to_chat()
 		if not navigation.get("ok"):
 			return {"code": -1, "message": str(navigation.get("message") or "聊天页未就绪"), "detail": navigation}
 		browser = self._get_browser()
-		escaped = content.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n")
-		script = self._SEND_MSG_SCRIPT.format(security_id=security_id, content=escaped)
+		target = self._chat_target_payload(
+			security_id=security_id,
+			target_recruiter_name=target_recruiter_name,
+			target_company=target_company,
+			target_title=target_title,
+			target_gid=target_gid,
+			target_friend_id=target_friend_id,
+			target_uid=target_uid,
+			target_encrypt_boss_id=target_encrypt_boss_id,
+			target_recruiter_id=target_recruiter_id,
+		)
 		try:
-			result = browser._page.evaluate(script)
+			result = self._evaluate_candidate_chat_script(
+				browser,
+				self._SEND_MSG_SCRIPT,
+				{"sid": security_id, "content": content, "target": target},
+			)
 			if isinstance(result, dict) and result.get("ok"):
 				return {"code": 0, "message": "消息已发送", "method": result.get("method", "cdp")}
 			return {"code": -1, "message": str(result.get("error", "发送失败")), "detail": result}
 		except Exception as exc:
 			return {"code": -1, "message": f"发送失败: {exc}"}
 
-	def send_resume(self, security_id: str) -> dict[str, Any]:
+	def send_resume(
+		self,
+		security_id: str,
+		*,
+		target_recruiter_name: str = "",
+		target_company: str = "",
+		target_title: str = "",
+		target_gid: str = "",
+		target_friend_id: str = "",
+		target_uid: str = "",
+		target_encrypt_boss_id: str = "",
+		target_recruiter_id: str = "",
+	) -> dict[str, Any]:
 		"""通过 CDP 自动发送在线简历给指定招聘者。"""
 		navigation = self._navigate_to_chat()
 		if not navigation.get("ok"):
 			return {"code": -1, "message": str(navigation.get("message") or "聊天页未就绪"), "detail": navigation}
 		browser = self._get_browser()
-		script = self._SEND_RESUME_SCRIPT.format(security_id=security_id)
+		target = self._chat_target_payload(
+			security_id=security_id,
+			target_recruiter_name=target_recruiter_name,
+			target_company=target_company,
+			target_title=target_title,
+			target_gid=target_gid,
+			target_friend_id=target_friend_id,
+			target_uid=target_uid,
+			target_encrypt_boss_id=target_encrypt_boss_id,
+			target_recruiter_id=target_recruiter_id,
+		)
 		try:
-			result = browser._page.evaluate(script)
+			result = self._evaluate_candidate_chat_script(
+				browser,
+				self._SEND_RESUME_SCRIPT,
+				{"sid": security_id, "target": target},
+			)
 			if isinstance(result, dict) and result.get("ok"):
 				return {"code": 0, "message": "简历已发送", "method": result.get("method", "cdp")}
 			return {"code": -1, "message": str(result.get("error", "发送失败")), "detail": result}
@@ -476,6 +745,12 @@ class BossClient:
 		if not navigation.get("ok"):
 			return {"code": -1, "message": str(navigation.get("message") or "聊天页未就绪"), "detail": navigation}
 		browser = self._get_browser()
+		if self._browser_raw_cdp_url(browser):
+			return {
+				"code": -1,
+				"message": "附件简历上传需要 Playwright CDP 页面文件输入能力；当前 raw CDP 通道仅支持文本消息和在线简历发送。",
+				"detail": navigation,
+			}
 		def _is_navigation_context_error(exc: Exception) -> bool:
 			message = str(exc)
 			return (

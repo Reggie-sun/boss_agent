@@ -80,6 +80,8 @@ class _MessagePlatform:
 					{
 						"securityId": "sec_001",
 						"uid": 12345,
+						"friendId": 12345,
+						"encryptBossId": "enc_boss_001",
 						"encryptJobId": "job_001",
 						"name": "张HR",
 						"brandName": "TestCo",
@@ -285,6 +287,12 @@ def test_sync_messages_saves_conversation_and_inbound_messages(tmp_path: Path):
 	assert conversation.job_id == "job_001"
 	assert conversation.state["security_id"] == "sec_001"
 	assert conversation.state["gid"] == "12345"
+	assert conversation.state["uid"] == "12345"
+	assert conversation.state["friend_id"] == "12345"
+	assert conversation.state["encrypt_boss_id"] == "enc_boss_001"
+	assert conversation.state["recruiter_name"] == "张HR"
+	assert conversation.state["company"] == "TestCo"
+	assert conversation.state["title"] == "HRBP"
 
 	messages = store.list_messages("boss_conv_sec_001")
 	assert len(messages) == 1
