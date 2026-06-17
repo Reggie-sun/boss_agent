@@ -73,14 +73,29 @@ class BossPassiveWatcher:
     def run_once(self, *, live_sync: bool | None = None) -> WatcherRunResult:
         if live_sync is None:
             live_sync = self.config.live_sync
+        if not live_sync and not self.config.dry_run:
+            task = self._record_run_task(
+                _sync_blocked_task(
+                    "live_sync_required_for_delivery",
+                    live_sync=False,
+                    dry_run=self.config.dry_run,
+                )
+            )
+            return WatcherRunResult(
+                processed=0,
+                skipped=0,
+                blocked=1,
+                tasks=[task],
+            )
         if live_sync:
             sync_error = self._sync_live_messages()
             if sync_error is not None:
+                task = self._record_run_task(sync_error)
                 return WatcherRunResult(
                     processed=0,
                     skipped=0,
                     blocked=1,
-                    tasks=[sync_error],
+                    tasks=[task],
                 )
         processed = 0
         skipped = 0
@@ -118,17 +133,25 @@ class BossPassiveWatcher:
 
     def _sync_live_messages(self) -> dict[str, object] | None:
         if self.message_syncer is None:
-            return _sync_blocked_task("live_sync_unavailable")
+            return _sync_blocked_task(
+                "live_sync_unavailable", dry_run=self.config.dry_run
+            )
         try:
             result = self.message_syncer.sync_messages() or {}
         except Exception as exc:
             error_message = str(exc) or exc.__class__.__name__
-            return _sync_blocked_task(error_message, {"error_message": error_message})
+            return _sync_blocked_task(
+                error_message,
+                {"error_message": error_message},
+                dry_run=self.config.dry_run,
+            )
         if result.get("ok") is False:
             error_message = str(
                 result.get("error_message") or result.get("status") or "live_sync_failed"
             )
-            return _sync_blocked_task(error_message, result)
+            return _sync_blocked_task(
+                error_message, result, dry_run=self.config.dry_run
+            )
         return None
 
     def _candidate_messages(self) -> list[MessageRecord]:
@@ -202,6 +225,17 @@ class BossPassiveWatcher:
         )
         return payload
 
+    def _record_run_task(self, payload: dict[str, object]) -> dict[str, object]:
+        self.store.append_audit_log(
+            AuditLogRecord.new(
+                event_type="watcher_task",
+                entity_type="watcher",
+                entity_id="live_sync",
+                payload=payload,
+            )
+        )
+        return payload
+
     def _is_paused(self, conversation_id: str) -> bool:
         paused = False
         for entry in self.store.list_audit_logs():
@@ -248,6 +282,9 @@ class BossPassiveWatcher:
 def _sync_blocked_task(
     error_message: str,
     sync: dict[str, object] | None = None,
+    *,
+    live_sync: bool = True,
+    dry_run: bool = False,
 ) -> dict[str, object]:
     return {
         "message_id": "",
@@ -256,10 +293,10 @@ def _sync_blocked_task(
         "intent": "unknown",
         "status": "blocked_manual_required",
         "error_message": error_message,
-        "dry_run": False,
+        "dry_run": dry_run,
         "action": {},
         "delivery": {},
-        "live_sync": True,
+        "live_sync": live_sync,
         "sync": sync or {},
     }
 

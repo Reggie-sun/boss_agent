@@ -153,11 +153,7 @@ def _resolve_target_node(
 ) -> Callable[[AutoReplyState], AutoReplyState]:
     def _node(state: AutoReplyState) -> AutoReplyState:
         config = state["config"]
-        if (
-            not config.dry_run
-            and config.require_send_enabled
-            and not config.send_enabled
-        ):
+        if not config.dry_run and not config.send_enabled:
             return {
                 "status": "blocked_manual_required",
                 "error_message": "boss_rag_send_enabled_disabled",

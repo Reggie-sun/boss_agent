@@ -292,11 +292,17 @@ def test_run_once_sends_contact_reply_and_writes_audit(tmp_path):
         )
     )
     delivery = _RecordingDelivery()
+    config = _config(tmp_path)
+    config.live_sync = True
     watcher = BossPassiveWatcher(
-        store=store, service=_service(store), config=_config(tmp_path), delivery=delivery
+        store=store,
+        service=_service(store),
+        config=config,
+        delivery=delivery,
+        message_syncer=_Syncer(),
     )
 
-    result = watcher.run_once()
+    result = watcher.run_once(live_sync=True)
 
     assert result.processed == 1
     assert delivery.calls[0]["message"] == "我的手机号是 13800138000，微信号是 reggie-ai。"
@@ -366,11 +372,17 @@ def test_run_once_skips_already_processed_message(tmp_path):
         )
     )
     delivery = _RecordingDelivery()
+    config = _config(tmp_path)
+    config.live_sync = True
     watcher = BossPassiveWatcher(
-        store=store, service=_service(store), config=_config(tmp_path), delivery=delivery
+        store=store,
+        service=_service(store),
+        config=config,
+        delivery=delivery,
+        message_syncer=_Syncer(),
     )
 
-    result = watcher.run_once()
+    result = watcher.run_once(live_sync=True)
 
     assert result.processed == 0
     assert result.skipped == 1
@@ -444,6 +456,50 @@ def test_passive_watcher_blocks_live_sync_without_syncer(tmp_path):
     assert result.tasks[0]["live_sync"] is True
     assert delivery.calls == []
     assert store.list_drafts() == []
+    audit = store.list_audit_logs("live_sync")[-1]
+    assert audit.event_type == "watcher_task"
+    assert audit.payload["error_message"] == "live_sync_unavailable"
+
+
+def test_passive_watcher_blocks_live_delivery_without_live_sync(tmp_path):
+    store = _store(tmp_path)
+    store.save_conversation(
+        ConversationRecord(
+            conversation_id="conv_001",
+            source="boss_sync",
+            state={"security_id": "sec_001"},
+        )
+    )
+    store.save_message(
+        MessageRecord(
+            message_id="msg_001",
+            conversation_id="conv_001",
+            message_text="介绍下你的 RAG 项目",
+            direction="inbound",
+        )
+    )
+    delivery = _RecordingDelivery()
+    config = _config(tmp_path)
+    config.live_sync = False
+    watcher = BossPassiveWatcher(
+        store=store,
+        service=_integration_service(store),
+        config=config,
+        delivery=delivery,
+    )
+
+    result = watcher.run_once(live_sync=False)
+
+    assert result.processed == 0
+    assert result.skipped == 0
+    assert result.blocked == 1
+    assert result.tasks[0]["status"] == "blocked_manual_required"
+    assert result.tasks[0]["error_message"] == "live_sync_required_for_delivery"
+    assert result.tasks[0]["live_sync"] is False
+    assert delivery.calls == []
+    assert store.list_drafts() == []
+    audit = store.list_audit_logs("live_sync")[-1]
+    assert audit.payload["error_message"] == "live_sync_required_for_delivery"
 
 
 def test_passive_watcher_blocks_failed_live_sync_result(tmp_path):
@@ -485,6 +541,9 @@ def test_passive_watcher_blocks_failed_live_sync_result(tmp_path):
     assert result.tasks[0]["sync"]["status"] == "read_disabled"
     assert delivery.calls == []
     assert store.list_drafts() == []
+    audit = store.list_audit_logs("live_sync")[-1]
+    assert audit.event_type == "watcher_task"
+    assert audit.payload["error_message"] == "read_disabled"
 
 
 def test_passive_watcher_blocks_live_sync_exception(tmp_path):
@@ -523,6 +582,8 @@ def test_passive_watcher_blocks_live_sync_exception(tmp_path):
     assert result.tasks[0]["error_message"] == "bridge_unavailable"
     assert delivery.calls == []
     assert store.list_drafts() == []
+    audit = store.list_audit_logs("live_sync")[-1]
+    assert audit.payload["error_message"] == "bridge_unavailable"
 
 
 def test_passive_watcher_respects_pause_control(tmp_path):
@@ -552,15 +613,16 @@ def test_passive_watcher_respects_pause_control(tmp_path):
     )
     delivery = _RecordingDelivery()
     config = _config(tmp_path)
-    config.live_sync = False
+    config.live_sync = True
     watcher = BossPassiveWatcher(
         store=store,
         service=_integration_service(store),
         config=config,
         delivery=delivery,
+        message_syncer=_Syncer(),
     )
 
-    result = watcher.run_once(live_sync=False)
+    result = watcher.run_once(live_sync=True)
 
     assert result.processed == 0
     assert result.blocked == 1
@@ -594,14 +656,17 @@ def test_passive_watcher_respects_global_pause_and_resume(tmp_path):
         )
     )
     delivery = _RecordingDelivery()
+    config = _config(tmp_path)
+    config.live_sync = True
     watcher = BossPassiveWatcher(
         store=store,
         service=_integration_service(store),
-        config=_config(tmp_path),
+        config=config,
         delivery=delivery,
+        message_syncer=_Syncer(),
     )
 
-    paused = watcher.run_once(live_sync=False)
+    paused = watcher.run_once(live_sync=True)
 
     assert paused.processed == 0
     assert paused.blocked == 1
@@ -617,7 +682,7 @@ def test_passive_watcher_respects_global_pause_and_resume(tmp_path):
         )
     )
 
-    resumed = watcher.run_once(live_sync=False)
+    resumed = watcher.run_once(live_sync=True)
 
     assert resumed.processed == 1
     assert resumed.blocked == 0

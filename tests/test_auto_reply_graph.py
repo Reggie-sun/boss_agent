@@ -34,7 +34,12 @@ class _Delivery:
         }
 
 
-def _config(*, dry_run: bool, send_enabled: bool = True) -> WatcherConfig:
+def _config(
+    *,
+    dry_run: bool,
+    send_enabled: bool = True,
+    require_send_enabled: bool = True,
+) -> WatcherConfig:
     return WatcherConfig(
         enabled=True,
         dry_run=dry_run,
@@ -44,7 +49,7 @@ def _config(*, dry_run: bool, send_enabled: bool = True) -> WatcherConfig:
         interview_windows="工作日 20:00 后",
         resume_attachment_path="/tmp/resume.pdf",
         send_enabled=send_enabled,
-        require_send_enabled=True,
+        require_send_enabled=require_send_enabled,
     )
 
 
@@ -118,6 +123,27 @@ def test_auto_reply_graph_blocks_live_send_when_send_flag_disabled():
         message=_message(),
         draft=_draft(),
         config=_config(dry_run=False, send_enabled=False),
+        resolve_security_id=lambda conversation_id: "sec_001",
+        target_payload=lambda conversation_id: {"company": "测试公司"},
+        delivery=delivery,
+    )
+
+    assert result.status == "blocked_manual_required"
+    assert result.error_message == "boss_rag_send_enabled_disabled"
+    assert delivery.calls == []
+
+
+def test_auto_reply_graph_send_flag_is_required_even_when_gate_flag_disabled():
+    delivery = _Delivery(calls=[])
+
+    result = run_auto_reply_graph(
+        message=_message(),
+        draft=_draft(),
+        config=_config(
+            dry_run=False,
+            send_enabled=False,
+            require_send_enabled=False,
+        ),
         resolve_security_id=lambda conversation_id: "sec_001",
         target_payload=lambda conversation_id: {"company": "测试公司"},
         delivery=delivery,
