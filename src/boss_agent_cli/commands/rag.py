@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -80,6 +81,27 @@ class _CliWatcherDelivery:
 			"error_message": result.error_message,
 			"results": result.results,
 			"resume_file": result.resume_file_path,
+		}
+
+
+class _CliWatcherMessageSyncer:
+	"""Sync recent Boss messages before a watcher cycle."""
+
+	def __init__(self, ctx: click.Context) -> None:
+		self.ctx = ctx
+
+	def sync_messages(self, *, conversation_id: str | None = None) -> dict[str, object]:
+		config = self.ctx.obj.get("config", {}) if self.ctx and self.ctx.obj else {}
+		if not bool(config.get("boss_rag_allow_message_read", False)):
+			return {"ok": False, "status": "read_disabled", "count": 0}
+		with _build_boss_adapter(self.ctx) as adapter:
+			result = adapter.sync_messages(conversation_id=conversation_id)
+		return {
+			"ok": True,
+			"status": "synced",
+			"count": result.count,
+			"conversation_ids": result.conversation_ids,
+			"message_ids": result.message_ids,
 		}
 
 
@@ -171,6 +193,7 @@ def _build_passive_watcher(ctx: click.Context) -> BossPassiveWatcher:
 		service=service,
 		config=_build_watcher_config(ctx),
 		delivery=_CliWatcherDelivery(ctx),
+		message_syncer=_CliWatcherMessageSyncer(ctx),
 	)
 
 
@@ -961,19 +984,29 @@ def rag_watcher_status_cmd(ctx: click.Context, limit: int) -> None:
 
 @rag_group.command("watcher-run")
 @click.option("--once", is_flag=True, default=False)
+@click.option("--loop", "loop_mode", is_flag=True, default=False)
+@click.option("--live-sync/--no-live-sync", default=None)
+@click.option("--max-cycles", type=int, default=None)
 @click.pass_context
-def rag_watcher_run_cmd(ctx: click.Context, once: bool) -> None:
-	if not once:
+def rag_watcher_run_cmd(
+	ctx: click.Context,
+	once: bool,
+	loop_mode: bool,
+	live_sync: bool | None,
+	max_cycles: int | None,
+) -> None:
+	if once == loop_mode:
 		handle_error_output(
 			ctx,
 			_workflow_command(ctx, "watcher-run"),
 			code="INVALID_PARAM",
-			message="watcher-run currently requires --once.",
+			message="watcher-run requires exactly one of --once or --loop.",
 			recoverable=True,
-			recovery_action="Run agent watcher-run --once.",
+			recovery_action="Run agent watcher-run --once or agent watcher-run --loop.",
 		)
 		return
 	config = _build_watcher_config(ctx)
+	effective_live_sync = config.live_sync if live_sync is None else live_sync
 	if not config.enabled:
 		handle_output(
 			ctx,
@@ -990,7 +1023,32 @@ def rag_watcher_run_cmd(ctx: click.Context, once: bool) -> None:
 		)
 		return
 	watcher = _build_passive_watcher(ctx)
-	payload = _watcher_result_payload(watcher.run_once())
+	if once:
+		payload = _watcher_result_payload(watcher.run_once(live_sync=effective_live_sync))
+	else:
+		cycles = 0
+		processed = 0
+		skipped = 0
+		blocked = 0
+		tasks: list[dict[str, object]] = []
+		while max_cycles is None or cycles < max_cycles:
+			result = watcher.run_once(live_sync=effective_live_sync)
+			cycles += 1
+			processed += result.processed
+			skipped += result.skipped
+			blocked += result.blocked
+			tasks.extend(result.tasks)
+			if max_cycles is not None and cycles >= max_cycles:
+				break
+			time.sleep(config.poll_seconds)
+		payload = {
+			"status": "completed",
+			"cycles": cycles,
+			"processed": processed,
+			"skipped": skipped,
+			"blocked": blocked,
+			"tasks": tasks[-20:],
+		}
 	handle_output(
 		ctx,
 		_workflow_command(ctx, "watcher-run"),

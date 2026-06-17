@@ -693,7 +693,7 @@ def test_agent_watcher_run_once_enabled_returns_run_counts(monkeypatch, tmp_path
 	called = {"run_once": False}
 
 	class _FakeWatcher:
-		def run_once(self):
+		def run_once(self, *, live_sync=None):
 			called["run_once"] = True
 			return rag_commands.WatcherRunResult(
 				processed=1,
@@ -718,6 +718,144 @@ def test_agent_watcher_run_once_enabled_returns_run_counts(monkeypatch, tmp_path
 	assert payload["data"]["skipped"] == 2
 	assert payload["data"]["blocked"] == 3
 	assert payload["data"]["tasks"] == [{"message_id": "msg_001", "status": "sent"}]
+
+
+def test_agent_watcher_run_once_live_sync_passes_flag(monkeypatch, tmp_path: Path):
+	(tmp_path / "config.json").write_text(
+		json.dumps(
+			{
+				"boss_rag_watcher_enabled": True,
+				"boss_rag_watcher_live_sync": True,
+				"boss_rag_allow_message_read": True,
+			}
+		),
+		encoding="utf-8",
+	)
+	called = {"live_sync": None}
+
+	class _FakeWatcher:
+		def run_once(self, *, live_sync=None):
+			called["live_sync"] = live_sync
+			return rag_commands.WatcherRunResult(
+				processed=1,
+				skipped=0,
+				blocked=0,
+				tasks=[{"message_id": "msg_001", "status": "sent"}],
+			)
+
+	monkeypatch.setattr(rag_commands, "_build_passive_watcher", lambda ctx: _FakeWatcher())
+	runner = CliRunner()
+
+	result = runner.invoke(
+		cli,
+		[
+			"--json",
+			"--data-dir",
+			str(tmp_path),
+			"agent",
+			"watcher-run",
+			"--once",
+			"--live-sync",
+		],
+	)
+
+	assert result.exit_code == 0
+	assert called["live_sync"] is True
+	payload = json.loads(result.output)
+	assert payload["ok"] is True
+	assert payload["data"]["processed"] == 1
+
+
+def test_agent_watcher_run_loop_stops_at_max_cycles(monkeypatch, tmp_path: Path):
+	(tmp_path / "config.json").write_text(
+		json.dumps(
+			{
+				"boss_rag_watcher_enabled": True,
+				"boss_rag_watcher_live_sync": True,
+				"boss_rag_watcher_poll_seconds": 5,
+			}
+		),
+		encoding="utf-8",
+	)
+	calls = {"run_once": 0, "sleep": []}
+
+	class _FakeWatcher:
+		def run_once(self, *, live_sync=None):
+			calls["run_once"] += 1
+			return rag_commands.WatcherRunResult(
+				processed=1,
+				skipped=0,
+				blocked=0,
+				tasks=[{"message_id": f"msg_{calls['run_once']}", "status": "sent"}],
+			)
+
+	monkeypatch.setattr(rag_commands, "_build_passive_watcher", lambda ctx: _FakeWatcher())
+	monkeypatch.setattr(rag_commands.time, "sleep", lambda seconds: calls["sleep"].append(seconds))
+	runner = CliRunner()
+
+	result = runner.invoke(
+		cli,
+		[
+			"--json",
+			"--data-dir",
+			str(tmp_path),
+			"agent",
+			"watcher-run",
+			"--loop",
+			"--max-cycles",
+			"2",
+		],
+	)
+
+	assert result.exit_code == 0
+	assert calls["run_once"] == 2
+	assert calls["sleep"] == [5]
+	payload = json.loads(result.output)
+	assert payload["ok"] is True
+	assert payload["data"]["status"] == "completed"
+	assert payload["data"]["cycles"] == 2
+	assert payload["data"]["processed"] == 2
+
+
+def test_cli_watcher_message_syncer_normalizes_read_disabled_and_success(monkeypatch):
+	def _build_disabled_adapter(ctx):
+		raise AssertionError("read-disabled sync must not build Boss adapter")
+
+	disabled_ctx = SimpleNamespace(obj={"config": {"boss_rag_allow_message_read": False}})
+	monkeypatch.setattr(rag_commands, "_build_boss_adapter", _build_disabled_adapter)
+
+	disabled = rag_commands._CliWatcherMessageSyncer(disabled_ctx).sync_messages(conversation_id="conv_001")
+
+	assert disabled == {"ok": False, "status": "read_disabled", "count": 0}
+
+	class _FakeBossAdapter:
+		def __enter__(self):
+			return self
+
+		def __exit__(self, exc_type, exc, tb):
+			return None
+
+		def sync_messages(self, conversation_id=None):
+			assert conversation_id == "conv_001"
+			return SyncMessagesResult(
+				import_batch_id="bosssync_001",
+				conversation_ids=["conv_001"],
+				message_ids=["msg_001"],
+				count=1,
+			)
+
+	enabled_ctx = SimpleNamespace(obj={"config": {"boss_rag_allow_message_read": True}})
+	monkeypatch.setattr(rag_commands, "_build_boss_adapter", lambda ctx: _FakeBossAdapter())
+
+	synced = rag_commands._CliWatcherMessageSyncer(enabled_ctx).sync_messages(conversation_id="conv_001")
+
+	assert synced == {
+		"ok": True,
+		"status": "synced",
+		"count": 1,
+		"conversation_ids": ["conv_001"],
+		"message_ids": ["msg_001"],
+	}
 
 
 def test_agent_watcher_pause_and_resume_write_control_audit(tmp_path: Path):
