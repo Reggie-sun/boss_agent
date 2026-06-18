@@ -46,7 +46,14 @@ class FakeClient:
 		return {"zpData": {"jobCard": {"postDescription": value}}}
 
 
-def _make_job_raw(*, security_id: str, job_id: str, welfare: list[str] | None = None, lid: str = ""):
+def _make_job_raw(
+	*,
+	security_id: str,
+	job_id: str,
+	welfare: list[str] | None = None,
+	lid: str = "",
+	experience: str = "3-5年",
+):
 	return {
 		"encryptJobId": job_id,
 		"jobName": f"Job-{job_id}",
@@ -54,7 +61,7 @@ def _make_job_raw(*, security_id: str, job_id: str, welfare: list[str] | None = 
 		"salaryDesc": "20-30K",
 		"cityName": "广州",
 		"areaDistrict": "天河区",
-		"jobExperience": "3-5年",
+		"jobExperience": experience,
 		"jobDegree": "本科",
 		"skills": ["Python"],
 		"welfareList": welfare or [],
@@ -122,6 +129,35 @@ def test_pipeline_passes_raw_params_to_search_client():
 			"raw_params": {"city": "101280100", "experience": "108,104"},
 		},
 	}
+
+
+def test_pipeline_maps_multiselect_experience_to_raw_codes_and_local_union():
+	client = FakeClient(
+		pages=[
+			{
+				"zpData": {
+					"hasMore": False,
+					"jobList": [
+						_make_job_raw(security_id="sec-1", job_id="job-1", experience="1-3年"),
+						_make_job_raw(security_id="sec-2", job_id="job-2", experience="3-5年"),
+					],
+				},
+			},
+		],
+		descriptions={},
+	)
+
+	result = run_search_pipeline(
+		client,
+		FakeCache(),
+		FakeLogger(),
+		criteria=SearchFilterCriteria(query="python", experience="1年以内,1-3年"),
+	)
+
+	filters = client.search_calls[0]["filters"]
+	assert filters["experience"] is None
+	assert filters["raw_params"]["experience"] == "101,103"
+	assert [item["security_id"] for item in result.items] == ["sec-1"]
 
 
 def test_pipeline_keeps_company_filters_local():

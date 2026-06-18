@@ -302,9 +302,43 @@ def requires_extended_prefilter_scan(
 	"""Return True when local filters can empty early pages after remote search."""
 	if welfare_conditions:
 		return True
+	if criteria.experience and len(_split_multi_value(criteria.experience)) > 1:
+		return True
 	if criteria.salary and not resolve_salary_code_param(criteria.salary):
 		return True
 	return any((criteria.industry, criteria.scale, criteria.stage, criteria.job_type))
+
+
+def _remote_search_filters(criteria: SearchFilterCriteria, page: int) -> dict[str, Any]:
+	"""Build BOSS search params while keeping local-only filters out of the API call."""
+	raw_params = dict(criteria.raw_params)
+	remote_experience = criteria.experience
+	if remote_experience and len(_split_multi_value(remote_experience)) > 1:
+		if "experience" in raw_params:
+			remote_experience = None
+		else:
+			try:
+				experience_code = resolve_lookup_codes(
+					remote_experience,
+					endpoints.EXPERIENCE_CODES,
+					"经验要求",
+				)
+			except ValueError:
+				experience_code = None
+			if experience_code:
+				raw_params["experience"] = experience_code
+				remote_experience = None
+
+	search_filters: dict[str, Any] = {
+		"city": criteria.city,
+		"salary": criteria.salary,
+		"experience": remote_experience,
+		"education": criteria.education,
+		"page": page,
+	}
+	if raw_params:
+		search_filters["raw_params"] = raw_params
+	return search_filters
 
 
 # ── List-page prefilter ─────────────────────────────────────────────
@@ -571,15 +605,7 @@ def run_search_pipeline(
 			break
 
 		logger.info(f"正在搜索第 {current_page} 页...")
-		search_filters: dict[str, Any] = {
-			"city": criteria.city,
-			"salary": criteria.salary,
-			"experience": criteria.experience,
-			"education": criteria.education,
-			"page": current_page,
-		}
-		if criteria.raw_params:
-			search_filters["raw_params"] = criteria.raw_params
+		search_filters = _remote_search_filters(criteria, current_page)
 
 		raw = client.search_jobs(
 			criteria.query,
