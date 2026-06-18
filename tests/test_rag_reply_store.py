@@ -1,3 +1,4 @@
+import sqlite3
 from pathlib import Path
 
 from boss_agent_cli.rag_reply.models import (
@@ -7,6 +8,7 @@ from boss_agent_cli.rag_reply.models import (
 	DraftRecord,
 	MessageRecord,
 )
+from boss_agent_cli.rag_reply.schema import CREATE_TABLE_STATEMENTS
 import boss_agent_cli.rag_reply.store as store_module
 from boss_agent_cli.rag_reply.store import RagReplyStore
 
@@ -33,6 +35,30 @@ def test_store_configures_sqlite_for_concurrent_frontend_and_watcher_access(tmp_
 
 	assert busy_timeout == store_module._SQLITE_BUSY_TIMEOUT_MS
 	assert str(journal_mode).lower() == "wal"
+
+
+def test_store_initialize_skips_wal_switch_when_existing_db_is_write_locked(
+	tmp_path: Path,
+	monkeypatch,
+):
+	db_path = tmp_path / "boss-rag.sqlite3"
+	conn = sqlite3.connect(db_path)
+	try:
+		for statement in CREATE_TABLE_STATEMENTS:
+			conn.execute(statement)
+		conn.commit()
+	finally:
+		conn.close()
+
+	monkeypatch.setattr(store_module, "_SQLITE_BUSY_TIMEOUT_MS", 10)
+	monkeypatch.setattr(store_module, "_SQLITE_CONNECT_TIMEOUT_SECONDS", 0.01)
+	locker = sqlite3.connect(db_path, timeout=0)
+	locker.execute("BEGIN IMMEDIATE")
+	try:
+		RagReplyStore(db_path).initialize()
+	finally:
+		locker.rollback()
+		locker.close()
 
 
 def test_store_round_trips_message_draft_and_audit(tmp_path: Path):

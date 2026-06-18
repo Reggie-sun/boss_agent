@@ -34,7 +34,7 @@ class RagReplyStore:
 	def initialize(self) -> None:
 		self.db_path.parent.mkdir(parents=True, exist_ok=True)
 		with self.connect() as conn:
-			conn.execute(f"PRAGMA journal_mode={_SQLITE_JOURNAL_MODE}")
+			self._enable_wal_if_available(conn)
 			for statement in CREATE_TABLE_STATEMENTS:
 				conn.execute(statement)
 			conn.commit()
@@ -44,6 +44,13 @@ class RagReplyStore:
 		conn.execute(f"PRAGMA busy_timeout = {_SQLITE_BUSY_TIMEOUT_MS}")
 		conn.row_factory = sqlite3.Row
 		return conn
+
+	def _enable_wal_if_available(self, conn: sqlite3.Connection) -> None:
+		try:
+			conn.execute(f"PRAGMA journal_mode={_SQLITE_JOURNAL_MODE}")
+		except sqlite3.OperationalError as exc:
+			if "database is locked" not in str(exc).lower():
+				raise
 
 	def list_tables(self) -> list[str]:
 		with self.connect() as conn:
