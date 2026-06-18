@@ -10,6 +10,9 @@ const CDP_REQUIRED_FOR_BOSS_DELIVERY_MESSAGE =
 const DELIVERY_PROBE_CACHE_TTL_MS = 10_000;
 const DEFAULT_COMMAND_TIMEOUT_SECONDS = 45;
 const MIN_COMMAND_TIMEOUT_SECONDS = 5;
+const MAX_BOSS_AUTO_GREET_COUNT = 150;
+const BOSS_AUTO_GREET_TIMEOUT_BASE_SECONDS = 180;
+const BOSS_AUTO_GREET_TIMEOUT_PER_ITEM_SECONDS = 10;
 let cachedDeliveryProbe = null;
 let pendingDeliveryProbe = null;
 
@@ -31,6 +34,18 @@ function resolveCommandTimeoutMs(rawValue) {
     ? Math.max(parsed, MIN_COMMAND_TIMEOUT_SECONDS)
     : DEFAULT_COMMAND_TIMEOUT_SECONDS;
   return seconds * 1000;
+}
+
+function resolveBossAutoGreetCommandTimeoutMs(commandTimeoutMs, rawCount) {
+  const parsed = Number.parseInt(String(rawCount ?? ""), 10);
+  const count = Number.isFinite(parsed)
+    ? Math.min(Math.max(parsed, 1), MAX_BOSS_AUTO_GREET_COUNT)
+    : 3;
+  const batchTimeoutMs = (
+    BOSS_AUTO_GREET_TIMEOUT_BASE_SECONDS +
+    count * BOSS_AUTO_GREET_TIMEOUT_PER_ITEM_SECONDS
+  ) * 1000;
+  return Math.max(commandTimeoutMs || 0, batchTimeoutMs);
 }
 
 function loadBridgeConfig() {
@@ -492,6 +507,7 @@ export function resetDeliveryProbeCacheForTests() {
 export {
   buildBossDeliveryBlockPayload,
   detectBossDeliveryChannel,
+  resolveBossAutoGreetCommandTimeoutMs,
   resolveCommandTimeoutMs,
 };
 
@@ -516,7 +532,7 @@ function normalizeThread(sessionId, messages) {
   };
 }
 
-function runBossJsonCommand(config, args) {
+function runBossJsonCommand(config, args, options = {}) {
   return new Promise((resolve, reject) => {
     const child = spawn(
       config.pythonBin,
@@ -542,11 +558,12 @@ function runBossJsonCommand(config, args) {
     let stdout = "";
     let stderr = "";
     let timedOut = false;
-    const timer = config.commandTimeoutMs
+    const timeoutMs = options.timeoutMs ?? config.commandTimeoutMs;
+    const timer = timeoutMs
       ? setTimeout(() => {
           timedOut = true;
           child.kill("SIGTERM");
-        }, config.commandTimeoutMs)
+        }, timeoutMs)
       : null;
 
     child.stdout.setEncoding("utf8");
@@ -564,7 +581,7 @@ function runBossJsonCommand(config, args) {
     child.on("close", (status) => {
       if (timer) clearTimeout(timer);
       if (timedOut) {
-        const seconds = Math.round((config.commandTimeoutMs || 0) / 1000);
+        const seconds = Math.round((timeoutMs || 0) / 1000);
         reject(new Error(`boss-agent-cli 执行超过 ${seconds}s，已停止本次请求。请检查 CDP 发送链路或稍后重试。`));
         return;
       }
@@ -612,7 +629,7 @@ function parseBossProgressLine(line) {
   }
 }
 
-function runBossJsonCommandStream(config, args, res) {
+function runBossJsonCommandStream(config, args, res, options = {}) {
   return new Promise((resolve) => {
     const child = spawn(
       config.pythonBin,
@@ -639,11 +656,12 @@ function runBossJsonCommandStream(config, args, res) {
     let stderr = "";
     let stderrBuffer = "";
     let timedOut = false;
-    const timer = config.commandTimeoutMs
+    const timeoutMs = options.timeoutMs ?? config.commandTimeoutMs;
+    const timer = timeoutMs
       ? setTimeout(() => {
           timedOut = true;
           child.kill("SIGTERM");
-        }, config.commandTimeoutMs)
+        }, timeoutMs)
       : null;
 
     child.stdout.setEncoding("utf8");
@@ -682,7 +700,7 @@ function runBossJsonCommandStream(config, args, res) {
         }
       }
       if (timedOut) {
-        const seconds = Math.round((config.commandTimeoutMs || 0) / 1000);
+        const seconds = Math.round((timeoutMs || 0) / 1000);
         writeNdjson(res, {
           type: "error",
           ok: false,
@@ -1182,7 +1200,10 @@ function createRagBridgePlugin() {
         const stage = String(body.stage || "").trim();
         const jobType = String(body.jobType || body.job_type || "").trim();
         const welfare = String(body.welfare || "").trim();
-        const count = Number.parseInt(String(body.count || "3"), 10);
+        const rawCount = Number.parseInt(String(body.count || "3"), 10);
+        const count = Number.isFinite(rawCount)
+          ? Math.min(Math.max(rawCount, 1), MAX_BOSS_AUTO_GREET_COUNT)
+          : 3;
         const stream = Boolean(body.stream);
 
         if (!query) {
@@ -1203,7 +1224,7 @@ function createRagBridgePlugin() {
           "batch-greet",
           query,
           "--count",
-          String(Number.isFinite(count) ? Math.min(Math.max(count, 1), 150) : 3),
+          String(count),
         ];
         if (city) args.push("--city", city);
         if (salary) args.push("--salary", salary);
@@ -1224,12 +1245,16 @@ function createRagBridgePlugin() {
             status: "searching",
             message: "正在搜索可开聊候选，还没有开始聊天。",
           });
-          await runBossJsonCommandStream(bridgeConfig, args, res);
+          await runBossJsonCommandStream(bridgeConfig, args, res, {
+            timeoutMs: resolveBossAutoGreetCommandTimeoutMs(bridgeConfig.commandTimeoutMs, count),
+          });
           res.end();
           return true;
         }
 
-        const payload = await runBossJsonCommand(bridgeConfig, args);
+        const payload = await runBossJsonCommand(bridgeConfig, args, {
+          timeoutMs: resolveBossAutoGreetCommandTimeoutMs(bridgeConfig.commandTimeoutMs, count),
+        });
         res.end(JSON.stringify({
           ok: true,
           data: payload.data,

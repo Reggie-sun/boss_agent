@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   buildBossDeliveryBlockPayload,
   detectBossDeliveryChannel,
+  resolveBossAutoGreetCommandTimeoutMs,
   resolveCommandTimeoutMs,
   resetDeliveryProbeCacheForTests,
 } from "./vite.config.mjs";
@@ -78,6 +79,14 @@ test("resolveCommandTimeoutMs treats zero as default instead of infinite wait", 
   assert.equal(resolveCommandTimeoutMs(""), 45_000);
   assert.equal(resolveCommandTimeoutMs("3"), 5_000);
   assert.equal(resolveCommandTimeoutMs("120"), 120_000);
+});
+
+test("resolveBossAutoGreetCommandTimeoutMs scales for 150-candidate batches", () => {
+  assert.equal(resolveBossAutoGreetCommandTimeoutMs(45_000, "1"), 190_000);
+  assert.equal(resolveBossAutoGreetCommandTimeoutMs(45_000, "10"), 280_000);
+  assert.equal(resolveBossAutoGreetCommandTimeoutMs(45_000, "150"), 1_680_000);
+  assert.equal(resolveBossAutoGreetCommandTimeoutMs(1_800_000, "150"), 1_800_000);
+  assert.equal(resolveBossAutoGreetCommandTimeoutMs(45_000, "999"), 1_680_000);
 });
 
 test("detectBossDeliveryChannel reuses an in-flight CDP probe", async () => {
