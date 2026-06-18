@@ -203,6 +203,11 @@ def parse_salary_range(value: str) -> tuple[int, int] | None:
 	return None
 
 
+def salary_ranges_overlap(candidate: tuple[int, int], required: tuple[int, int]) -> bool:
+	"""Return True when two salary ranges share any monthly K interval."""
+	return candidate[1] >= required[0] and candidate[0] <= required[1]
+
+
 # ── Threshold comparisons ───────────────────────────────────────────
 
 def meets_experience_threshold(candidate: str, required: str | None) -> bool:
@@ -252,6 +257,7 @@ class SearchPipelineStats:
 	pages_scanned: int = 0
 	jobs_seen: int = 0
 	jobs_prefiltered: int = 0
+	jobs_skipped_greeted: int = 0
 	detail_checks: int = 0
 	jobs_matched: int = 0
 
@@ -369,13 +375,13 @@ def prefilter_job(raw_item: dict[str, Any], criteria: SearchFilterCriteria) -> t
 		if item_city and criteria.city not in item_city:
 			reasons.append(f"城市不匹配: {item_city} != {criteria.city}")
 
-	# Salary filter — frontend range labels are exact local constraints.
+	# Salary filter — range labels are bucket constraints, so overlap is enough.
 	if criteria.salary:
 		req_range = parse_salary_range(criteria.salary)
 		item_range = parse_salary_range(raw_item.get("salaryDesc", ""))
 		if req_range and item_range:
-			if item_range[0] < req_range[0] or item_range[1] > req_range[1]:
-				reasons.append(f"薪资不匹配: {raw_item.get('salaryDesc', '')} 不在 {criteria.salary}")
+			if not salary_ranges_overlap(item_range, req_range):
+				reasons.append(f"薪资不匹配: {raw_item.get('salaryDesc', '')} 与 {criteria.salary} 无交集")
 
 	# Experience filter
 	if criteria.experience:
@@ -599,6 +605,7 @@ def run_search_pipeline(
 					item = JobItem.from_api(raw_item)
 					item.greeted = cache.is_greeted(item.security_id)
 					if skip_greeted and item.greeted:
+						stats.jobs_skipped_greeted += 1
 						continue
 					d = item.to_dict()
 					d["welfare_match"] = "✅ " + ", ".join(match_results)
@@ -617,12 +624,15 @@ def run_search_pipeline(
 
 			# Post-filter skip_greeted for detail-matched items
 			if skip_greeted:
+				before_skip_greeted = len(matched)
 				matched = [m for m in matched if not m.get("greeted", False)]
+				stats.jobs_skipped_greeted += before_skip_greeted - len(matched)
 		else:
 			for raw_item in survivors:
 				item = JobItem.from_api(raw_item)
 				item.greeted = cache.is_greeted(item.security_id)
 				if skip_greeted and item.greeted:
+					stats.jobs_skipped_greeted += 1
 					continue
 				matched.append(item.to_dict())
 				stats.jobs_matched += 1

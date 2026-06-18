@@ -175,12 +175,19 @@ class TestPrefilterJob:
 		assert ok is False
 		assert any("薪资" in r for r in reasons)
 
-	def test_salary_partially_above_range_rejected(self):
+	def test_salary_partially_above_range_passes(self):
 		raw = _make_raw(salary="15-30K")
 		criteria = SearchFilterCriteria(query="go", salary="12-24K")
 		ok, reasons = prefilter_job(raw, criteria)
-		assert ok is False
-		assert any("薪资" in r for r in reasons)
+		assert ok is True
+		assert reasons == []
+
+	def test_salary_partially_below_range_passes(self):
+		raw = _make_raw(salary="10-20K")
+		criteria = SearchFilterCriteria(query="go", salary="12-24K")
+		ok, reasons = prefilter_job(raw, criteria)
+		assert ok is True
+		assert reasons == []
 
 	def test_salary_inside_range_passes(self):
 		raw = _make_raw(salary="15-20K")

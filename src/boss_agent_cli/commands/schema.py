@@ -998,6 +998,11 @@ SCHEMA_DATA = {
 			"recoverable": True,
 			"recovery_action": "调整筛选条件后重试",
 		},
+		"NO_UNGREETED_CANDIDATES": {
+			"message": "搜索到职位，但匹配候选都已开聊",
+			"recoverable": True,
+			"recovery_action": "调整筛选条件/数量，或清理本地已开聊缓存后重试",
+		},
 		"SHORTLIST_NOT_FOUND": {
 			"message": "候选池中不存在该职位",
 			"recoverable": True,

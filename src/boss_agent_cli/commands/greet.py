@@ -318,6 +318,22 @@ def batch_greet_cmd(
 				return
 
 			if not candidates:
+				if pipeline_result.stats.jobs_skipped_greeted:
+					handle_error_output(
+						ctx,
+						"batch-greet",
+						code="NO_UNGREETED_CANDIDATES",
+						message="搜索到职位，但匹配候选都已开聊；请放宽筛选、提高数量，或清理本地已开聊缓存后再试。",
+						recoverable=True,
+						recovery_action="先用预览确认搜索结果，或调整筛选条件/数量后重试",
+						details={
+							"pages_scanned": pipeline_result.stats.pages_scanned,
+							"jobs_seen": pipeline_result.stats.jobs_seen,
+							"jobs_prefiltered": pipeline_result.stats.jobs_prefiltered,
+							"jobs_skipped_greeted": pipeline_result.stats.jobs_skipped_greeted,
+						},
+					)
+					return
 				handle_error_output(
 					ctx,
 					"batch-greet",

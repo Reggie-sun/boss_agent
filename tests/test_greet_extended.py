@@ -476,6 +476,36 @@ def test_batch_greet_skips_already_greeted(mock_cache_cls, mock_auth_cls, mock_c
 @patch("boss_agent_cli.commands.greet.get_platform_instance")
 @patch("boss_agent_cli.commands.greet.AuthManager")
 @patch("boss_agent_cli.commands.greet.CacheStore")
+def test_batch_greet_reports_when_all_matches_already_greeted(
+	mock_cache_cls,
+	mock_auth_cls,
+	mock_client_cls,
+	mock_time,
+):
+	"""搜索有结果但都已开聊时，不应误报为筛选没有岗位。"""
+	mock_cache = _ctx_mock(mock_cache_cls)
+	mock_cache.is_greeted.return_value = True
+	mock_client = _ctx_mock(mock_client_cls)
+	mock_client.search_jobs.return_value = {
+		"zpData": {"jobList": [_make_raw_job("A", "s1"), _make_raw_job("B", "s2")]}
+	}
+	mock_client.is_success.return_value = True
+	mock_time.sleep = MagicMock()
+
+	runner = CliRunner()
+	result = runner.invoke(cli, ["batch-greet", "RAG", "--count", "10"])
+	assert result.output
+	parsed = json.loads(result.output)
+	assert parsed["ok"] is False
+	assert parsed["error"]["code"] == "NO_UNGREETED_CANDIDATES"
+	assert "都已开聊" in parsed["error"]["message"]
+	assert mock_client.greet.call_count == 0
+
+
+@patch("boss_agent_cli.commands.greet.time")
+@patch("boss_agent_cli.commands.greet.get_platform_instance")
+@patch("boss_agent_cli.commands.greet.AuthManager")
+@patch("boss_agent_cli.commands.greet.CacheStore")
 def test_batch_greet_respects_count_cap(mock_cache_cls, mock_auth_cls, mock_client_cls, mock_time):
 	"""--count 最大 150，即使搜出 160 条也只处理 150 条。"""
 	mock_cache = _ctx_mock(mock_cache_cls)
@@ -575,6 +605,35 @@ def test_batch_greet_custom_salary_range_uses_local_filter(mock_cache_cls, mock_
 	assert parsed["ok"] is True
 	assert parsed["data"]["count"] == 1
 	assert parsed["data"]["candidates"][0]["security_id"] == "sec_high"
+
+
+@patch("boss_agent_cli.commands.greet.get_platform_instance")
+@patch("boss_agent_cli.commands.greet.AuthManager")
+@patch("boss_agent_cli.commands.greet.CacheStore")
+def test_batch_greet_custom_salary_range_keeps_overlapping_salary(mock_cache_cls, mock_auth_cls, mock_client_cls):
+	"""12-24K 应保留 15-30K 这类重叠薪资，避免筛选误报无候选。"""
+	mock_cache = _ctx_mock(mock_cache_cls)
+	mock_cache.is_greeted.return_value = False
+	mock_client = _ctx_mock(mock_client_cls)
+	below_salary = _make_raw_job("低薪", "sec_low")
+	below_salary["salaryDesc"] = "5-7K"
+	overlap_salary = _make_raw_job("重叠", "sec_overlap")
+	overlap_salary["salaryDesc"] = "15-30K"
+	mock_client.search_jobs.return_value = {
+		"zpData": {
+			"hasMore": False,
+			"jobList": [below_salary, overlap_salary],
+		},
+	}
+	mock_client.is_success.return_value = True
+
+	runner = CliRunner()
+	result = runner.invoke(cli, ["batch-greet", "RAG", "--salary", "12-24K", "--count", "2", "--dry-run"])
+	assert result.exit_code == 0
+	parsed = json.loads(result.output)
+	assert parsed["ok"] is True
+	assert parsed["data"]["count"] == 1
+	assert parsed["data"]["candidates"][0]["security_id"] == "sec_overlap"
 
 
 @patch("boss_agent_cli.commands.greet.get_platform_instance")
