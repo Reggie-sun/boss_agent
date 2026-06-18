@@ -37,8 +37,8 @@ WELFARE_KEYWORDS: dict[str, list[str]] = {
 }
 
 _INDUSTRY_CARD_COMPATIBLE_LABELS: dict[str, set[str]] = {
-	"互联网": {"人工智能", "软件/信息服务"},
-	"人工智能": {"互联网", "软件/信息服务"},
+	"互联网": {"人工智能", "软件/信息服务", "机器学习", "深度学习"},
+	"人工智能": {"互联网", "软件/信息服务", "机器学习", "深度学习"},
 	"大数据": {"互联网", "软件/信息服务"},
 	"云计算": {"互联网", "软件/信息服务"},
 	"电子商务": {"互联网"},
@@ -320,6 +320,7 @@ def _lookup_labels(values: list[str], lookup: dict[str, str]) -> set[str]:
 	reverse_lookup = {code: label for label, code in lookup.items()}
 	labels: set[str] = set()
 	for value in values:
+		labels.add(value)
 		if value in reverse_lookup:
 			labels.add(reverse_lookup[value])
 		for label in lookup:

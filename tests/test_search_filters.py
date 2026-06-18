@@ -247,6 +247,22 @@ class TestPrefilterJob:
 		assert ok is True
 		assert reasons == []
 
+	@pytest.mark.parametrize("industry", ["机器学习", "深度学习"])
+	def test_ai_industry_filter_allows_ml_card_labels(self, industry):
+		raw = _make_raw(industry=industry)
+		criteria = SearchFilterCriteria(query="RAG", industry="人工智能")
+		ok, reasons = prefilter_job(raw, criteria)
+		assert ok is True
+		assert reasons == []
+
+	@pytest.mark.parametrize("industry", ["机器学习", "深度学习"])
+	def test_broad_internet_filter_allows_ml_card_labels(self, industry):
+		raw = _make_raw(industry=industry)
+		criteria = SearchFilterCriteria(query="RAG", industry="互联网")
+		ok, reasons = prefilter_job(raw, criteria)
+		assert ok is True
+		assert reasons == []
+
 	def test_missing_company_filter_fields_pass(self):
 		raw = _make_raw()
 		for key in ("brandIndustry", "brandScaleName", "brandStageName", "jobTypeName"):
