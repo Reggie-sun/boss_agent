@@ -103,7 +103,7 @@ class BossPassiveWatcher:
         blocked = 0
         tasks: list[dict[str, object]] = []
         for message in self._candidate_messages():
-            if self._already_processed(message.message_id):
+            if self._already_processed(message):
                 skipped += 1
                 tasks.append(
                     {"message_id": message.message_id, "status": "skipped_duplicate"}
@@ -165,12 +165,23 @@ class BossPassiveWatcher:
             latest_by_conversation[message.conversation_id] = message
         return list(latest_by_conversation.values())
 
-    def _already_processed(self, message_id: str) -> bool:
+    def _already_processed(self, message: MessageRecord) -> bool:
+        message_key = _platform_message_key(message)
         for entry in self.store.list_audit_logs():
             if (
-                entry.event_type == "watcher_task"
-                and entry.payload.get("message_id") == message_id
-                and entry.payload.get("status") != "paused"
+                entry.event_type != "watcher_task"
+                or entry.payload.get("status") == "paused"
+            ):
+                continue
+            processed_message_id = str(entry.payload.get("message_id") or "")
+            if processed_message_id == message.message_id:
+                return True
+            if not message_key or not processed_message_id:
+                continue
+            processed_message = self.store.get_message(processed_message_id)
+            if (
+                processed_message is not None
+                and _platform_message_key(processed_message) == message_key
             ):
                 return True
         return False
@@ -308,3 +319,20 @@ def _error_attr(error: object, key: str) -> object:
     if isinstance(error, dict):
         return error.get(key)
     return getattr(error, key, None)
+
+
+def _platform_message_key(message: MessageRecord) -> tuple[str, ...] | None:
+    raw = message.raw if isinstance(message.raw, dict) else {}
+    for key in ("id", "msgId", "messageId", "mid"):
+        value = raw.get(key)
+        if value not in (None, ""):
+            return ("raw_id", str(value))
+    from_payload = raw.get("from") if isinstance(raw.get("from"), dict) else {}
+    from_uid = from_payload.get("uid")
+    timestamp = raw.get("time")
+    text = " ".join(message.message_text.split())
+    if from_uid not in (None, "") and timestamp not in (None, "") and text:
+        return ("sender_time_text", str(from_uid), str(timestamp), text)
+    if message.source == "boss_sync" and text and message.created_at:
+        return ("boss_text_time", text, message.created_at)
+    return None

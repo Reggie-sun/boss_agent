@@ -374,10 +374,10 @@ class BossAutomationAdapter:
 		message_text = str(raw_message.get("text") or body.get("text") or body.get("content") or "")
 		if not message_text.strip():
 			return None
-		raw_id = raw_message.get("id") or raw_message.get("msgId") or raw_message.get("messageId")
 		message_id_suffix = self._message_identity_suffix(raw_message, fallback_index=index)
+		conversation_key = str(conversation.conversation_id).removeprefix("boss_conv_")
 		return MessageRecord(
-			message_id=f"boss_msg_{conversation.state.get('security_id', 'unknown')}_{message_id_suffix}",
+			message_id=f"boss_msg_{conversation_key or 'unknown'}_{message_id_suffix}",
 			conversation_id=conversation.conversation_id,
 			message_text=message_text,
 			direction=direction,
@@ -391,7 +391,12 @@ class BossAutomationAdapter:
 		)
 
 	def _message_identity_suffix(self, raw_message: dict[str, Any], *, fallback_index: int) -> str:
-		raw_id = raw_message.get("id") or raw_message.get("msgId") or raw_message.get("messageId")
+		raw_id = (
+			raw_message.get("id")
+			or raw_message.get("msgId")
+			or raw_message.get("messageId")
+			or raw_message.get("mid")
+		)
 		if raw_id not in (None, ""):
 			return str(raw_id)
 		payload = json.dumps(raw_message, sort_keys=True, ensure_ascii=False, separators=(",", ":"), default=str)
@@ -443,11 +448,17 @@ class BossAutomationAdapter:
 
 	@staticmethod
 	def _conversation_id(raw_item: dict[str, Any]) -> str:
+		gid = str(
+			raw_item.get("friendId")
+			or raw_item.get("friend_id")
+			or raw_item.get("uid")
+			or raw_item.get("encryptUid")
+			or ""
+		)
+		if gid:
+			return f"boss_conv_{gid}"
 		security_id = str(raw_item.get("securityId") or "")
-		if security_id:
-			return f"boss_conv_{security_id}"
-		gid = str(raw_item.get("uid") or raw_item.get("encryptUid") or "")
-		return f"boss_conv_{gid or 'unknown'}"
+		return f"boss_conv_{security_id or 'unknown'}"
 
 	@staticmethod
 	def _recruiter_id(raw_item: dict[str, Any]) -> str:

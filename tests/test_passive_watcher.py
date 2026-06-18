@@ -400,6 +400,74 @@ def test_run_once_skips_already_processed_message(tmp_path):
     assert delivery.calls == []
 
 
+def test_run_once_skips_processed_platform_message_after_security_id_rotation(tmp_path):
+    store = _store(tmp_path)
+    raw_old = {
+        "mid": 354743700415492,
+        "securityId": "old_sec",
+        "time": 1781746548734,
+        "from": {"uid": 755278482, "name": "李HR"},
+    }
+    raw_new = {
+        "mid": 354743700415492,
+        "securityId": "new_sec",
+        "time": 1781746548734,
+        "from": {"uid": 755278482, "name": "李HR"},
+    }
+    store.save_message(
+        MessageRecord(
+            message_id="boss_msg_old_sec_1781746548734_oldhash",
+            conversation_id="boss_conv_old_sec",
+            message_text="对方已查看了您的附件简历",
+            direction="inbound",
+            raw=raw_old,
+        )
+    )
+    store.append_audit_log(
+        AuditLogRecord.new(
+            event_type="watcher_task",
+            entity_type="conversation",
+            entity_id="boss_conv_old_sec",
+            payload={
+                "message_id": "boss_msg_old_sec_1781746548734_oldhash",
+                "status": "sent",
+            },
+        )
+    )
+    store.save_conversation(
+        ConversationRecord(
+            conversation_id="boss_conv_755278482",
+            source="boss_sync",
+            state={"security_id": "new_sec"},
+        )
+    )
+    store.save_message(
+        MessageRecord(
+            message_id="boss_msg_755278482_354743700415492",
+            conversation_id="boss_conv_755278482",
+            message_text="对方已查看了您的附件简历",
+            direction="inbound",
+            raw=raw_new,
+        )
+    )
+    delivery = _RecordingDelivery()
+    config = _config(tmp_path)
+    config.dry_run = True
+    watcher = BossPassiveWatcher(
+        store=store,
+        service=_integration_service(store),
+        config=config,
+        delivery=delivery,
+    )
+
+    result = watcher.run_once()
+
+    assert result.processed == 0
+    assert result.skipped == 2
+    assert delivery.calls == []
+    assert store.list_drafts() == []
+
+
 def test_passive_watcher_syncs_live_messages_before_processing(tmp_path):
     store = _store(tmp_path)
     store.save_conversation(

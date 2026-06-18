@@ -253,6 +253,64 @@ class _DuplicateTimestampMessagePlatform:
 		return None
 
 
+class _RotatingSecurityMessagePlatform:
+	def __init__(self):
+		self.calls = 0
+
+	def is_success(self, response):
+		return response.get("code") == 0
+
+	def unwrap_data(self, response):
+		return response.get("zpData")
+
+	def parse_error(self, response):
+		return ("UNKNOWN", response.get("message", ""))
+
+	def friend_list(self, page=1):
+		self.calls += 1
+		return {
+			"code": 0,
+			"zpData": {
+				"hasMore": False,
+				"result": [
+					{
+						"securityId": f"sec_rotating_{self.calls}",
+						"uid": 755278482,
+						"friendId": 755278482,
+						"encryptJobId": "job_resume",
+						"name": "李HR",
+						"brandName": "TestCo",
+						"title": "HRBP",
+						"lastMsg": "对方已查看了您的附件简历",
+						"lastTS": 1781746548734,
+					}
+				],
+			},
+		}
+
+	def chat_history(self, gid, security_id, page=1, count=50):
+		assert gid == "755278482"
+		assert security_id.startswith("sec_rotating_")
+		return {
+			"code": 0,
+			"zpData": {
+				"messages": [
+					{
+						"mid": 354743700415492,
+						"securityId": security_id,
+						"type": 4,
+						"time": 1781746548734,
+						"from": {"uid": 755278482, "name": "李HR"},
+						"body": {"text": "对方已查看了您的附件简历"},
+					}
+				]
+			},
+		}
+
+	def close(self):
+		return None
+
+
 def test_sync_jobs_maps_platform_job_detail_to_local_summary(tmp_path: Path):
 	store = RagReplyStore(tmp_path / "boss-rag.sqlite3")
 	store.initialize()
@@ -279,9 +337,9 @@ def test_sync_messages_saves_conversation_and_inbound_messages(tmp_path: Path):
 	result = adapter.sync_messages()
 
 	assert result.count == 1
-	assert result.conversation_ids == ["boss_conv_sec_001"]
-	assert result.message_ids == ["boss_msg_sec_001_m_001"]
-	conversation = store.get_conversation("boss_conv_sec_001")
+	assert result.conversation_ids == ["boss_conv_12345"]
+	assert result.message_ids == ["boss_msg_12345_m_001"]
+	conversation = store.get_conversation("boss_conv_12345")
 	assert conversation is not None
 	assert conversation.recruiter_id == "boss_recruiter_12345"
 	assert conversation.job_id == "job_001"
@@ -294,7 +352,7 @@ def test_sync_messages_saves_conversation_and_inbound_messages(tmp_path: Path):
 	assert conversation.state["company"] == "TestCo"
 	assert conversation.state["title"] == "HRBP"
 
-	messages = store.list_messages("boss_conv_sec_001")
+	messages = store.list_messages("boss_conv_12345")
 	assert len(messages) == 1
 	assert messages[0].direction == "inbound"
 	assert messages[0].message_text == "方便加微信吗？"
@@ -331,7 +389,25 @@ def test_sync_messages_uses_content_fingerprint_when_timestamp_collides(tmp_path
 	assert result.count == 1
 	assert len(result.message_ids) == 1
 	assert len(set(result.message_ids)) == 1
-	messages = store.list_messages("boss_conv_sec_dup")
+	messages = store.list_messages("boss_conv_44798248")
 	assert len(messages) == 1
 	assert len({message.message_id for message in messages}) == 1
 	assert messages[0].message_text == "你好，我们正在诚聘大模型应用开发，有兴趣聊聊吗"
+
+
+def test_sync_messages_keeps_identity_stable_when_security_id_rotates(tmp_path: Path):
+	store = RagReplyStore(tmp_path / "boss-rag.sqlite3")
+	store.initialize()
+	platform = _RotatingSecurityMessagePlatform()
+	adapter = BossAutomationAdapter(platform=platform, store=store)
+
+	first = adapter.sync_messages()
+	second = adapter.sync_messages()
+
+	assert first.conversation_ids == ["boss_conv_755278482"]
+	assert second.conversation_ids == ["boss_conv_755278482"]
+	assert first.message_ids == ["boss_msg_755278482_354743700415492"]
+	assert second.message_ids == ["boss_msg_755278482_354743700415492"]
+	messages = store.list_messages("boss_conv_755278482")
+	assert len(messages) == 1
+	assert messages[0].raw["securityId"] == "sec_rotating_2"
