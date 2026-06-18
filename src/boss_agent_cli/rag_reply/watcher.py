@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Protocol
 
+from boss_agent_cli.display import error_contract_for_code
 from boss_agent_cli.rag_reply.auto_actions import AutoReplyAction
 from boss_agent_cli.rag_reply.auto_graph import run_auto_reply_graph
 from boss_agent_cli.rag_reply.models import AuditLogRecord, MessageRecord
@@ -139,18 +140,26 @@ class BossPassiveWatcher:
         try:
             result = self.message_syncer.sync_messages() or {}
         except Exception as exc:
-            error_message = str(exc) or exc.__class__.__name__
+            metadata = _sync_error_metadata(exc)
             return _sync_blocked_task(
-                error_message,
-                {"error_message": error_message},
+                metadata["error_message"],
+                {"error_message": metadata["error_message"]},
                 dry_run=self.config.dry_run,
+                error_code=metadata["error_code"],
+                recoverable=metadata["recoverable"],
+                recovery_action=metadata["recovery_action"],
+                hints=metadata["hints"],
             )
         if result.get("ok") is False:
-            error_message = str(
-                result.get("error_message") or result.get("status") or "live_sync_failed"
-            )
+            metadata = _sync_error_metadata(result)
             return _sync_blocked_task(
-                error_message, result, dry_run=self.config.dry_run
+                metadata["error_message"],
+                result,
+                dry_run=self.config.dry_run,
+                error_code=metadata["error_code"],
+                recoverable=metadata["recoverable"],
+                recovery_action=metadata["recovery_action"],
+                hints=metadata["hints"],
             )
         return None
 
@@ -299,6 +308,10 @@ def _sync_blocked_task(
     *,
     live_sync: bool = True,
     dry_run: bool = False,
+    error_code: str = "",
+    recoverable: bool = False,
+    recovery_action: str = "",
+    hints: dict[str, object] | None = None,
 ) -> dict[str, object]:
     return {
         "message_id": "",
@@ -307,12 +320,49 @@ def _sync_blocked_task(
         "intent": "unknown",
         "status": "blocked_manual_required",
         "error_message": error_message,
+        "error_code": error_code,
+        "recoverable": recoverable,
+        "recovery_action": recovery_action,
         "dry_run": dry_run,
         "action": {},
         "delivery": {},
         "live_sync": live_sync,
         "sync": sync or {},
+        "hints": hints or {},
     }
+
+
+def _sync_error_metadata(error: object) -> dict[str, object]:
+    code = _error_attr(error, "error_code") or _error_attr(error, "code")
+    message = (
+        _error_attr(error, "error_message")
+        or _error_attr(error, "message")
+        or _error_attr(error, "status")
+        or str(error)
+        or error.__class__.__name__
+    )
+    recoverable = bool(_error_attr(error, "recoverable"))
+    recovery_action = _error_attr(error, "recovery_action")
+    if code and not recovery_action:
+        recoverable, recovery_action = error_contract_for_code(
+            code,
+            fallback_recoverable=recoverable,
+            fallback_recovery_action=recovery_action or None,
+        )
+    hints = _error_attr(error, "hints")
+    return {
+        "error_code": str(code or ""),
+        "error_message": str(message or ""),
+        "recoverable": recoverable,
+        "recovery_action": str(recovery_action or ""),
+        "hints": hints if isinstance(hints, dict) else {},
+    }
+
+
+def _error_attr(error: object, key: str) -> object:
+    if isinstance(error, dict):
+        return error.get(key)
+    return getattr(error, key, None)
 
 
 def _action_payload(action: AutoReplyAction | None) -> dict[str, object]:

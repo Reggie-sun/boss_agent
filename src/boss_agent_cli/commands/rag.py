@@ -100,7 +100,15 @@ class _CliWatcherMessageSyncer:
 	def sync_messages(self, *, conversation_id: str | None = None) -> dict[str, object]:
 		config = self.ctx.obj.get("config", {}) if self.ctx and self.ctx.obj else {}
 		if not bool(config.get("boss_rag_allow_message_read", False)):
-			return {"ok": False, "status": "read_disabled", "count": 0}
+			return {
+				"ok": False,
+				"status": "read_disabled",
+				"error_code": "RAG_READ_NOT_ENABLED",
+				"error_message": "Boss message reading is disabled by default.",
+				"recoverable": True,
+				"recovery_action": "Set boss_rag_allow_message_read=true in config.json and retry.",
+				"count": 0,
+			}
 		with _build_boss_adapter(self.ctx) as adapter:
 			result = adapter.sync_messages(conversation_id=conversation_id)
 		return {

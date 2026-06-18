@@ -6,6 +6,7 @@ from boss_agent_cli.rag_reply.auto_actions import (
     AutoReplyAction,
     build_action_for_draft,
 )
+from boss_agent_cli.rag_reply.adapters.boss_automation import BossAutomationError
 from boss_agent_cli.rag_reply.models import (
     AuditLogRecord,
     ConversationRecord,
@@ -253,6 +254,16 @@ class _FailingSyncer:
 class _RaisingSyncer:
     def sync_messages(self, *, conversation_id=None):
         raise RuntimeError("bridge_unavailable")
+
+
+class _StructuredRaisingSyncer:
+    def sync_messages(self, *, conversation_id=None):
+        raise BossAutomationError(
+            "TOKEN_REFRESH_FAILED",
+            "stoken expired",
+            recoverable=True,
+            recovery_action="boss login",
+        )
 
 
 def _store(tmp_path):
@@ -684,6 +695,49 @@ def test_passive_watcher_blocks_live_sync_exception(tmp_path):
     assert store.list_drafts() == []
     audit = store.list_audit_logs("live_sync")[-1]
     assert audit.payload["error_message"] == "bridge_unavailable"
+
+
+def test_passive_watcher_records_recovery_metadata_for_structured_sync_error(tmp_path):
+    store = _store(tmp_path)
+    store.save_conversation(
+        ConversationRecord(
+            conversation_id="conv_001",
+            source="boss_sync",
+            state={"security_id": "sec_001"},
+        )
+    )
+    store.save_message(
+        MessageRecord(
+            message_id="msg_001",
+            conversation_id="conv_001",
+            message_text="介绍下你的 RAG 项目",
+            direction="inbound",
+        )
+    )
+    delivery = _RecordingDelivery()
+    config = _config(tmp_path)
+    config.live_sync = True
+    watcher = BossPassiveWatcher(
+        store=store,
+        service=_integration_service(store),
+        config=config,
+        delivery=delivery,
+        message_syncer=_StructuredRaisingSyncer(),
+    )
+
+    result = watcher.run_once(live_sync=True)
+
+    assert result.processed == 0
+    assert result.blocked == 1
+    assert result.tasks[0]["status"] == "blocked_manual_required"
+    assert result.tasks[0]["error_code"] == "TOKEN_REFRESH_FAILED"
+    assert result.tasks[0]["error_message"] == "stoken expired"
+    assert result.tasks[0]["recoverable"] is True
+    assert result.tasks[0]["recovery_action"] == "boss login"
+    assert delivery.calls == []
+    assert store.list_drafts() == []
+    audit = store.list_audit_logs("live_sync")[-1]
+    assert audit.payload["error_code"] == "TOKEN_REFRESH_FAILED"
 
 
 def test_passive_watcher_respects_pause_control(tmp_path):

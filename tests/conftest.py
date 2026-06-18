@@ -9,9 +9,12 @@ def _restricted_surface_open_for_existing_contract_tests(request, monkeypatch):
 	"""Keep historical command contract tests focused on pre-guard behavior."""
 	if request.node.path.name == "test_compliance.py":
 		return
-	from boss_agent_cli.config import DEFAULTS
+	from boss_agent_cli.config import DEFAULTS, ENV_ALIASES
 
 	monkeypatch.setitem(DEFAULTS, "low_risk_mode", False)
+	for env_names in ENV_ALIASES.values():
+		for env_name in env_names:
+			monkeypatch.setenv(env_name, "")
 
 
 @pytest.fixture

@@ -939,6 +939,46 @@ def test_agent_watcher_run_ensure_chat_page_fails_closed(monkeypatch, tmp_path: 
 	assert payload["error"]["code"] == "CDP_UNAVAILABLE"
 
 
+def test_agent_watcher_run_live_sync_read_disabled_records_recovery(
+	monkeypatch, tmp_path: Path
+):
+	monkeypatch.setenv("BOSS_RAG_ALLOW_MESSAGE_READ", "false")
+	(tmp_path / "config.json").write_text(
+		json.dumps(
+			{
+				"boss_rag_watcher_enabled": True,
+				"boss_rag_watcher_live_sync": True,
+			}
+		),
+		encoding="utf-8",
+	)
+	runner = CliRunner()
+
+	result = runner.invoke(
+		cli,
+		[
+			"--json",
+			"--data-dir",
+			str(tmp_path),
+			"agent",
+			"watcher-run",
+			"--once",
+			"--live-sync",
+		],
+	)
+
+	assert result.exit_code == 0
+	payload = json.loads(result.output)
+	assert payload["ok"] is True
+	task = payload["data"]["tasks"][0]
+	assert task["status"] == "blocked_manual_required"
+	assert task["error_code"] == "RAG_READ_NOT_ENABLED"
+	assert task["recoverable"] is True
+	assert task["recovery_action"] == (
+		"Set boss_rag_allow_message_read=true in config.json and retry."
+	)
+
+
 def test_agent_watcher_run_once_no_live_sync_overrides_config(monkeypatch, tmp_path: Path):
 	(tmp_path / "config.json").write_text(
 		json.dumps(
@@ -1132,7 +1172,14 @@ def test_cli_watcher_message_syncer_normalizes_read_disabled_and_success(monkeyp
 
 	disabled = rag_commands._CliWatcherMessageSyncer(disabled_ctx).sync_messages(conversation_id="conv_001")
 
-	assert disabled == {"ok": False, "status": "read_disabled", "count": 0}
+	assert disabled["ok"] is False
+	assert disabled["status"] == "read_disabled"
+	assert disabled["count"] == 0
+	assert disabled["error_code"] == "RAG_READ_NOT_ENABLED"
+	assert disabled["recoverable"] is True
+	assert disabled["recovery_action"] == (
+		"Set boss_rag_allow_message_read=true in config.json and retry."
+	)
 
 	class _FakeBossAdapter:
 		def __enter__(self):
