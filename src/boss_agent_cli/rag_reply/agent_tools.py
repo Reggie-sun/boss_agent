@@ -6,6 +6,13 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Protocol
 
+from boss_agent_cli.commands.pipeline import (
+    _DEFAULT_READ_NO_REPLY_MESSAGE,
+    _READ_NO_REPLY_AGENT_DISCLOSURE,
+    _READ_NO_REPLY_FOLLOWUP_EVENT,
+    _has_read_no_reply_agent_disclosure,
+    _read_no_reply_message,
+)
 from boss_agent_cli.display import error_contract_for_code
 from boss_agent_cli.rag_reply.auto_actions import (
     AutoReplyAction,
@@ -288,6 +295,81 @@ class BossAgentToolbox:
             error_message=(
                 "" if ok else str(delivery.get("error_message") or "attachment_failed")
             ),
+        )
+
+    def send_read_no_reply_followup_guarded(
+        self,
+        *,
+        security_id: str,
+        message: str = "",
+        target: dict[str, str] | None = None,
+    ) -> ToolResult:
+        security_id = security_id.strip()
+        if not security_id:
+            return _blocked_result(error_message="missing_security_id")
+        if not self.context.config.dry_run and not self.context.config.send_enabled:
+            return _blocked_result(
+                error_code="SEND_DISABLED",
+                error_message="boss_rag_send_enabled_disabled",
+                recoverable=True,
+                recovery_action=(
+                    "Run a dry-run first, then explicitly enable Boss RAG sending."
+                ),
+            )
+        base_message = message.strip() or _DEFAULT_READ_NO_REPLY_MESSAGE
+        final_message = _read_no_reply_message(
+            base_message,
+            disclose_agent=not _has_read_no_reply_agent_disclosure(
+                self.context.store,
+                security_id,
+            ),
+        )
+        if self.context.config.dry_run:
+            return ToolResult(
+                ok=True,
+                status="dry_run",
+                data={
+                    "stage": "read_no_reply",
+                    "message": final_message,
+                    "message_sent": False,
+                    "delivery": {"ok": True, "status": "dry_run"},
+                },
+            )
+
+        delivery = self.context.delivery.send(
+            security_id=security_id,
+            message=final_message,
+            send_attachment_resume=False,
+            resume_file="",
+            target=target or {},
+        )
+        ok = bool(delivery.get("ok"))
+        status = "sent" if ok else "send_failed"
+        if ok:
+            self.context.store.append_audit_log(
+                AuditLogRecord.new(
+                    event_type=_READ_NO_REPLY_FOLLOWUP_EVENT,
+                    entity_type="security_id",
+                    entity_id=security_id,
+                    payload={
+                        "security_id": security_id,
+                        "status": "sent",
+                        "agent_disclosed": (
+                            _READ_NO_REPLY_AGENT_DISCLOSURE in final_message
+                        ),
+                    },
+                )
+            )
+        return ToolResult(
+            ok=ok,
+            status=status,
+            data={
+                "stage": "read_no_reply",
+                "message": final_message,
+                "message_sent": ok,
+                "delivery": dict(delivery),
+            },
+            error_message="" if ok else str(delivery.get("error_message") or status),
         )
 
     def record_watcher_audit(

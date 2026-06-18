@@ -1,7 +1,12 @@
 from pathlib import Path
 
 from boss_agent_cli.rag_reply.agent_tools import BossAgentToolContext, BossAgentToolbox
-from boss_agent_cli.rag_reply.models import ConversationRecord, DraftRecord, MessageRecord
+from boss_agent_cli.rag_reply.models import (
+    AuditLogRecord,
+    ConversationRecord,
+    DraftRecord,
+    MessageRecord,
+)
 from boss_agent_cli.rag_reply.service import BossRagReplyService
 from boss_agent_cli.rag_reply.store import RagReplyStore
 from boss_agent_cli.rag_reply.watcher_config import WatcherConfig
@@ -303,3 +308,91 @@ def test_send_attachment_resume_guarded_fails_closed_for_missing_security_id(tmp
     assert result.status == "blocked_manual_required"
     assert result.error_message == "missing_security_id"
     assert delivery.calls == []
+
+
+def test_send_read_no_reply_followup_guarded_dry_run_uses_existing_disclosure(tmp_path):
+    toolbox, store, delivery = _toolbox(tmp_path, dry_run=True, send_enabled=True)
+
+    result = toolbox.send_read_no_reply_followup_guarded(
+        security_id="sec_read",
+        message="您好，想跟进一下这个岗位。",
+        target={"company": "测试公司"},
+    )
+
+    assert result.ok is True
+    assert result.status == "dry_run"
+    assert result.data["stage"] == "read_no_reply"
+    assert result.data["message"] == (
+        "我是候选人的求职助理 Agent，您好，想跟进一下这个岗位。"
+    )
+    assert result.data["delivery"] == {"ok": True, "status": "dry_run"}
+    assert store.list_audit_logs("sec_read") == []
+    assert delivery.calls == []
+
+
+def test_send_read_no_reply_followup_guarded_blocks_live_send_when_disabled(tmp_path):
+    toolbox, _store, delivery = _toolbox(tmp_path, dry_run=False, send_enabled=False)
+
+    result = toolbox.send_read_no_reply_followup_guarded(
+        security_id="sec_read",
+        message="您好，想跟进一下这个岗位。",
+        target={"company": "测试公司"},
+    )
+
+    assert result.ok is False
+    assert result.status == "blocked_manual_required"
+    assert result.error_code == "SEND_DISABLED"
+    assert result.error_message == "boss_rag_send_enabled_disabled"
+    assert delivery.calls == []
+
+
+def test_send_read_no_reply_followup_guarded_sends_and_records_audit(tmp_path):
+    toolbox, store, delivery = _toolbox(tmp_path, dry_run=False, send_enabled=True)
+
+    result = toolbox.send_read_no_reply_followup_guarded(
+        security_id="sec_read",
+        message="您好，想跟进一下这个岗位。",
+        target={"company": "测试公司"},
+    )
+
+    assert result.ok is True
+    assert result.status == "sent"
+    assert delivery.calls == [
+        {
+            "security_id": "sec_read",
+            "message": "我是候选人的求职助理 Agent，您好，想跟进一下这个岗位。",
+            "send_attachment_resume": False,
+            "resume_file": "",
+            "target": {"company": "测试公司"},
+        }
+    ]
+    audit = store.list_audit_logs("sec_read")[-1]
+    assert audit.event_type == "read_no_reply_followup"
+    assert audit.payload["status"] == "sent"
+    assert audit.payload["agent_disclosed"] is True
+
+
+def test_send_read_no_reply_followup_guarded_does_not_repeat_disclosure(tmp_path):
+    toolbox, store, delivery = _toolbox(tmp_path, dry_run=False, send_enabled=True)
+    store.append_audit_log(
+        AuditLogRecord.new(
+            event_type="read_no_reply_followup",
+            entity_type="security_id",
+            entity_id="sec_read",
+            payload={
+                "security_id": "sec_read",
+                "status": "sent",
+                "agent_disclosed": True,
+            },
+        )
+    )
+
+    result = toolbox.send_read_no_reply_followup_guarded(
+        security_id="sec_read",
+        message="您好，想跟进一下这个岗位。",
+        target={"company": "测试公司"},
+    )
+
+    assert result.ok is True
+    assert result.status == "sent"
+    assert delivery.calls[0]["message"] == "您好，想跟进一下这个岗位。"
