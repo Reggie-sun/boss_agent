@@ -124,6 +124,53 @@ class _MessagePlatform:
 		return None
 
 
+class _PipelineCandidatePlatform:
+	def is_success(self, response):
+		return response.get("code") == 0
+
+	def unwrap_data(self, response):
+		return response.get("zpData")
+
+	def parse_error(self, response):
+		return ("UNKNOWN", response.get("message", ""))
+
+	def friend_list(self, page=1):
+		assert page == 1
+		return {
+			"code": 0,
+			"zpData": {
+				"hasMore": False,
+				"result": [
+					{
+						"securityId": "sec_read",
+						"uid": 12345,
+						"friendId": 12345,
+						"encryptBossId": "enc_boss_001",
+						"encryptJobId": "job_001",
+						"relationType": 2,
+						"lastMessageInfo": {"status": 2},
+						"unreadMsgCount": 0,
+						"name": "张HR",
+						"brandName": "TestCo",
+						"title": "AI 工程师",
+						"lastMsg": "我发了项目介绍",
+						"lastTS": 1700000000000,
+					},
+					{
+						"securityId": "sec_unread",
+						"relationType": 2,
+						"lastMessageInfo": {"status": 1},
+						"unreadMsgCount": 0,
+						"lastTS": 1700000000000,
+					},
+				],
+			},
+		}
+
+	def close(self):
+		return None
+
+
 class _RecentOnlyMessagePlatform:
 	def __init__(self):
 		self.friend_list_pages: list[int] = []
@@ -362,6 +409,33 @@ def test_sync_messages_saves_conversation_and_inbound_messages(tmp_path: Path):
 	assert recruiter is not None
 	assert recruiter.display_name == "张HR"
 	assert recruiter.company == "TestCo"
+
+
+def test_list_pipeline_candidates_returns_read_no_reply_targets(tmp_path: Path):
+	store = RagReplyStore(tmp_path / "boss-rag.sqlite3")
+	store.initialize()
+	adapter = BossAutomationAdapter(platform=_PipelineCandidatePlatform(), store=store)
+
+	candidates = adapter.list_pipeline_candidates(
+		now_ts_ms=1700000000000 + 5 * 24 * 3600 * 1000,
+		stale_days=3,
+	)
+
+	assert len(candidates) == 1
+	candidate = candidates[0]
+	assert candidate["stage"] == "read_no_reply"
+	assert candidate["security_id"] == "sec_read"
+	assert candidate["job_id"] == "job_001"
+	assert candidate["company"] == "TestCo"
+	assert candidate["title"] == "AI 工程师"
+	assert candidate["msg_status"] == "已读"
+	assert candidate["reason"] == "对方已读未回，建议主动跟进"
+	assert candidate["gid"] == "12345"
+	assert candidate["friend_id"] == "12345"
+	assert candidate["uid"] == "12345"
+	assert candidate["encrypt_boss_id"] == "enc_boss_001"
+	assert candidate["recruiter_name"] == "张HR"
+	assert candidate["recruiter_id"] == "boss_recruiter_12345"
 
 
 def test_sync_messages_limits_recent_conversations_without_deep_pagination(tmp_path: Path):

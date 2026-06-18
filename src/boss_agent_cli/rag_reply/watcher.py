@@ -6,7 +6,11 @@ from dataclasses import dataclass
 from typing import Protocol
 
 from boss_agent_cli.display import error_contract_for_code
-from boss_agent_cli.rag_reply.agent_tools import BossAgentToolContext, BossAgentToolbox
+from boss_agent_cli.rag_reply.agent_tools import (
+    BossAgentToolContext,
+    BossAgentToolbox,
+    ToolResult,
+)
 from boss_agent_cli.rag_reply.models import AuditLogRecord, MessageRecord
 from boss_agent_cli.rag_reply.service import BossRagReplyService
 from boss_agent_cli.rag_reply.store import RagReplyStore
@@ -26,6 +30,7 @@ WATCHER_STATUSES = {
     "attachment_failed",
     "send_failed",
     "paused",
+    "dry_run",
 }
 
 
@@ -47,6 +52,11 @@ class WatcherMessageSyncer(Protocol):
         ...
 
 
+class WatcherPipelineCandidateProvider(Protocol):
+    def list_pipeline_candidates(self) -> list[dict[str, object]]:
+        ...
+
+
 @dataclass(slots=True)
 class WatcherRunResult:
     processed: int
@@ -64,12 +74,14 @@ class BossPassiveWatcher:
         config: WatcherConfig,
         delivery: WatcherDelivery,
         message_syncer: WatcherMessageSyncer | None = None,
+        pipeline_candidate_provider: WatcherPipelineCandidateProvider | None = None,
     ) -> None:
         self.store = store
         self.service = service
         self.config = config
         self.delivery = delivery
         self.message_syncer = message_syncer
+        self.pipeline_candidate_provider = pipeline_candidate_provider
 
     def run_once(self, *, live_sync: bool | None = None) -> WatcherRunResult:
         if live_sync is None:
@@ -122,6 +134,46 @@ class BossPassiveWatcher:
                 blocked += 1
             else:
                 processed += 1
+        try:
+            pipeline_candidates = self._pipeline_candidates()
+        except Exception as exc:
+            metadata = _sync_error_metadata(exc)
+            task = self._record_run_task(
+                _sync_blocked_task(
+                    metadata["error_message"],
+                    {"error_message": metadata["error_message"]},
+                    dry_run=self.config.dry_run,
+                    error_code=metadata["error_code"],
+                    recoverable=metadata["recoverable"],
+                    recovery_action=metadata["recovery_action"],
+                    hints=metadata["hints"],
+                )
+            )
+            tasks.append(task)
+            blocked += 1
+            return WatcherRunResult(
+                processed=processed,
+                skipped=skipped,
+                blocked=blocked,
+                tasks=tasks,
+            )
+        for candidate in pipeline_candidates:
+            if self._already_processed_pipeline_candidate(candidate):
+                skipped += 1
+                tasks.append(
+                    {
+                        "security_id": str(candidate.get("security_id") or ""),
+                        "stage": "read_no_reply",
+                        "status": "skipped_duplicate",
+                    }
+                )
+                continue
+            task = self._process_pipeline_candidate(candidate)
+            tasks.append(task)
+            if task["status"] in {"blocked_manual_required", "paused"}:
+                blocked += 1
+            else:
+                processed += 1
         return WatcherRunResult(
             processed=processed, skipped=skipped, blocked=blocked, tasks=tasks
         )
@@ -165,6 +217,17 @@ class BossPassiveWatcher:
             latest_by_conversation[message.conversation_id] = message
         return list(latest_by_conversation.values())
 
+    def _pipeline_candidates(self) -> list[dict[str, object]]:
+        provider = self.pipeline_candidate_provider
+        if provider is None:
+            return []
+        return [
+            candidate
+            for candidate in provider.list_pipeline_candidates()
+            if candidate.get("stage") == "read_no_reply"
+            and str(candidate.get("security_id") or "").strip()
+        ]
+
     def _already_processed(self, message: MessageRecord) -> bool:
         message_key = _platform_message_key(message)
         for entry in self.store.list_audit_logs():
@@ -199,6 +262,59 @@ class BossPassiveWatcher:
             toolbox=BossAgentToolbox(context),
         )
         return result.task
+
+    def _process_pipeline_candidate(self, candidate: dict[str, object]) -> dict[str, object]:
+        context = BossAgentToolContext(
+            store=self.store,
+            service=self.service,
+            config=self.config,
+            delivery=self.delivery,
+            message_syncer=self.message_syncer,
+        )
+        security_id = str(candidate.get("security_id") or "").strip()
+        target = _pipeline_target_payload(candidate)
+        result = BossAgentToolbox(context).send_read_no_reply_followup_guarded(
+            security_id=security_id,
+            message=str(candidate.get("message") or ""),
+            target=target,
+        )
+        tool_steps = [
+            _tool_step_payload("send_read_no_reply_followup_guarded", result),
+            {
+                "tool": "record_watcher_audit",
+                "ok": True,
+                "status": "audit_recorded",
+                "error_code": "",
+                "error_message": "",
+            },
+        ]
+        task = {
+            "message_id": "",
+            "conversation_id": "",
+            "draft_id": "",
+            "intent": "read_no_reply",
+            "stage": "read_no_reply",
+            "security_id": security_id,
+            "status": result.status,
+            "error_message": result.error_message,
+            "dry_run": self.config.dry_run,
+            "action": {
+                "kind": "send_read_no_reply_followup",
+                "message": str(result.data.get("message") or ""),
+            },
+            "delivery": dict(result.data.get("delivery") or {}),
+            "target": target,
+            "tool_steps": tool_steps,
+        }
+        self.store.append_audit_log(
+            AuditLogRecord.new(
+                event_type="watcher_task",
+                entity_type="security_id",
+                entity_id=security_id,
+                payload=task,
+            )
+        )
+        return task
 
     def _record_paused_task(self, message: MessageRecord) -> dict[str, object]:
         payload = {
@@ -256,6 +372,29 @@ class BossPassiveWatcher:
             elif action == "resume":
                 paused = False
         return paused
+
+    def _already_processed_pipeline_candidate(self, candidate: dict[str, object]) -> bool:
+        security_id = str(candidate.get("security_id") or "").strip()
+        if not security_id:
+            return True
+        for entry in self.store.list_audit_logs():
+            payload_security_id = str(entry.payload.get("security_id") or "")
+            if entry.event_type == "read_no_reply_followup":
+                if payload_security_id == security_id and entry.payload.get("status") == "sent":
+                    return True
+                continue
+            if entry.event_type != "watcher_task":
+                continue
+            if payload_security_id != security_id:
+                continue
+            if entry.payload.get("status") == "paused":
+                continue
+            if (
+                entry.payload.get("stage") == "read_no_reply"
+                or entry.payload.get("intent") == "read_no_reply"
+            ):
+                return True
+        return False
 
 
 def _sync_blocked_task(
@@ -319,6 +458,30 @@ def _error_attr(error: object, key: str) -> object:
     if isinstance(error, dict):
         return error.get(key)
     return getattr(error, key, None)
+
+
+def _pipeline_target_payload(candidate: dict[str, object]) -> dict[str, str]:
+    return {
+        "recruiter_name": str(candidate.get("recruiter_name") or ""),
+        "company": str(candidate.get("company") or ""),
+        "title": str(candidate.get("title") or ""),
+        "security_id": str(candidate.get("security_id") or ""),
+        "gid": str(candidate.get("gid") or ""),
+        "friend_id": str(candidate.get("friend_id") or ""),
+        "uid": str(candidate.get("uid") or ""),
+        "encrypt_boss_id": str(candidate.get("encrypt_boss_id") or ""),
+        "recruiter_id": str(candidate.get("recruiter_id") or ""),
+    }
+
+
+def _tool_step_payload(tool_name: str, result: ToolResult) -> dict[str, object]:
+    return {
+        "tool": tool_name,
+        "ok": result.ok,
+        "status": result.status,
+        "error_code": result.error_code,
+        "error_message": result.error_message,
+    }
 
 
 def _platform_message_key(message: MessageRecord) -> tuple[str, ...] | None:

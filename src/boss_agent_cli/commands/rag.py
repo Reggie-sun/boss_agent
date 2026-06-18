@@ -92,7 +92,7 @@ class _CliWatcherDelivery:
 
 
 class _CliWatcherMessageSyncer:
-	"""Sync recent Boss messages before a watcher cycle."""
+	"""Sync recent Boss messages and pipeline candidates before a watcher cycle."""
 
 	def __init__(self, ctx: click.Context) -> None:
 		self.ctx = ctx
@@ -118,6 +118,13 @@ class _CliWatcherMessageSyncer:
 			"conversation_ids": result.conversation_ids,
 			"message_ids": result.message_ids,
 		}
+
+	def list_pipeline_candidates(self) -> list[dict[str, object]]:
+		config = self.ctx.obj.get("config", {}) if self.ctx and self.ctx.obj else {}
+		if not bool(config.get("boss_rag_allow_message_read", False)):
+			return []
+		with _build_boss_adapter(self.ctx) as adapter:
+			return adapter.list_pipeline_candidates(stale_days=3)
 
 
 def _workflow_name(ctx: click.Context) -> str:
@@ -203,12 +210,14 @@ def _build_watcher_config(ctx: click.Context) -> WatcherConfig:
 def _build_passive_watcher(ctx: click.Context) -> BossPassiveWatcher:
 	"""Construct the passive watcher using the shared RAG service and CLI delivery."""
 	service = _build_service(ctx)
+	syncer = _CliWatcherMessageSyncer(ctx)
 	return BossPassiveWatcher(
 		store=service.store,
 		service=service,
 		config=_build_watcher_config(ctx),
 		delivery=_CliWatcherDelivery(ctx),
-		message_syncer=_CliWatcherMessageSyncer(ctx),
+		message_syncer=syncer,
+		pipeline_candidate_provider=syncer,
 	)
 
 

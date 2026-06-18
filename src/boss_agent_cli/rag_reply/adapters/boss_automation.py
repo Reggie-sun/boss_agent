@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, Protocol
@@ -11,6 +12,7 @@ from typing import Any, Protocol
 from boss_agent_cli.api.models import JobDetail, JobItem
 from boss_agent_cli.commands.friend_list_pages import collect_friend_list_items
 from boss_agent_cli.display import error_contract_for_code
+from boss_agent_cli.pipeline_state import build_pipeline_items, select_read_no_reply_candidates
 from boss_agent_cli.rag_reply.models import (
 	AuditLogRecord,
 	ConversationRecord,
@@ -249,6 +251,48 @@ class BossAutomationAdapter:
 				)
 			)
 		return targets
+
+	def list_pipeline_candidates(
+		self,
+		*,
+		now_ts_ms: int | None = None,
+		stale_days: int = 3,
+		limit: int = _RECENT_CONVERSATION_LIMIT,
+	) -> list[dict[str, object]]:
+		"""Return actionable pipeline candidates derived from the Boss conversation list."""
+		items, error = collect_friend_list_items(self.platform, max_pages=_RECENT_FRIEND_LIST_PAGES)
+		if error is not None:
+			self._raise_platform_error(error, fallback_message="沟通列表获取失败")
+
+		raw_by_security_id = {
+			str(item.get("securityId") or ""): item
+			for item in items
+			if isinstance(item, dict)
+		}
+		pipeline_items = build_pipeline_items(
+			chat_items=[item for item in items if isinstance(item, dict)],
+			interview_items=[],
+			now_ts_ms=now_ts_ms or int(time.time() * 1000),
+			stale_days=stale_days,
+		)
+		candidates: list[dict[str, object]] = []
+		for item in select_read_no_reply_candidates(pipeline_items)[: max(limit, 0)]:
+			candidate = dict(item)
+			raw_item = raw_by_security_id.get(str(item.get("security_id") or ""))
+			if isinstance(raw_item, dict):
+				conversation = self._save_conversation_from_friend_item(raw_item)
+				candidate.update(
+					{
+						"gid": str(conversation.state.get("gid") or ""),
+						"friend_id": str(conversation.state.get("friend_id") or ""),
+						"uid": str(conversation.state.get("uid") or ""),
+						"encrypt_boss_id": str(conversation.state.get("encrypt_boss_id") or ""),
+						"recruiter_name": str(conversation.state.get("recruiter_name") or ""),
+						"recruiter_id": str(conversation.recruiter_id or ""),
+					}
+				)
+			candidates.append(candidate)
+		return candidates
 
 	def _job_record_from_raw(self, raw_item: dict[str, Any]) -> JobRecord | None:
 		job_item = JobItem.from_api(raw_item)

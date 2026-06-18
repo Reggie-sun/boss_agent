@@ -266,6 +266,26 @@ class _StructuredRaisingSyncer:
         )
 
 
+class _PipelineProvider:
+    def __init__(self, candidates):
+        self.candidates = candidates
+        self.calls = 0
+
+    def list_pipeline_candidates(self):
+        self.calls += 1
+        return self.candidates
+
+
+class _FailingPipelineProvider:
+    def list_pipeline_candidates(self):
+        raise BossAutomationError(
+            "TOKEN_REFRESH_FAILED",
+            "stoken expired",
+            recoverable=True,
+            recovery_action="boss login",
+        )
+
+
 def _store(tmp_path):
     store = RagReplyStore(tmp_path / "boss-rag.sqlite3")
     store.initialize()
@@ -664,6 +684,118 @@ def test_passive_watcher_resume_share_sends_attachment_resume(tmp_path):
     assert result.tasks[0]["action"]["send_attachment_resume"] is True
     assert delivery.calls[0]["send_attachment_resume"] is True
     assert delivery.calls[0]["resume_file"] == config.resume_attachment_path
+
+
+def test_passive_watcher_processes_read_no_reply_pipeline_candidate(tmp_path):
+    store = _store(tmp_path)
+    delivery = _RecordingDelivery()
+    config = _config(tmp_path)
+    config.dry_run = True
+    config.live_sync = True
+    pipeline_provider = _PipelineProvider(
+        [
+            {
+                "stage": "read_no_reply",
+                "security_id": "sec_read",
+                "company": "测试公司",
+                "title": "AI 工程师",
+            }
+        ]
+    )
+    watcher = BossPassiveWatcher(
+        store=store,
+        service=_integration_service(store),
+        config=config,
+        delivery=delivery,
+        message_syncer=_Syncer(),
+        pipeline_candidate_provider=pipeline_provider,
+    )
+
+    result = watcher.run_once(live_sync=True)
+
+    assert pipeline_provider.calls == 1
+    assert result.processed == 1
+    assert result.blocked == 0
+    assert result.tasks[0]["stage"] == "read_no_reply"
+    assert result.tasks[0]["security_id"] == "sec_read"
+    assert result.tasks[0]["status"] == "dry_run"
+    assert result.tasks[0]["action"]["kind"] == "send_read_no_reply_followup"
+    assert result.tasks[0]["delivery"] == {"ok": True, "status": "dry_run"}
+    assert [step["tool"] for step in result.tasks[0]["tool_steps"]] == [
+        "send_read_no_reply_followup_guarded",
+        "record_watcher_audit",
+    ]
+    assert delivery.calls == []
+
+
+def test_passive_watcher_skips_processed_read_no_reply_pipeline_candidate(tmp_path):
+    store = _store(tmp_path)
+    store.append_audit_log(
+        AuditLogRecord.new(
+            event_type="watcher_task",
+            entity_type="security_id",
+            entity_id="sec_read",
+            payload={
+                "security_id": "sec_read",
+                "stage": "read_no_reply",
+                "intent": "read_no_reply",
+                "status": "dry_run",
+            },
+        )
+    )
+    delivery = _RecordingDelivery()
+    config = _config(tmp_path)
+    config.dry_run = True
+    config.live_sync = True
+    pipeline_provider = _PipelineProvider(
+        [{"stage": "read_no_reply", "security_id": "sec_read"}]
+    )
+    watcher = BossPassiveWatcher(
+        store=store,
+        service=_integration_service(store),
+        config=config,
+        delivery=delivery,
+        message_syncer=_Syncer(),
+        pipeline_candidate_provider=pipeline_provider,
+    )
+
+    result = watcher.run_once(live_sync=True)
+
+    assert result.processed == 0
+    assert result.skipped == 1
+    assert result.tasks == [
+        {
+            "security_id": "sec_read",
+            "stage": "read_no_reply",
+            "status": "skipped_duplicate",
+        }
+    ]
+    assert delivery.calls == []
+
+
+def test_passive_watcher_blocks_failed_pipeline_candidate_discovery(tmp_path):
+    store = _store(tmp_path)
+    delivery = _RecordingDelivery()
+    config = _config(tmp_path)
+    config.live_sync = True
+    watcher = BossPassiveWatcher(
+        store=store,
+        service=_integration_service(store),
+        config=config,
+        delivery=delivery,
+        message_syncer=_Syncer(),
+        pipeline_candidate_provider=_FailingPipelineProvider(),
+    )
+
+    result = watcher.run_once(live_sync=True)
+
+    assert result.processed == 0
+    assert result.blocked == 1
+    assert result.tasks[0]["status"] == "blocked_manual_required"
+    assert result.tasks[0]["error_code"] == "TOKEN_REFRESH_FAILED"
+    assert result.tasks[0]["error_message"] == "stoken expired"
+    assert result.tasks[0]["recoverable"] is True
+    assert delivery.calls == []
 
 
 def test_passive_watcher_processes_only_latest_inbound_per_conversation(tmp_path):

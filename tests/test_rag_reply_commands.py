@@ -12,6 +12,7 @@ from boss_agent_cli.rag_reply.adapters.boss_automation import SyncJobsResult, Sy
 from boss_agent_cli.rag_reply.models import AuditLogRecord, ConversationRecord, DraftRecord, MessageRecord, RecruiterRecord
 from boss_agent_cli.rag_reply.service import BossRagReplyService
 from boss_agent_cli.rag_reply.store import RagReplyStore
+from boss_agent_cli.rag_reply.watcher_config import WatcherConfig
 
 
 def test_rag_group_is_registered():
@@ -797,6 +798,33 @@ def test_agent_watcher_run_once_enabled_returns_run_counts(monkeypatch, tmp_path
 	assert payload["data"]["skipped"] == 2
 	assert payload["data"]["blocked"] == 3
 	assert payload["data"]["tasks"] == [{"message_id": "msg_001", "status": "sent"}]
+
+
+def test_build_passive_watcher_registers_pipeline_candidate_provider(monkeypatch, tmp_path: Path):
+	store = RagReplyStore(tmp_path / "boss-rag.sqlite3")
+	store.initialize()
+	service = BossRagReplyService(
+		store=store,
+		rag_adapter=SimpleNamespace(),
+	)
+	config = WatcherConfig(
+		enabled=True,
+		dry_run=True,
+		live_sync=True,
+		contact_phone="13800138000",
+		contact_wechat="reggie-ai",
+		interview_windows="工作日 20:00 后",
+		resume_attachment_path=str(tmp_path / "resume.pdf"),
+	)
+	ctx = SimpleNamespace(obj={"data_dir": tmp_path, "config": {}, "logger": None})
+
+	monkeypatch.setattr(rag_commands, "_build_service", lambda ctx: service)
+	monkeypatch.setattr(rag_commands, "_build_watcher_config", lambda ctx: config)
+
+	watcher = rag_commands._build_passive_watcher(ctx)
+
+	assert watcher.pipeline_candidate_provider is watcher.message_syncer
+	assert hasattr(watcher.pipeline_candidate_provider, "list_pipeline_candidates")
 
 
 def test_agent_watcher_run_once_live_sync_passes_flag(monkeypatch, tmp_path: Path):
