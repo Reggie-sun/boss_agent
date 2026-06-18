@@ -66,17 +66,17 @@ const bossScaleOptions = ["", "0-20人", "20-99人", "100-499人", "500-999人",
 const bossStageOptions = ["", "未融资", "天使轮", "A轮", "B轮", "C轮", "D轮及以上", "已上市", "不需要融资"];
 const bossJobTypeOptions = ["", "全职", "兼职", "实习"];
 const defaultBossSearchForm = {
-  query: "AI Agent",
-  city: "广州",
-  salary: "",
-  experience: "",
-  education: "",
-  industry: "人工智能",
+  query: "RAG",
+  city: "杭州",
+  salary: "12-24K",
+  experience: "1年以内",
+  education: "本科",
+  industry: "",
   scale: "",
   stage: "",
   jobType: "全职",
   welfare: "",
-  count: "3",
+  count: "10",
 };
 
 const bossAccountRiskCode = "ACCOUNT_RISK";
