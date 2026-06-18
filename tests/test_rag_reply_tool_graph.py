@@ -1,4 +1,8 @@
-from boss_agent_cli.rag_reply.agent_tools import BossAgentToolContext, BossAgentToolbox
+from boss_agent_cli.rag_reply.agent_tools import (
+    BossAgentToolContext,
+    BossAgentToolbox,
+    ToolResult,
+)
 from boss_agent_cli.rag_reply.models import ConversationRecord, MessageRecord
 from boss_agent_cli.rag_reply.service import BossRagReplyService
 from boss_agent_cli.rag_reply.store import RagReplyStore
@@ -150,6 +154,34 @@ def test_tool_reply_graph_blocks_missing_security_id_without_delivery(tmp_path):
     assert result.task["status"] == "blocked_manual_required"
     assert result.task["tool_steps"][-2]["tool"] == "resolve_boss_target"
     assert result.task["tool_steps"][-1]["tool"] == "record_watcher_audit"
+
+
+def test_tool_reply_graph_stops_on_failed_tool_without_error_message(
+    monkeypatch,
+    tmp_path,
+):
+    toolbox, store, delivery = _toolbox(tmp_path, dry_run=False, send_enabled=True)
+    message = _message(store)
+
+    def _failed_target(*, conversation_id):
+        return ToolResult(
+            ok=False,
+            status="blocked_manual_required",
+            data={"target": {"security_id": ""}},
+        )
+
+    monkeypatch.setattr(toolbox, "resolve_boss_target", _failed_target)
+
+    result = run_tool_reply_graph(message=message, toolbox=toolbox)
+
+    assert result.status == "blocked_manual_required"
+    assert [step["tool"] for step in result.tool_steps] == [
+        "create_rag_draft",
+        "decide_auto_action",
+        "resolve_boss_target",
+        "record_watcher_audit",
+    ]
+    assert delivery.calls == []
 
 
 def test_tool_reply_graph_dry_run_records_delivery_without_real_send(tmp_path):

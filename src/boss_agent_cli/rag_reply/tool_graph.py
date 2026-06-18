@@ -245,4 +245,7 @@ def _step_payload(tool_name: str, result: ToolResult) -> dict[str, object]:
 
 
 def _route_after_tool(state: ToolReplyState) -> str:
+    steps = list(state.get("tool_steps") or [])
+    if steps and steps[-1].get("ok") is False:
+        return "audit"
     return "audit" if state.get("error_message") else "continue"
