@@ -6,11 +6,11 @@ from dataclasses import dataclass
 from typing import Protocol
 
 from boss_agent_cli.display import error_contract_for_code
-from boss_agent_cli.rag_reply.auto_actions import AutoReplyAction
-from boss_agent_cli.rag_reply.auto_graph import run_auto_reply_graph
+from boss_agent_cli.rag_reply.agent_tools import BossAgentToolContext, BossAgentToolbox
 from boss_agent_cli.rag_reply.models import AuditLogRecord, MessageRecord
 from boss_agent_cli.rag_reply.service import BossRagReplyService
 from boss_agent_cli.rag_reply.store import RagReplyStore
+from boss_agent_cli.rag_reply.tool_graph import run_tool_reply_graph
 from boss_agent_cli.rag_reply.watcher_config import WatcherConfig
 
 
@@ -111,13 +111,7 @@ class BossPassiveWatcher:
                 continue
             if self._is_paused(message.conversation_id):
                 blocked += 1
-                task = self._record_task(
-                    message=message,
-                    status="paused",
-                    intent="unknown",
-                    draft_id="",
-                    error_message="conversation_paused",
-                )
+                task = self._record_paused_task(message)
                 tasks.append(task)
                 continue
             task = self._process_message(message)
@@ -182,48 +176,31 @@ class BossPassiveWatcher:
         return False
 
     def _process_message(self, message: MessageRecord) -> dict[str, object]:
-        draft = self.service.create_draft_for_message(message.message_id)
-        result = run_auto_reply_graph(
-            message=message,
-            draft=draft,
+        context = BossAgentToolContext(
+            store=self.store,
+            service=self.service,
             config=self.config,
-            resolve_security_id=self._resolve_security_id,
-            target_payload=self._target_payload,
             delivery=self.delivery,
+            message_syncer=self.message_syncer,
         )
-        return self._record_task(
+        result = run_tool_reply_graph(
             message=message,
-            status=result.status,
-            intent=result.intent,
-            draft_id=draft.draft_id,
-            error_message=result.error_message,
-            dry_run=result.dry_run,
-            action=_action_from_payload(result.action),
-            delivery=result.delivery,
+            toolbox=BossAgentToolbox(context),
         )
+        return result.task
 
-    def _record_task(
-        self,
-        *,
-        message: MessageRecord,
-        status: str,
-        intent: str,
-        draft_id: str,
-        error_message: str = "",
-        dry_run: bool = False,
-        action: AutoReplyAction | None = None,
-        delivery: dict[str, object] | None = None,
-    ) -> dict[str, object]:
+    def _record_paused_task(self, message: MessageRecord) -> dict[str, object]:
         payload = {
             "message_id": message.message_id,
             "conversation_id": message.conversation_id,
-            "draft_id": draft_id,
-            "intent": intent,
-            "status": status,
-            "error_message": error_message,
-            "dry_run": dry_run,
-            "action": _action_payload(action),
-            "delivery": delivery or {},
+            "draft_id": "",
+            "intent": "unknown",
+            "status": "paused",
+            "error_message": "conversation_paused",
+            "dry_run": self.config.dry_run,
+            "action": {},
+            "delivery": {},
+            "tool_steps": [],
         }
         self.store.append_audit_log(
             AuditLogRecord.new(
@@ -268,38 +245,6 @@ class BossPassiveWatcher:
             elif action == "resume":
                 paused = False
         return paused
-
-    def _resolve_security_id(self, conversation_id: str) -> str:
-        conversation = self.store.get_conversation(conversation_id)
-        if conversation and isinstance(conversation.state, dict):
-            return str(conversation.state.get("security_id") or "").strip()
-        return ""
-
-    def _target_payload(self, conversation_id: str) -> dict[str, str]:
-        conversation = self.store.get_conversation(conversation_id)
-        state = (
-            conversation.state
-            if conversation and isinstance(conversation.state, dict)
-            else {}
-        )
-        recruiter = None
-        if conversation and conversation.recruiter_id:
-            recruiter = self.store.get_recruiter(str(conversation.recruiter_id))
-        return {
-            "recruiter_name": str(
-                state.get("recruiter_name")
-                or (recruiter.display_name if recruiter else "")
-                or ""
-            ),
-            "company": str(state.get("company") or ""),
-            "title": str(state.get("title") or ""),
-            "security_id": str(state.get("security_id") or ""),
-            "gid": str(state.get("gid") or ""),
-            "friend_id": str(state.get("friend_id") or ""),
-            "uid": str(state.get("uid") or ""),
-            "encrypt_boss_id": str(state.get("encrypt_boss_id") or ""),
-            "recruiter_id": str(state.get("recruiter_id") or (conversation.recruiter_id if conversation else "") or ""),
-        }
 
 
 def _sync_blocked_task(
@@ -363,29 +308,3 @@ def _error_attr(error: object, key: str) -> object:
     if isinstance(error, dict):
         return error.get(key)
     return getattr(error, key, None)
-
-
-def _action_payload(action: AutoReplyAction | None) -> dict[str, object]:
-    if action is None:
-        return {}
-    return {
-        "kind": action.kind,
-        "message": action.message,
-        "status_after_send": action.status_after_send,
-        "send_attachment_resume": action.send_attachment_resume,
-        "resume_file": action.resume_file,
-        "blocked_reason": action.blocked_reason,
-    }
-
-
-def _action_from_payload(payload: dict[str, object]) -> AutoReplyAction | None:
-    if not payload:
-        return None
-    return AutoReplyAction(
-        kind=str(payload.get("kind") or ""),
-        message=str(payload.get("message") or ""),
-        status_after_send=str(payload.get("status_after_send") or "sent"),
-        send_attachment_resume=bool(payload.get("send_attachment_resume") or False),
-        resume_file=str(payload.get("resume_file") or ""),
-        blocked_reason=str(payload.get("blocked_reason") or ""),
-    )

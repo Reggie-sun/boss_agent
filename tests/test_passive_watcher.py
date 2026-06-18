@@ -485,6 +485,119 @@ def test_passive_watcher_passes_live_target_identity_to_delivery(tmp_path):
     }
 
 
+def test_passive_watcher_records_tool_steps_for_sent_reply(tmp_path):
+    store = _store(tmp_path)
+    store.save_conversation(
+        ConversationRecord(
+            conversation_id="conv_001",
+            source="boss_sync",
+            state={"security_id": "sec_001"},
+        )
+    )
+    store.save_message(
+        MessageRecord(
+            message_id="msg_001",
+            conversation_id="conv_001",
+            message_text="介绍下你的 RAG 项目",
+            direction="inbound",
+        )
+    )
+    delivery = _RecordingDelivery()
+    config = _config(tmp_path)
+    config.live_sync = True
+    watcher = BossPassiveWatcher(
+        store=store,
+        service=_integration_service(store),
+        config=config,
+        delivery=delivery,
+        message_syncer=_Syncer(),
+    )
+
+    result = watcher.run_once(live_sync=True)
+
+    assert result.processed == 1
+    assert result.tasks[0]["status"] == "sent"
+    assert [step["tool"] for step in result.tasks[0]["tool_steps"]] == [
+        "create_rag_draft",
+        "decide_auto_action",
+        "resolve_boss_target",
+        "send_boss_reply_guarded",
+        "record_watcher_audit",
+    ]
+    assert delivery.calls[0]["security_id"] == "sec_001"
+
+
+def test_passive_watcher_tool_graph_blocks_missing_security_id(tmp_path):
+    store = _store(tmp_path)
+    store.save_conversation(
+        ConversationRecord(conversation_id="conv_001", source="boss_sync")
+    )
+    store.save_message(
+        MessageRecord(
+            message_id="msg_001",
+            conversation_id="conv_001",
+            message_text="介绍下你的 RAG 项目",
+            direction="inbound",
+        )
+    )
+    delivery = _RecordingDelivery()
+    config = _config(tmp_path)
+    config.live_sync = True
+    watcher = BossPassiveWatcher(
+        store=store,
+        service=_integration_service(store),
+        config=config,
+        delivery=delivery,
+        message_syncer=_Syncer(),
+    )
+
+    result = watcher.run_once(live_sync=True)
+
+    assert result.processed == 0
+    assert result.blocked == 1
+    assert result.tasks[0]["status"] == "blocked_manual_required"
+    assert result.tasks[0]["error_message"] == "missing_security_id"
+    assert result.tasks[0]["tool_steps"][-1]["tool"] == "record_watcher_audit"
+    assert delivery.calls == []
+
+
+def test_passive_watcher_resume_share_sends_attachment_resume(tmp_path):
+    store = _store(tmp_path)
+    store.save_conversation(
+        ConversationRecord(
+            conversation_id="conv_001",
+            source="boss_sync",
+            state={"security_id": "sec_001"},
+        )
+    )
+    store.save_message(
+        MessageRecord(
+            message_id="msg_001",
+            conversation_id="conv_001",
+            message_text="可以发我一份简历吗",
+            direction="inbound",
+        )
+    )
+    delivery = _RecordingDelivery()
+    config = _config(tmp_path)
+    config.live_sync = True
+    watcher = BossPassiveWatcher(
+        store=store,
+        service=_integration_service(store),
+        config=config,
+        delivery=delivery,
+        message_syncer=_Syncer(),
+    )
+
+    result = watcher.run_once(live_sync=True)
+
+    assert result.processed == 1
+    assert result.tasks[0]["intent"] == "resume_share_request"
+    assert result.tasks[0]["action"]["send_attachment_resume"] is True
+    assert delivery.calls[0]["send_attachment_resume"] is True
+    assert delivery.calls[0]["resume_file"] == config.resume_attachment_path
+
+
 def test_passive_watcher_processes_only_latest_inbound_per_conversation(tmp_path):
     store = _store(tmp_path)
     store.save_conversation(
