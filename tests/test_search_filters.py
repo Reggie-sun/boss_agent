@@ -7,6 +7,7 @@ from boss_agent_cli.search_filters import (
 	parse_salary_range,
 	parse_boss_search_url,
 	meets_experience_threshold,
+	matches_experience_filter,
 	meets_education_threshold,
 	prefilter_job,
 	resolve_search_code_params,
@@ -94,6 +95,11 @@ class TestExperienceThreshold:
 	def test_unknown_candidate(self):
 		# Unknown experience strings should pass (no filtering)
 		assert meets_experience_threshold("经验不限", "3-5年") is True
+
+	def test_multiselect_is_union_not_threshold(self):
+		assert matches_experience_filter("1年以内", "1年以内,1-3年") is True
+		assert matches_experience_filter("1-3年", "1年以内,1-3年") is True
+		assert matches_experience_filter("3-5年", "1年以内,1-3年") is False
 
 
 # ── Education threshold ─────────────────────────────────────────────
@@ -216,6 +222,20 @@ class TestPrefilterJob:
 		ok, reasons = prefilter_job(raw, criteria)
 		assert ok is False
 		assert any("经验" in r for r in reasons)
+
+	def test_experience_multiselect_uses_union(self):
+		raw = _make_raw(experience="3-5年")
+		criteria = SearchFilterCriteria(query="go", experience="1年以内,1-3年")
+		ok, reasons = prefilter_job(raw, criteria)
+		assert ok is False
+		assert any("经验" in r for r in reasons)
+
+	def test_experience_multiselect_accepts_any_selected_bucket(self):
+		raw = _make_raw(experience="1-3年")
+		criteria = SearchFilterCriteria(query="go", experience="1年以内,1-3年")
+		ok, reasons = prefilter_job(raw, criteria)
+		assert ok is True
+		assert reasons == []
 
 	def test_company_and_job_type_mismatch(self):
 		raw = _make_raw(industry="金融", scale="20-99人", stage="未融资", job_type="实习")

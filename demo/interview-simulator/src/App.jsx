@@ -79,6 +79,20 @@ const defaultBossSearchForm = {
   count: "10",
 };
 
+function splitBossExperienceValue(value) {
+  return String(value || "")
+    .split(",")
+    .map((part) => part.trim())
+    .filter(Boolean);
+}
+
+function formatBossExperienceSummary(value) {
+  const selected = splitBossExperienceValue(value);
+  if (!selected.length) return "经验不限";
+  if (selected.length <= 2) return selected.join("、");
+  return `${selected[0]} +${selected.length - 1}`;
+}
+
 const bossAccountRiskCode = "ACCOUNT_RISK";
 const bossAccountRiskMessage =
   "Boss 账号触发风控，已停止自动化访问。请回到 BOSS 官方页面手动处理，恢复后刷新本页面。";
@@ -346,6 +360,8 @@ export function App() {
     () => bossSearchJobs.map(normalizeBossJob),
     [bossSearchJobs],
   );
+  const selectedBossExperiences = splitBossExperienceValue(bossSearchForm.experience);
+  const bossExperienceSummary = formatBossExperienceSummary(bossSearchForm.experience);
   const bossAutomationFailedItems = Array.isArray(bossAutomationResult?.failed)
     ? bossAutomationResult.failed
     : [];
@@ -370,6 +386,25 @@ export function App() {
       ...current,
       [field]: value,
     }));
+  }
+
+  function toggleBossExperience(value) {
+    setBossSearchForm((current) => {
+      if (!value) {
+        return {
+          ...current,
+          experience: "",
+        };
+      }
+      const selected = splitBossExperienceValue(current.experience);
+      const next = selected.includes(value)
+        ? selected.filter((item) => item !== value)
+        : [...selected, value];
+      return {
+        ...current,
+        experience: next.join(","),
+      };
+    });
   }
 
   async function loadChatTargets() {
@@ -1478,17 +1513,31 @@ export function App() {
                   </option>
                 ))}
               </select>
-              <select
-                className="apply-input apply-input--experience"
-                value={bossSearchForm.experience}
-                onChange={(event) => updateBossSearchForm("experience", event.target.value)}
-              >
-                {bossExperienceOptions.map((experience) => (
-                  <option key={experience || "none"} value={experience}>
-                    {experience || "经验不限"}
-                  </option>
-                ))}
-              </select>
+              <details className="apply-multi-select apply-input--experience">
+                <summary className="apply-multi-select__summary">
+                  <span>{bossExperienceSummary}</span>
+                </summary>
+                <div className="apply-multi-select__menu">
+                  <label className="apply-multi-select__option">
+                    <input
+                      type="checkbox"
+                      checked={selectedBossExperiences.length === 0}
+                      onChange={() => toggleBossExperience("")}
+                    />
+                    <span>经验不限</span>
+                  </label>
+                  {bossExperienceOptions.filter(Boolean).map((experience) => (
+                    <label className="apply-multi-select__option" key={experience}>
+                      <input
+                        type="checkbox"
+                        checked={selectedBossExperiences.includes(experience)}
+                        onChange={() => toggleBossExperience(experience)}
+                      />
+                      <span>{experience}</span>
+                    </label>
+                  ))}
+                </div>
+              </details>
               <select
                 className="apply-input apply-input--education"
                 value={bossSearchForm.education}

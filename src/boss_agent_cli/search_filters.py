@@ -224,6 +224,21 @@ def meets_experience_threshold(candidate: str, required: str | None) -> bool:
 	return c >= r
 
 
+def matches_experience_filter(candidate: str, required: str | None) -> bool:
+	"""Match single-select threshold or comma-separated experience buckets."""
+	if not required:
+		return True
+	required_values = _split_multi_value(required)
+	if len(required_values) <= 1:
+		return meets_experience_threshold(candidate, required)
+	if _EXPERIENCE_ORDER.get(candidate) is None:
+		return True
+	known_required = [value for value in required_values if value in _EXPERIENCE_ORDER]
+	if not known_required:
+		return True
+	return candidate in known_required
+
+
 def meets_education_threshold(candidate: str, required: str | None) -> bool:
 	"""Check if candidate education meets or exceeds required threshold."""
 	if required is None:
@@ -388,8 +403,8 @@ def prefilter_job(raw_item: dict[str, Any], criteria: SearchFilterCriteria) -> t
 	# Experience filter
 	if criteria.experience:
 		item_exp = raw_item.get("jobExperience", "")
-		if not meets_experience_threshold(item_exp, criteria.experience):
-			reasons.append(f"经验不足: {item_exp} < {criteria.experience}")
+		if not matches_experience_filter(item_exp, criteria.experience):
+			reasons.append(f"经验不匹配: {item_exp} not in {criteria.experience}")
 
 	# Education filter
 	if criteria.education:
