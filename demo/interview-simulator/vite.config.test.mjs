@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   buildBossDeliveryBlockPayload,
   detectBossDeliveryChannel,
+  resolveCommandTimeoutMs,
   resetDeliveryProbeCacheForTests,
 } from "./vite.config.mjs";
 
@@ -70,6 +71,13 @@ test("buildBossDeliveryBlockPayload returns a non-risk CDP-required response", (
   assert.equal(blocked.body.browserChannel, browserChannel);
   assert.equal(blocked.body.delivery.status, "browser_channel_unavailable");
   assert.doesNotMatch(blocked.body.errorMessage, /环境存在异常|异常访问|风控|安全验证/);
+});
+
+test("resolveCommandTimeoutMs treats zero as default instead of infinite wait", () => {
+  assert.equal(resolveCommandTimeoutMs("0"), 45_000);
+  assert.equal(resolveCommandTimeoutMs(""), 45_000);
+  assert.equal(resolveCommandTimeoutMs("3"), 5_000);
+  assert.equal(resolveCommandTimeoutMs("120"), 120_000);
 });
 
 test("detectBossDeliveryChannel reuses an in-flight CDP probe", async () => {

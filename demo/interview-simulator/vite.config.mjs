@@ -8,6 +8,8 @@ const BOSS_GEEK_CHAT_URL = "https://www.zhipin.com/web/geek/chat";
 const CDP_REQUIRED_FOR_BOSS_DELIVERY_MESSAGE =
   "Boss 自动开聊/发送需要 CDP 真实 Chrome（127.0.0.1:9229）。当前只检测到 Bridge 扩展；为保护账号，已停止本次自动触达。请用 --remote-debugging-port=9229 打开真实 Chrome 后刷新本页面。";
 const DELIVERY_PROBE_CACHE_TTL_MS = 10_000;
+const DEFAULT_COMMAND_TIMEOUT_SECONDS = 45;
+const MIN_COMMAND_TIMEOUT_SECONDS = 5;
 let cachedDeliveryProbe = null;
 let pendingDeliveryProbe = null;
 
@@ -23,15 +25,19 @@ function parseEnvFile(filePath) {
   return values;
 }
 
+function resolveCommandTimeoutMs(rawValue) {
+  const parsed = Number.parseInt(String(rawValue ?? DEFAULT_COMMAND_TIMEOUT_SECONDS), 10);
+  const seconds = Number.isFinite(parsed) && parsed > 0
+    ? Math.max(parsed, MIN_COMMAND_TIMEOUT_SECONDS)
+    : DEFAULT_COMMAND_TIMEOUT_SECONDS;
+  return seconds * 1000;
+}
+
 function loadBridgeConfig() {
   const repoRoot = path.resolve(process.cwd(), "..", "..");
   const repoEnv = parseEnvFile(path.join(repoRoot, ".env"));
   const get = (key, fallback = "") =>
     process.env[key] || repoEnv[key] || fallback;
-  const parsedCommandTimeout = Number.parseInt(
-    get("BOSS_RAG_COMMAND_TIMEOUT_SECONDS", "45"),
-    10,
-  );
 
   return {
     repoRoot,
@@ -41,9 +47,9 @@ function loadBridgeConfig() {
       "BOSS_RAG_RESUME_ATTACHMENT_PATH",
       path.join(repoRoot, "孙瑞杰的简历.pdf"),
     ),
-    commandTimeoutMs: Number.isFinite(parsedCommandTimeout) && parsedCommandTimeout > 0
-      ? Math.max(parsedCommandTimeout, 5) * 1000
-      : null,
+    commandTimeoutMs: resolveCommandTimeoutMs(
+      get("BOSS_RAG_COMMAND_TIMEOUT_SECONDS", String(DEFAULT_COMMAND_TIMEOUT_SECONDS)),
+    ),
     baseUrl: get("BOSS_RAG_RAG_BASE_URL", "").replace(/\/$/, ""),
     cdpUrl: get("BOSS_RAG_CDP_URL", get("BOSS_CDP_URL", "http://localhost:9229")).replace(/\/$/, ""),
     bridgeUrl: get("BOSS_RAG_BRIDGE_URL", "http://127.0.0.1:19826").replace(/\/$/, ""),
@@ -483,7 +489,11 @@ export function resetDeliveryProbeCacheForTests() {
   pendingDeliveryProbe = null;
 }
 
-export { buildBossDeliveryBlockPayload, detectBossDeliveryChannel };
+export {
+  buildBossDeliveryBlockPayload,
+  detectBossDeliveryChannel,
+  resolveCommandTimeoutMs,
+};
 
 function readBody(req) {
   return new Promise((resolve, reject) => {

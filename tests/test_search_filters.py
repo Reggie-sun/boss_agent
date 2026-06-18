@@ -240,6 +240,13 @@ class TestPrefilterJob:
 		assert ok is True
 		assert reasons == []
 
+	def test_broad_internet_industry_allows_software_card_label(self):
+		raw = _make_raw(industry="软件/信息服务")
+		criteria = SearchFilterCriteria(query="RAG", industry="互联网")
+		ok, reasons = prefilter_job(raw, criteria)
+		assert ok is True
+		assert reasons == []
+
 	def test_missing_company_filter_fields_pass(self):
 		raw = _make_raw()
 		for key in ("brandIndustry", "brandScaleName", "brandStageName", "jobTypeName"):

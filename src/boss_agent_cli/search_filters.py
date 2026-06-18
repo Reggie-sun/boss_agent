@@ -37,6 +37,7 @@ WELFARE_KEYWORDS: dict[str, list[str]] = {
 }
 
 _INDUSTRY_CARD_COMPATIBLE_LABELS: dict[str, set[str]] = {
+	"互联网": {"人工智能", "软件/信息服务"},
 	"人工智能": {"互联网", "软件/信息服务"},
 	"大数据": {"互联网", "软件/信息服务"},
 	"云计算": {"互联网", "软件/信息服务"},

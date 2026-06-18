@@ -581,6 +581,51 @@ def test_batch_greet_welfare_filter_dry_run(mock_cache_cls, mock_auth_cls, mock_
 @patch("boss_agent_cli.commands.greet.get_platform_instance")
 @patch("boss_agent_cli.commands.greet.AuthManager")
 @patch("boss_agent_cli.commands.greet.CacheStore")
+def test_batch_greet_welfare_keeps_software_jobs_when_filtering_internet(
+	mock_cache_cls,
+	mock_auth_cls,
+	mock_client_cls,
+):
+	"""RAG 岗常见软件行业标签不应被 broad 互联网筛选误杀。"""
+	mock_cache = _ctx_mock(mock_cache_cls)
+	mock_cache.is_greeted.return_value = False
+	mock_client = _ctx_mock(mock_client_cls)
+	software_job = _make_raw_job("RAG 工程师", "sec_software", welfare=["周末双休"])
+	software_job["brandIndustry"] = "软件/信息服务"
+	mock_client.search_jobs.return_value = {
+		"zpData": {
+			"hasMore": False,
+			"jobList": [software_job],
+		},
+	}
+	mock_client.is_success.return_value = True
+
+	runner = CliRunner()
+	result = runner.invoke(
+		cli,
+		[
+			"batch-greet",
+			"RAG",
+			"--industry",
+			"互联网",
+			"--welfare",
+			"双休",
+			"--count",
+			"1",
+			"--dry-run",
+		],
+	)
+	assert result.exit_code == 0, result.output
+	parsed = json.loads(result.output)
+	assert parsed["ok"] is True
+	assert parsed["data"]["count"] == 1
+	assert parsed["data"]["candidates"][0]["security_id"] == "sec_software"
+	assert "双休(标签)" in parsed["data"]["candidates"][0]["welfare_match"]
+
+
+@patch("boss_agent_cli.commands.greet.get_platform_instance")
+@patch("boss_agent_cli.commands.greet.AuthManager")
+@patch("boss_agent_cli.commands.greet.CacheStore")
 def test_batch_greet_custom_salary_range_uses_local_filter(mock_cache_cls, mock_auth_cls, mock_client_cls):
 	"""BOSS 未映射的新薪资范围走本地预筛，避免未知 code 直接打空。"""
 	mock_cache = _ctx_mock(mock_cache_cls)
