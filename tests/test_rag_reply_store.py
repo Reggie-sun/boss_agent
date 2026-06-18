@@ -7,6 +7,7 @@ from boss_agent_cli.rag_reply.models import (
 	DraftRecord,
 	MessageRecord,
 )
+import boss_agent_cli.rag_reply.store as store_module
 from boss_agent_cli.rag_reply.store import RagReplyStore
 
 
@@ -20,6 +21,18 @@ def test_store_creates_expected_tables(tmp_path: Path):
 		"audit_logs",
 		"rag_calls",
 	}
+
+
+def test_store_configures_sqlite_for_concurrent_frontend_and_watcher_access(tmp_path: Path):
+	store = RagReplyStore(tmp_path / "boss-rag.sqlite3")
+	store.initialize()
+
+	with store.connect() as conn:
+		busy_timeout = conn.execute("PRAGMA busy_timeout").fetchone()[0]
+		journal_mode = conn.execute("PRAGMA journal_mode").fetchone()[0]
+
+	assert busy_timeout == store_module._SQLITE_BUSY_TIMEOUT_MS
+	assert str(journal_mode).lower() == "wal"
 
 
 def test_store_round_trips_message_draft_and_audit(tmp_path: Path):
@@ -57,4 +70,3 @@ def test_store_round_trips_message_draft_and_audit(tmp_path: Path):
 	assert len(store.list_drafts()) == 1
 	assert len(store.list_approval_events(draft.draft_id)) == 1
 	assert len(store.list_audit_logs(draft.draft_id)) == 1
-

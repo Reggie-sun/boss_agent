@@ -20,6 +20,11 @@ from boss_agent_cli.rag_reply.models import (
 from boss_agent_cli.rag_reply.schema import CREATE_TABLE_STATEMENTS
 
 
+_SQLITE_BUSY_TIMEOUT_MS = 30_000
+_SQLITE_CONNECT_TIMEOUT_SECONDS = _SQLITE_BUSY_TIMEOUT_MS / 1000
+_SQLITE_JOURNAL_MODE = "WAL"
+
+
 class RagReplyStore:
 	"""Persist local Boss RAG state in a dedicated SQLite database."""
 
@@ -29,12 +34,14 @@ class RagReplyStore:
 	def initialize(self) -> None:
 		self.db_path.parent.mkdir(parents=True, exist_ok=True)
 		with self.connect() as conn:
+			conn.execute(f"PRAGMA journal_mode={_SQLITE_JOURNAL_MODE}")
 			for statement in CREATE_TABLE_STATEMENTS:
 				conn.execute(statement)
 			conn.commit()
 
 	def connect(self) -> sqlite3.Connection:
-		conn = sqlite3.connect(self.db_path)
+		conn = sqlite3.connect(self.db_path, timeout=_SQLITE_CONNECT_TIMEOUT_SECONDS)
+		conn.execute(f"PRAGMA busy_timeout = {_SQLITE_BUSY_TIMEOUT_MS}")
 		conn.row_factory = sqlite3.Row
 		return conn
 
