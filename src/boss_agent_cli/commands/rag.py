@@ -228,8 +228,18 @@ def _watcher_result_payload(result: WatcherRunResult) -> dict[str, object]:
 		"processed": result.processed,
 		"skipped": result.skipped,
 		"blocked": result.blocked,
-		"tasks": result.tasks,
+		"tasks": result.tasks[-20:],
 	}
+
+
+def _emit_watcher_cycle_progress(cycle: int, result: WatcherRunResult) -> None:
+	click.echo(
+		(
+			f"Watcher cycle {cycle} processed {result.processed} task(s), "
+			f"skipped {result.skipped}, blocked {result.blocked}."
+		),
+		err=True,
+	)
 
 
 def _watcher_audit_payload(entry: AuditLogRecord) -> dict[str, object]:
@@ -1088,6 +1098,8 @@ def rag_watcher_run_cmd(
 			skipped += result.skipped
 			blocked += result.blocked
 			tasks.extend(result.tasks)
+			if not bool(ctx.obj.get("json_output", False)):
+				_emit_watcher_cycle_progress(cycles, result)
 			if max_cycles is not None and cycles >= max_cycles:
 				break
 			time.sleep(config.poll_seconds)

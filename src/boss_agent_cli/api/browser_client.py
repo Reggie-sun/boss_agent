@@ -516,6 +516,100 @@ class BrowserSession:
 		cdp_url = self._cdp_url or CDP_DEFAULT_URL
 		return _cdp_evaluate_with_chat_events_in_chat_tab(cdp_url, script, arg, listen_ms=listen_ms)
 
+	def ensure_playwright_candidate_chat_page(self) -> dict[str, Any]:
+		"""Attach Playwright to the CDP Chrome only when a file input is required."""
+		if self._page is not None:
+			page_url = ""
+			try:
+				page_url = str(self._page.url or "")
+			except Exception:
+				page_url = ""
+			return {"ok": True, "url": page_url}
+		cdp_url = self._raw_cdp_url or self._cdp_url
+		if not cdp_url:
+			return {
+				"ok": False,
+				"error": "cdp_url_missing",
+				"message": "缺少 CDP URL，无法准备附件上传页面。",
+			}
+		try:
+			sync_playwright = _sync_playwright()
+		except RuntimeError as exc:
+			return {
+				"ok": False,
+				"error": "playwright_unavailable",
+				"message": str(exc),
+			}
+		if _is_patchright_runtime(sync_playwright):
+			return {
+				"ok": False,
+				"error": "playwright_cdp_attach_unavailable",
+				"message": "当前环境只有 patchright，不能安全 attach raw CDP 选择本地附件文件。",
+			}
+		try:
+			self._pw = sync_playwright().start()
+			if not self._try_connect(cdp_url):
+				self._stop_playwright_driver()
+				return {
+					"ok": False,
+					"error": "playwright_cdp_attach_failed",
+					"message": "无法 attach 到当前 CDP Chrome 来选择本地附件文件。",
+				}
+			self._page.goto(CANDIDATE_CHAT_URL, wait_until="domcontentloaded", timeout=_NAV_TIMEOUT_MS)
+			for _ in range(15):
+				try:
+					ready = self._page.evaluate(
+						"""() => {
+							const ulc = document.querySelector('.user-list-content');
+							const vueReady = !!(
+								ulc &&
+								ulc.__vue__ &&
+								ulc.__vue__.$parent &&
+								ulc.__vue__.$parent.list &&
+								ulc.__vue__.$parent.list.length > 0
+							);
+							const domReady = !!(ulc && ulc.querySelector('li'));
+							return vueReady || domReady;
+						}"""
+					)
+					if ready:
+						return {"ok": True, "url": str(self._page.url or "")}
+				except Exception:
+					pass
+				time.sleep(1)
+			page_url = ""
+			page_title = ""
+			try:
+				page_url = str(self._page.url or "")
+			except Exception:
+				page_url = ""
+			try:
+				page_title = str(self._page.title() or "")
+			except Exception:
+				page_title = ""
+			if "/web/user" in page_url or "登录" in page_title or "注册登录" in page_title:
+				return {
+					"ok": False,
+					"error": "boss_chat_login_required",
+					"message": "Boss CDP 登录态已失效，聊天页被重定向到登录页。请先执行 boss login --cdp，或在当前 CDP Chrome 内重新登录 BOSS。",
+					"url": page_url,
+					"title": page_title,
+				}
+			return {
+				"ok": False,
+				"error": "boss_chat_page_not_ready",
+				"message": "Boss 聊天页未就绪，当前无法发送附件简历。请确认聊天列表已加载，或刷新 CDP 登录态后重试。",
+				"url": page_url,
+				"title": page_title,
+			}
+		except Exception as exc:
+			self._stop_playwright_driver()
+			return {
+				"ok": False,
+				"error": "playwright_cdp_attach_failed",
+				"message": f"无法准备附件上传页面: {exc}",
+			}
+
 	# ── Lifecycle ────────────────────────────────────────────────────
 
 	@property

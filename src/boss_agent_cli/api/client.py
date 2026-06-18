@@ -830,13 +830,19 @@ class BossClient:
 					"file": str(attachment),
 					"detail": {"navigation": navigation, "agree_result": agree_result},
 				}
-			return {
-				"code": -1,
-				"message": "未找到待确认的附件简历同意按钮；当前 raw CDP 通道不能选择本地附件文件，已取消发送。",
-				"method": "resume-request-agree",
-				"file": str(attachment),
-				"detail": {"navigation": navigation, "agree_result": agree_result},
-			}
+			upload_page = browser.ensure_playwright_candidate_chat_page()
+			if not isinstance(upload_page, dict) or not upload_page.get("ok"):
+				return {
+					"code": -1,
+					"message": "未找到待确认的附件简历同意按钮，且无法准备附件上传页面，已取消发送。",
+					"method": "resume-request-agree",
+					"file": str(attachment),
+					"detail": {
+						"navigation": navigation,
+						"agree_result": agree_result,
+						"upload_page": upload_page,
+					},
+				}
 		def _is_navigation_context_error(exc: Exception) -> bool:
 			message = str(exc)
 			return (

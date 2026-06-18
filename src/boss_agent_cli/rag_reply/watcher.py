@@ -65,6 +65,12 @@ class WatcherRunResult:
     tasks: list[dict[str, object]]
 
 
+@dataclass(slots=True)
+class _ProcessedMessageIndex:
+    message_ids: set[str]
+    platform_keys: set[tuple[str, ...]]
+
+
 class BossPassiveWatcher:
     def __init__(
         self,
@@ -114,8 +120,9 @@ class BossPassiveWatcher:
         skipped = 0
         blocked = 0
         tasks: list[dict[str, object]] = []
+        processed_index = self._processed_message_index()
         for message in self._candidate_messages():
-            if self._already_processed(message):
+            if self._already_processed(message, processed_index):
                 skipped += 1
                 tasks.append(
                     {"message_id": message.message_id, "status": "skipped_duplicate"}
@@ -128,6 +135,8 @@ class BossPassiveWatcher:
                 continue
             task = self._process_message(message)
             tasks.append(task)
+            if task["status"] != "paused":
+                self._add_processed_message(processed_index, message)
             if task["status"] == "sent":
                 processed += 1
             elif task["status"] in {"blocked_manual_required", "paused"}:
@@ -228,8 +237,12 @@ class BossPassiveWatcher:
             and str(candidate.get("security_id") or "").strip()
         ]
 
-    def _already_processed(self, message: MessageRecord) -> bool:
-        message_key = _platform_message_key(message)
+    def _processed_message_index(self) -> _ProcessedMessageIndex:
+        messages_by_id = {
+            message.message_id: message for message in self.store.list_messages()
+        }
+        message_ids: set[str] = set()
+        platform_keys: set[tuple[str, ...]] = set()
         for entry in self.store.list_audit_logs():
             if (
                 entry.event_type != "watcher_task"
@@ -237,17 +250,35 @@ class BossPassiveWatcher:
             ):
                 continue
             processed_message_id = str(entry.payload.get("message_id") or "")
-            if processed_message_id == message.message_id:
-                return True
-            if not message_key or not processed_message_id:
+            if not processed_message_id:
                 continue
-            processed_message = self.store.get_message(processed_message_id)
-            if (
-                processed_message is not None
-                and _platform_message_key(processed_message) == message_key
-            ):
-                return True
-        return False
+            message_ids.add(processed_message_id)
+            processed_message = messages_by_id.get(processed_message_id)
+            if processed_message is None:
+                continue
+            processed_message_key = _platform_message_key(processed_message)
+            if processed_message_key is not None:
+                platform_keys.add(processed_message_key)
+        return _ProcessedMessageIndex(
+            message_ids=message_ids,
+            platform_keys=platform_keys,
+        )
+
+    def _already_processed(
+        self, message: MessageRecord, processed_index: _ProcessedMessageIndex
+    ) -> bool:
+        if message.message_id in processed_index.message_ids:
+            return True
+        message_key = _platform_message_key(message)
+        return message_key is not None and message_key in processed_index.platform_keys
+
+    def _add_processed_message(
+        self, processed_index: _ProcessedMessageIndex, message: MessageRecord
+    ) -> None:
+        processed_index.message_ids.add(message.message_id)
+        message_key = _platform_message_key(message)
+        if message_key is not None:
+            processed_index.platform_keys.add(message_key)
 
     def _process_message(self, message: MessageRecord) -> dict[str, object]:
         context = BossAgentToolContext(

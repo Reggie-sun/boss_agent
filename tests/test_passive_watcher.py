@@ -488,6 +488,69 @@ def test_run_once_skips_processed_platform_message_after_security_id_rotation(tm
     assert store.list_drafts() == []
 
 
+def test_run_once_dedupes_with_precomputed_message_index(tmp_path, monkeypatch):
+    store = _store(tmp_path)
+    for idx in range(50):
+        store.append_audit_log(
+            AuditLogRecord.new(
+                event_type="watcher_task",
+                entity_type="conversation",
+                entity_id=f"conv_noise_{idx}",
+                payload={"message_id": f"missing_{idx}", "status": "sent"},
+            )
+        )
+    store.save_message(
+        MessageRecord(
+            message_id="boss_msg_old_sec_1781746548734_oldhash",
+            conversation_id="boss_conv_old_sec",
+            message_text="对方已查看了您的附件简历",
+            direction="outbound",
+            raw={"mid": 354743700415492, "securityId": "old_sec"},
+        )
+    )
+    store.append_audit_log(
+        AuditLogRecord.new(
+            event_type="watcher_task",
+            entity_type="conversation",
+            entity_id="boss_conv_old_sec",
+            payload={
+                "message_id": "boss_msg_old_sec_1781746548734_oldhash",
+                "status": "sent",
+            },
+        )
+    )
+    store.save_message(
+        MessageRecord(
+            message_id="boss_msg_new_sec_1781746548734_newhash",
+            conversation_id="boss_conv_new_sec",
+            message_text="对方已查看了您的附件简历",
+            direction="inbound",
+            raw={"mid": 354743700415492, "securityId": "new_sec"},
+        )
+    )
+    monkeypatch.setattr(
+        store,
+        "get_message",
+        lambda message_id: pytest.fail(f"unexpected per-audit lookup: {message_id}"),
+    )
+    delivery = _RecordingDelivery()
+    config = _config(tmp_path)
+    config.dry_run = True
+    watcher = BossPassiveWatcher(
+        store=store,
+        service=_integration_service(store),
+        config=config,
+        delivery=delivery,
+    )
+
+    result = watcher.run_once()
+
+    assert result.processed == 0
+    assert result.skipped == 1
+    assert delivery.calls == []
+    assert store.list_drafts() == []
+
+
 def test_passive_watcher_syncs_live_messages_before_processing(tmp_path):
     store = _store(tmp_path)
     store.save_conversation(

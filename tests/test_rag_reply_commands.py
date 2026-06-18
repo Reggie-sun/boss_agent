@@ -800,6 +800,37 @@ def test_agent_watcher_run_once_enabled_returns_run_counts(monkeypatch, tmp_path
 	assert payload["data"]["tasks"] == [{"message_id": "msg_001", "status": "sent"}]
 
 
+def test_agent_watcher_run_once_keeps_last_twenty_tasks(monkeypatch, tmp_path: Path):
+	(tmp_path / "config.json").write_text(
+		json.dumps({"boss_rag_watcher_enabled": True}),
+		encoding="utf-8",
+	)
+
+	class _FakeWatcher:
+		def run_once(self, *, live_sync=None):
+			return rag_commands.WatcherRunResult(
+				processed=0,
+				skipped=25,
+				blocked=0,
+				tasks=[{"message_id": f"msg_{idx}", "status": "skipped_duplicate"} for idx in range(25)],
+			)
+
+	monkeypatch.setattr(rag_commands, "_build_passive_watcher", lambda ctx: _FakeWatcher())
+	runner = CliRunner()
+	result = runner.invoke(
+		cli,
+		["--json", "--data-dir", str(tmp_path), "agent", "watcher-run", "--once"],
+	)
+
+	assert result.exit_code == 0
+	payload = json.loads(result.output)
+	tasks = payload["data"]["tasks"]
+	assert payload["data"]["skipped"] == 25
+	assert len(tasks) == 20
+	assert tasks[0]["message_id"] == "msg_5"
+	assert tasks[-1]["message_id"] == "msg_24"
+
+
 def test_build_passive_watcher_registers_pipeline_candidate_provider(monkeypatch, tmp_path: Path):
 	store = RagReplyStore(tmp_path / "boss-rag.sqlite3")
 	store.initialize()
@@ -1137,6 +1168,51 @@ def test_agent_watcher_run_loop_stops_at_max_cycles(monkeypatch, tmp_path: Path)
 	assert payload["data"]["status"] == "completed"
 	assert payload["data"]["cycles"] == 2
 	assert payload["data"]["processed"] == 2
+
+
+def test_agent_watcher_run_loop_emits_per_cycle_progress(monkeypatch, tmp_path: Path):
+	(tmp_path / "config.json").write_text(
+		json.dumps(
+			{
+				"boss_rag_watcher_enabled": True,
+				"boss_rag_watcher_poll_seconds": 5,
+			}
+		),
+		encoding="utf-8",
+	)
+	calls = {"run_once": 0, "sleep": []}
+
+	class _FakeWatcher:
+		def run_once(self, *, live_sync=None):
+			calls["run_once"] += 1
+			return rag_commands.WatcherRunResult(
+				processed=calls["run_once"],
+				skipped=1,
+				blocked=0,
+				tasks=[],
+			)
+
+	monkeypatch.setattr(rag_commands, "_build_passive_watcher", lambda ctx: _FakeWatcher())
+	monkeypatch.setattr(rag_commands.time, "sleep", lambda seconds: calls["sleep"].append(seconds))
+	runner = CliRunner()
+
+	result = runner.invoke(
+		cli,
+		[
+			"--data-dir",
+			str(tmp_path),
+			"agent",
+			"watcher-run",
+			"--loop",
+			"--max-cycles",
+			"2",
+		],
+	)
+
+	output = "\n".join(part for part in (result.output, result.stderr) if part)
+	assert result.exit_code == 0
+	assert "Watcher cycle 1 processed 1 task(s), skipped 1, blocked 0." in output
+	assert "Watcher cycle 2 processed 2 task(s), skipped 1, blocked 0." in output
 
 
 def test_agent_watcher_run_loop_keeps_last_twenty_tasks(monkeypatch, tmp_path: Path):

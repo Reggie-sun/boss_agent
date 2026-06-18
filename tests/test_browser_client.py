@@ -5,6 +5,7 @@ import pytest
 
 from boss_agent_cli.api.browser_client import (
 	CDP_DEFAULT_URL,
+	CANDIDATE_CHAT_URL,
 	HOME_URL,
 	_BROWSER_FETCH_TIMEOUT_MS,
 	_CDP_CONNECT_TIMEOUT_MS,
@@ -390,6 +391,52 @@ def test_ensure_started_uses_raw_cdp_when_cdp_url_is_configured():
 	mock_pick.assert_called_once_with("http://127.0.0.1:9229")
 	mock_sync_playwright.assert_not_called()
 	mock_try_bridge.assert_not_called()
+
+
+def test_raw_cdp_can_prepare_playwright_candidate_chat_page_for_upload():
+	session = BrowserSession(cookies={}, user_agent="", cdp_url="http://127.0.0.1:9229")
+	session._raw_cdp_url = "http://127.0.0.1:9229"
+	session._started = True
+	session._is_cdp = True
+	mock_pw = MagicMock()
+	mock_browser = MagicMock()
+	mock_context = MagicMock()
+	mock_page = MagicMock()
+	mock_page.url = CANDIDATE_CHAT_URL
+	mock_page.evaluate.return_value = True
+	mock_browser.contexts = [mock_context]
+	mock_context.new_page.return_value = mock_page
+	mock_pw.chromium.connect_over_cdp.return_value = mock_browser
+
+	def fake_sync_playwright():
+		return MagicMock(start=MagicMock(return_value=mock_pw))
+	fake_sync_playwright.__module__ = "playwright.sync_api"
+
+	with patch("boss_agent_cli.api.browser_client._sync_playwright", return_value=fake_sync_playwright):
+		result = session.ensure_playwright_candidate_chat_page()
+
+	assert result == {"ok": True, "url": CANDIDATE_CHAT_URL}
+	mock_pw.chromium.connect_over_cdp.assert_called_once_with(
+		"http://127.0.0.1:9229",
+		timeout=_CDP_CONNECT_TIMEOUT_MS,
+	)
+	mock_page.goto.assert_any_call(HOME_URL, wait_until="commit", timeout=_NAV_TIMEOUT_MS)
+	mock_page.goto.assert_any_call(CANDIDATE_CHAT_URL, wait_until="domcontentloaded", timeout=_NAV_TIMEOUT_MS)
+
+
+def test_raw_cdp_file_upload_page_fails_closed_with_patchright_runtime():
+	session = BrowserSession(cookies={}, user_agent="", cdp_url="http://127.0.0.1:9229")
+	session._raw_cdp_url = "http://127.0.0.1:9229"
+
+	def fake_sync_playwright():
+		return MagicMock()
+	fake_sync_playwright.__module__ = "patchright.sync_api"
+
+	with patch("boss_agent_cli.api.browser_client._sync_playwright", return_value=fake_sync_playwright):
+		result = session.ensure_playwright_candidate_chat_page()
+
+	assert result["ok"] is False
+	assert result["error"] == "playwright_cdp_attach_unavailable"
 
 
 def test_ensure_started_fails_closed_when_configured_raw_cdp_is_unavailable():

@@ -470,6 +470,10 @@ def test_send_resume_attachment_raw_cdp_fails_closed_without_request_card(tmp_pa
 		},
 		{"ok": False, "error": "resume request agree button not found"},
 	]
+	fake_browser.ensure_playwright_candidate_chat_page.return_value = {
+		"ok": False,
+		"error": "playwright_cdp_attach_failed",
+	}
 	client._get_browser = MagicMock(return_value=fake_browser)
 
 	with patch(
@@ -485,6 +489,65 @@ def test_send_resume_attachment_raw_cdp_fails_closed_without_request_card(tmp_pa
 	assert result["code"] == -1
 	assert "未找到待确认的附件简历同意按钮" in result["message"]
 	assert "已取消发送" in result["message"]
+	assert result["detail"]["upload_page"]["error"] == "playwright_cdp_attach_failed"
+
+
+def test_send_resume_attachment_raw_cdp_falls_back_to_toolbar_upload(tmp_path):
+	client = BossClient(_StubAuth(), cdp_url="http://localhost:9229")
+	resume_file = tmp_path / "resume.pdf"
+	resume_file.write_bytes(b"%PDF-1.4\n")
+	fake_file_input = MagicMock()
+	fake_locator = MagicMock()
+	fake_locator.first = fake_file_input
+	fake_page = MagicMock()
+	fake_page.evaluate.side_effect = [
+		{"ok": True, "method": "dom"},
+		{"ok": True, "nameMatch": True},
+		0,
+		{"ok": False, "reason": "resume request agree button not found"},
+		{"ok": True, "method": "resume-toolbar-open"},
+		{"ok": True, "method": "resume-toolbar-upload"},
+		{"ok": True, "method": "resume-toolbar-upload", "buttonText": "发送"},
+		{"seenFileName": True, "fileNameCount": 1, "beforeCount": 0},
+	]
+	fake_page.locator.return_value = fake_locator
+	fake_browser = MagicMock()
+	fake_browser._raw_cdp_url = "http://localhost:9229"
+	fake_browser._page = fake_page
+	fake_browser.evaluate_js_in_zhipin_tab.side_effect = [
+		{
+			"ready": True,
+			"href": "https://www.zhipin.com/web/geek/chat",
+			"title": "BOSS直聘",
+		},
+		{"ok": False, "error": "resume request agree button not found"},
+	]
+	fake_browser.ensure_playwright_candidate_chat_page.return_value = {
+		"ok": True,
+		"url": "https://www.zhipin.com/web/geek/chat",
+	}
+	client._get_browser = MagicMock(return_value=fake_browser)
+
+	with patch(
+		"boss_agent_cli.api.browser_client.ensure_candidate_chat_page_via_cdp",
+		return_value={
+			"ok": True,
+			"status": "ready",
+			"url": "https://www.zhipin.com/web/geek/chat",
+		},
+	):
+		result = client.send_resume_attachment(
+			"sid",
+			str(resume_file),
+			target_recruiter_name="蔡欣",
+			target_company="光昱智能",
+			target_title="招聘经理",
+		)
+
+	assert result["code"] == 0
+	assert result["method"] == "resume-toolbar-upload"
+	fake_browser.ensure_playwright_candidate_chat_page.assert_called_once()
+	fake_file_input.set_input_files.assert_called_once_with(str(resume_file.resolve()))
 
 
 def test_send_resume_attachment_recovers_from_open_navigation(tmp_path):
