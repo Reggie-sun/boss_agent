@@ -8,6 +8,8 @@ const BOSS_GEEK_CHAT_URL = "https://www.zhipin.com/web/geek/chat";
 const CDP_REQUIRED_FOR_BOSS_DELIVERY_MESSAGE =
   "Boss 自动开聊/发送需要 CDP 真实 Chrome（127.0.0.1:9229）。当前只检测到 Bridge 扩展；为保护账号，已停止本次自动触达。请用 --remote-debugging-port=9229 打开真实 Chrome 后刷新本页面。";
 const DELIVERY_PROBE_CACHE_TTL_MS = 10_000;
+const DELIVERY_PROBE_SOCKET_OPEN_TIMEOUT_MS = 3_000;
+const DELIVERY_PROBE_COMMAND_TIMEOUT_MS = 3_000;
 const DEFAULT_COMMAND_TIMEOUT_SECONDS = 45;
 const MIN_COMMAND_TIMEOUT_SECONDS = 5;
 const MAX_BOSS_AUTO_GREET_COUNT = 150;
@@ -225,10 +227,48 @@ async function evaluateCdpProbeTarget(target, url) {
   const ws = new WebSocket(target.webSocketDebuggerUrl);
   let requestId = 0;
   const pending = new Map();
+  let socketOpened = false;
+  let probeFinished = false;
+
+  function rejectPending(error) {
+    for (const [id, entry] of pending.entries()) {
+      pending.delete(id);
+      entry.reject(error);
+    }
+  }
 
   const waitForSocketOpen = new Promise((resolve, reject) => {
-    ws.onopen = resolve;
-    ws.onerror = reject;
+    const openTimer = setTimeout(() => {
+      reject(new Error(`CDP probe WebSocket did not open within ${DELIVERY_PROBE_SOCKET_OPEN_TIMEOUT_MS}ms.`));
+    }, DELIVERY_PROBE_SOCKET_OPEN_TIMEOUT_MS);
+
+    ws.onopen = () => {
+      clearTimeout(openTimer);
+      socketOpened = true;
+      resolve();
+    };
+    ws.onerror = (error) => {
+      clearTimeout(openTimer);
+      const failure = error instanceof Error
+        ? error
+        : new Error("CDP probe WebSocket error.");
+      if (!socketOpened) {
+        reject(failure);
+      }
+      if (!probeFinished) {
+        rejectPending(failure);
+      }
+    };
+    ws.onclose = () => {
+      clearTimeout(openTimer);
+      const failure = new Error("CDP probe WebSocket closed before probe completed.");
+      if (!socketOpened) {
+        reject(failure);
+      }
+      if (!probeFinished) {
+        rejectPending(failure);
+      }
+    };
   });
 
   function trackNavigationEvent(data) {
@@ -245,9 +285,30 @@ async function evaluateCdpProbeTarget(target, url) {
 
   function send(method, params = {}) {
     const id = ++requestId;
-    ws.send(JSON.stringify({ id, method, params }));
     return new Promise((resolve, reject) => {
-      pending.set(id, { resolve, reject });
+      const timer = setTimeout(() => {
+        pending.delete(id);
+        reject(new Error(`CDP probe ${method} timed out after ${DELIVERY_PROBE_COMMAND_TIMEOUT_MS}ms.`));
+      }, DELIVERY_PROBE_COMMAND_TIMEOUT_MS);
+
+      pending.set(id, {
+        resolve: (result) => {
+          clearTimeout(timer);
+          resolve(result);
+        },
+        reject: (error) => {
+          clearTimeout(timer);
+          reject(error);
+        },
+      });
+
+      try {
+        ws.send(JSON.stringify({ id, method, params }));
+      } catch (error) {
+        clearTimeout(timer);
+        pending.delete(id);
+        reject(error instanceof Error ? error : new Error(`CDP probe ${method} send failed.`));
+      }
     });
   }
 
@@ -324,6 +385,7 @@ async function evaluateCdpProbeTarget(target, url) {
       errorMessage: error instanceof Error ? error.message : "CDP probe 执行失败。",
     };
   } finally {
+    probeFinished = true;
     try {
       ws.close();
     } catch {

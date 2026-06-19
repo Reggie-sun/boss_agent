@@ -184,3 +184,86 @@ test("detectBossDeliveryChannel reuses an in-flight CDP probe", async () => {
     globalThis.WebSocket = originalWebSocket;
   }
 });
+
+test("detectBossDeliveryChannel fails fast when an in-flight CDP probe socket closes", async () => {
+  const originalFetch = globalThis.fetch;
+  const originalWebSocket = globalThis.WebSocket;
+  let createdTargets = 0;
+  let closedTargets = 0;
+
+  class FakeWebSocket {
+    constructor(url) {
+      this.url = url;
+      queueMicrotask(() => this.onopen?.());
+    }
+
+    send() {
+      queueMicrotask(() => this.onclose?.());
+    }
+
+    close() {}
+  }
+
+  globalThis.WebSocket = FakeWebSocket;
+  globalThis.fetch = async (url, options = {}) => {
+    const requestUrl = String(url);
+    const method = options.method || "GET";
+
+    if (requestUrl === "http://cdp.test/json/version") {
+      return Response.json({
+        webSocketDebuggerUrl: "ws://cdp.test/browser",
+      });
+    }
+    if (requestUrl === "http://bridge.test/status") {
+      return Response.json({
+        ok: true,
+        extensionConnected: false,
+      });
+    }
+    if (requestUrl.startsWith("http://cdp.test/json/new?")) {
+      assert.equal(method, "PUT");
+      createdTargets += 1;
+      return Response.json({
+        id: `target-${createdTargets}`,
+        webSocketDebuggerUrl: `ws://cdp.test/target-${createdTargets}`,
+      });
+    }
+    if (requestUrl.startsWith("http://cdp.test/json/close/")) {
+      closedTargets += 1;
+      return new Response("OK");
+    }
+    throw new Error(`unexpected fetch: ${requestUrl}`);
+  };
+
+  try {
+    resetDeliveryProbeCacheForTests();
+    const [first, second] = await Promise.race([
+      Promise.all([
+        detectBossDeliveryChannel({
+          cdpUrl: "http://cdp.test",
+          bridgeUrl: "http://bridge.test",
+        }),
+        detectBossDeliveryChannel({
+          cdpUrl: "http://cdp.test",
+          bridgeUrl: "http://bridge.test",
+        }),
+      ]),
+      new Promise((_, reject) => {
+        setTimeout(() => reject(new Error("probe promise remained pending")), 1_000);
+      }),
+    ]);
+
+    assert.equal(first.available, false);
+    assert.equal(second.available, false);
+    assert.equal(first.preflightStatus, "probe_failed");
+    assert.equal(second.preflightStatus, "probe_failed");
+    assert.match(first.errorMessage, /WebSocket closed/);
+    assert.match(second.errorMessage, /WebSocket closed/);
+    assert.equal(createdTargets, 1);
+    assert.equal(closedTargets, 1);
+  } finally {
+    resetDeliveryProbeCacheForTests();
+    globalThis.fetch = originalFetch;
+    globalThis.WebSocket = originalWebSocket;
+  }
+});
