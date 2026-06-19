@@ -2,12 +2,35 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  buildBossCliArgs,
   buildBossDeliveryBlockPayload,
   detectBossDeliveryChannel,
   resolveBossAutoGreetCommandTimeoutMs,
   resolveCommandTimeoutMs,
   resetDeliveryProbeCacheForTests,
 } from "./vite.config.mjs";
+
+test("buildBossCliArgs injects cdp url into spawned boss commands", () => {
+  const args = buildBossCliArgs(
+    {
+      dataDir: "~/.boss-agent",
+      cdpUrl: "http://localhost:9229",
+    },
+    ["search", "RAG"],
+  );
+
+  assert.deepEqual(args, [
+    "-c",
+    "from boss_agent_cli.main import cli; import sys; cli.main(args=sys.argv[1:], standalone_mode=False)",
+    "--json",
+    "--data-dir",
+    "~/.boss-agent",
+    "--cdp-url",
+    "http://localhost:9229",
+    "search",
+    "RAG",
+  ]);
+});
 
 test("detectBossDeliveryChannel requires CDP instead of bridge-only exec probe", async () => {
   const originalFetch = globalThis.fetch;

@@ -6,6 +6,8 @@ import pytest
 from boss_agent_cli.api.browser_client import (
 	CDP_DEFAULT_URL,
 	CANDIDATE_CHAT_URL,
+	CANDIDATE_JOBS_URL,
+	CANDIDATE_RECOMMEND_URL,
 	HOME_URL,
 	_BROWSER_FETCH_TIMEOUT_MS,
 	_CDP_CONNECT_TIMEOUT_MS,
@@ -13,9 +15,12 @@ from boss_agent_cli.api.browser_client import (
 	_NAV_TIMEOUT_MS,
 	BrowserChannelUnavailable,
 	BrowserSession,
+	_build_candidate_jobs_page_url,
 	_pick_zhipin_target_ws,
+	_preferred_zhipin_page_url,
 	ensure_candidate_chat_page_via_cdp,
 )
+from boss_agent_cli.api import endpoints
 
 
 def test_browser_session_defaults():
@@ -616,12 +621,69 @@ def test_request_uses_raw_cdp_evaluation_when_configured():
 	assert "fetch(fetchUrl, options)" in evaluate_script
 	assert evaluate_args["method"] == "GET"
 	assert evaluate_args["params"] == {"query": "rag"}
+	assert mock_evaluate.call_args.kwargs["preferred_page_url"] == CANDIDATE_JOBS_URL
+
+
+def test_request_uses_recommend_page_for_recommend_endpoint_when_raw_cdp_is_enabled():
+	session = BrowserSession(cookies={}, user_agent="", cdp_url="http://127.0.0.1:9229")
+	session._started = True
+	session._is_cdp = True
+	session._raw_cdp_url = "http://127.0.0.1:9229"
+	session._throttle = MagicMock()
+
+	with patch("boss_agent_cli.api.browser_client._cdp_evaluate_in_zhipin_tab", return_value={"code": 0, "zpData": {}}) as mock_evaluate:
+		session.request("GET", endpoints.RECOMMEND_URL, params={"page": 1})
+
+	assert mock_evaluate.call_args.kwargs["preferred_page_url"] == CANDIDATE_RECOMMEND_URL
+
+
+def test_pick_zhipin_target_ws_opens_preferred_page_when_missing():
+	with (
+		patch(
+			"boss_agent_cli.api.browser_client._load_cdp_targets",
+			side_effect=[
+				[
+					{
+						"type": "page",
+						"url": "https://www.zhipin.com/web/geek/chat",
+						"webSocketDebuggerUrl": "ws://chat",
+					},
+				],
+				[
+					{
+						"type": "page",
+						"url": "https://www.zhipin.com/web/geek/chat",
+						"webSocketDebuggerUrl": "ws://chat",
+					},
+					{
+						"type": "page",
+						"url": CANDIDATE_JOBS_URL,
+						"webSocketDebuggerUrl": "ws://jobs",
+					},
+				],
+			],
+		) as mock_targets,
+		patch("boss_agent_cli.api.browser_client._open_cdp_tab", return_value={"id": "jobs-tab"}) as mock_open,
+		patch("boss_agent_cli.api.browser_client.time.sleep", return_value=None),
+	):
+		result = _pick_zhipin_target_ws(CDP_DEFAULT_URL, preferred_page_url=CANDIDATE_JOBS_URL)
+
+	assert result == "ws://jobs"
+	mock_open.assert_called_once_with(CDP_DEFAULT_URL, CANDIDATE_JOBS_URL)
+	assert mock_targets.call_count == 2
+
+
+def test_preferred_zhipin_page_url_maps_search_and_recommend_endpoints():
+	assert _preferred_zhipin_page_url(endpoints.SEARCH_URL) == CANDIDATE_JOBS_URL
+	assert _preferred_zhipin_page_url(endpoints.RECOMMEND_URL) == CANDIDATE_RECOMMEND_URL
+	assert _preferred_zhipin_page_url(endpoints.USER_INFO_URL) is None
 
 
 def test_request_passes_fetch_timeout_to_browser_evaluation():
 	session = BrowserSession(cookies={}, user_agent="")
 	session._started = True
 	session._page = MagicMock()
+	session._page.url = CANDIDATE_JOBS_URL
 	session._throttle = MagicMock()
 	session._page.evaluate.return_value = {"code": -1, "message": "browser fetch timeout after 30000ms", "zpData": {}}
 
@@ -642,6 +704,7 @@ def test_request_sets_fetch_referrer_option_instead_of_forbidden_header():
 	session = BrowserSession(cookies={}, user_agent="")
 	session._started = True
 	session._page = MagicMock()
+	session._page.url = CANDIDATE_CHAT_URL
 	session._throttle = MagicMock()
 	session._page.evaluate.return_value = {"code": 0, "zpData": {}}
 
@@ -661,6 +724,7 @@ def test_request_retries_when_browser_evaluation_context_is_destroyed():
 	session = BrowserSession(cookies={}, user_agent="")
 	session._started = True
 	session._page = MagicMock()
+	session._page.url = CANDIDATE_JOBS_URL
 	session._throttle = MagicMock()
 	expected = {"code": 0, "zpData": {"jobs": [{"securityId": "abc"}]}}
 	session._page.evaluate.side_effect = [
@@ -684,6 +748,7 @@ def test_request_returns_failed_fetch_when_browser_evaluation_context_keeps_navi
 	session = BrowserSession(cookies={}, user_agent="")
 	session._started = True
 	session._page = MagicMock()
+	session._page.url = CANDIDATE_JOBS_URL
 	session._throttle = MagicMock()
 	session._page.evaluate.side_effect = [
 		Exception("Page.evaluate: Execution context was destroyed, most likely because of a navigation."),
@@ -701,3 +766,76 @@ def test_request_returns_failed_fetch_when_browser_evaluation_context_keeps_navi
 	assert session._page.evaluate.call_count == 3
 	assert session._page.wait_for_load_state.call_count == 3
 	session._throttle.mark.assert_called_once()
+
+
+def test_request_navigates_playwright_page_to_jobs_before_search():
+	session = BrowserSession(cookies={}, user_agent="")
+	session._started = True
+	session._page = MagicMock()
+	session._page.url = HOME_URL
+	session._throttle = MagicMock()
+	session._page.evaluate.return_value = {"code": 0, "zpData": {}}
+
+	session.request(
+		"GET",
+		endpoints.SEARCH_URL,
+		params={"query": "RAG"},
+	)
+
+	session._page.goto.assert_called_once_with(
+		CANDIDATE_JOBS_URL,
+		wait_until="domcontentloaded",
+		timeout=_NAV_TIMEOUT_MS,
+	)
+
+
+def test_build_candidate_jobs_page_url_keeps_supported_search_params_only():
+	page_url = _build_candidate_jobs_page_url({
+		"query": "RAG",
+		"city": "101210100",
+		"salary": "406",
+		"degree": "203",
+		"industry": "100020",
+		"page": 2,
+		"ignored": "value",
+	})
+
+	assert page_url == (
+		"https://www.zhipin.com/web/geek/jobs"
+		"?query=RAG&city=101210100&salary=406&degree=203&industry=100020&page=2"
+	)
+
+
+def test_search_jobs_via_page_uses_playwright_page_when_available():
+	session = BrowserSession(cookies={}, user_agent="")
+	session._started = True
+	session._page = MagicMock()
+	session._page.evaluate.return_value = {"code": 0, "zpData": {"jobList": [{"jobName": "RAG"}]}}
+
+	result = session.search_jobs_via_page({
+		"query": "RAG",
+		"city": "101210100",
+		"salary": "406",
+	})
+
+	assert result["code"] == 0
+	session._page.goto.assert_called_once_with(
+		"https://www.zhipin.com/web/geek/jobs?query=RAG&city=101210100&salary=406",
+		wait_until="domcontentloaded",
+		timeout=_NAV_TIMEOUT_MS,
+	)
+
+
+def test_search_jobs_via_page_prefers_raw_cdp_when_present():
+	session = BrowserSession(cookies={}, user_agent="")
+	session._started = True
+	session._raw_cdp_url = "http://localhost:9229"
+
+	with patch("boss_agent_cli.api.browser_client._scrape_jobs_page_via_cdp", return_value={"code": 0, "zpData": {}}) as mock_scrape:
+		result = session.search_jobs_via_page({"query": "RAG"})
+
+	assert result["code"] == 0
+	mock_scrape.assert_called_once_with(
+		"http://localhost:9229",
+		"https://www.zhipin.com/web/geek/jobs?query=RAG",
+	)

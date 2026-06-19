@@ -142,6 +142,51 @@ def test_account_risk_error_not_raised_on_success():
 	client.close()
 
 
+def test_search_jobs_falls_back_to_jobs_page_when_direct_fetch_lacks_business_auth():
+	"""search_jobs 在 jobs 页鉴权缺失型 code 37 时回退到官方职位页 DOM 搜索。"""
+	from unittest.mock import MagicMock, patch
+	from boss_agent_cli.api.client import BossClient
+
+	auth = MagicMock()
+	auth.get_token.return_value = {"cookies": {}, "user_agent": "ua", "stoken": "s"}
+	client = BossClient(auth, cdp_url="http://localhost:9229")
+
+	browser = MagicMock()
+	browser.search_jobs_via_page.return_value = {
+		"code": 0,
+		"message": "Success",
+		"zpData": {"jobList": [{"jobName": "开发工程师（RAG）"}]},
+	}
+	client._browser_session = browser
+
+	with patch.object(client, "_browser_request", return_value={"code": 37, "message": "您的环境存在异常.", "zpData": {}}):
+		result = client.search_jobs("RAG", city="杭州", education="本科")
+
+	assert result["code"] == 0
+	browser.search_jobs_via_page.assert_called_once()
+	client.close()
+
+
+def test_search_jobs_keeps_original_error_when_jobs_page_fallback_fails():
+	from unittest.mock import MagicMock, patch
+	from boss_agent_cli.api.client import BossClient
+
+	auth = MagicMock()
+	auth.get_token.return_value = {"cookies": {}, "user_agent": "ua", "stoken": "s"}
+	client = BossClient(auth, cdp_url="http://localhost:9229")
+
+	browser = MagicMock()
+	browser.search_jobs_via_page.side_effect = RuntimeError("jobs page unavailable")
+	client._browser_session = browser
+
+	with patch.object(client, "_browser_request", return_value={"code": 37, "message": "您的环境存在异常.", "zpData": {}}):
+		result = client.search_jobs("RAG")
+
+	assert result["code"] == 37
+	browser.search_jobs_via_page.assert_called_once()
+	client.close()
+
+
 def test_job_card_httpx_returns_result():
 	"""job_card_httpx 成功时返回 httpx 通道结果。"""
 	from unittest.mock import MagicMock, patch

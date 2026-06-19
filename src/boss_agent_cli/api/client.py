@@ -165,6 +165,13 @@ class BossClient:
 			)
 		return result
 
+	@staticmethod
+	def _is_jobs_page_auth_context_error(result: dict[str, Any]) -> bool:
+		if result.get("code") != endpoints.CODE_STOKEN_EXPIRED:
+			return False
+		message = str(result.get("message") or "")
+		return "环境存在异常" in message or "业务鉴权" in message
+
 	# ── Public API ───────────────────────────────────────────────────
 	# High-risk: search, recommend, greet, job_card → browser channel
 	# Low-risk: status, me, cities, schema, detail → httpx channel
@@ -208,7 +215,13 @@ class BossClient:
 			code = filters.get("job_type_code") or endpoints.JOB_TYPE_CODES.get(job_type)
 			if code:
 				params["jobType"] = code
-		return self._browser_request("GET", endpoints.SEARCH_URL, params=params)
+		result = self._browser_request("GET", endpoints.SEARCH_URL, params=params)
+		if self._is_jobs_page_auth_context_error(result):
+			try:
+				return self._get_browser().search_jobs_via_page(params)
+			except Exception:
+				return result
+		return result
 
 	def recommend_jobs(self, page: int = 1) -> dict[str, Any]:
 		params = {"page": page}

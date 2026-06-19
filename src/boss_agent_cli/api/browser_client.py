@@ -24,6 +24,8 @@ from boss_agent_cli.auth.browser import _DEFAULT_CDP_URL as CDP_DEFAULT_URL
 
 HOME_URL = "https://www.zhipin.com/"
 CANDIDATE_CHAT_URL = "https://www.zhipin.com/web/geek/chat"
+CANDIDATE_JOBS_URL = "https://www.zhipin.com/web/geek/jobs"
+CANDIDATE_RECOMMEND_URL = endpoints.WEB_GEEK_RECOMMEND_URL
 
 
 def _sync_playwright() -> Any:
@@ -356,6 +358,7 @@ class BrowserSession:
 		self._throttle.wait()
 
 		referer = endpoints.REFERER_MAP.get(url, f"{endpoints.BASE_URL}/")
+		preferred_page_url = _preferred_zhipin_page_url(url)
 
 		# Bridge 模式：通过扩展 fetch
 		if self._is_bridge and self._bridge_client:
@@ -431,7 +434,12 @@ class BrowserSession:
 			last_error: Exception | None = None
 			for _ in range(3):
 				try:
-					result = _cdp_evaluate_in_zhipin_tab(self._raw_cdp_url, evaluate_script, evaluate_args)
+					result = _cdp_evaluate_in_zhipin_tab(
+						self._raw_cdp_url,
+						evaluate_script,
+						evaluate_args,
+						preferred_page_url=preferred_page_url,
+					)
 					break
 				except Exception as exc:
 					if not self._is_navigation_context_error(exc):
@@ -445,6 +453,18 @@ class BrowserSession:
 			return cast("dict[str, Any]", result)
 
 		# Playwright 模式（CDP 或 headless）
+		if preferred_page_url and self._page is not None:
+			current_url = ""
+			try:
+				current_url = str(self._page.url or "")
+			except Exception:
+				current_url = ""
+			if not _matches_page_url(current_url, preferred_page_url) or "_security_check=" in current_url:
+				try:
+					self._page.goto(preferred_page_url, wait_until="domcontentloaded", timeout=_NAV_TIMEOUT_MS)
+				except Exception as exc:
+					self._log(f"[boss] request page warmup failed ({preferred_page_url}): {exc}")
+
 		last_error: Exception | None = None
 		for _ in range(3):
 			try:
@@ -610,6 +630,19 @@ class BrowserSession:
 				"message": f"无法准备附件上传页面: {exc}",
 			}
 
+	def search_jobs_via_page(self, params: dict[str, Any]) -> dict[str, Any]:
+		"""Fallback to the official jobs page flow when direct API fetch lacks page auth context."""
+		self._ensure_started()
+		page_url = _build_candidate_jobs_page_url(params)
+
+		if self._raw_cdp_url:
+			return _scrape_jobs_page_via_cdp(self._raw_cdp_url, page_url)
+
+		if self._page is None:
+			raise RuntimeError("候选职位页未就绪，无法通过官方职位页回退搜索")
+
+		return _scrape_jobs_page_via_playwright(self._page, page_url)
+
 	# ── Lifecycle ────────────────────────────────────────────────────
 
 	@property
@@ -686,10 +719,227 @@ def _pick_chat_target_ws(cdp_http_url: str) -> str:
 	raise RecruiterChatTabRequired()
 
 
-def _pick_zhipin_target_ws(cdp_http_url: str) -> str:
+def _preferred_zhipin_page_url(request_url: str) -> str | None:
+	if request_url == endpoints.SEARCH_URL:
+		return CANDIDATE_JOBS_URL
+	if request_url == endpoints.RECOMMEND_URL:
+		return CANDIDATE_RECOMMEND_URL
+	return None
+
+
+_CANDIDATE_JOBS_PAGE_PARAM_KEYS = (
+	"query",
+	"city",
+	"salary",
+	"experience",
+	"degree",
+	"industry",
+	"scale",
+	"stage",
+	"jobType",
+	"page",
+)
+
+_JOBS_PAGE_FALLBACK_SCRIPT = r"""
+	async ({timeoutMs, pageSizeHint}) => {
+		const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+		const clean = (value) => String(value || '').replace(/\s+/g, ' ').trim();
+		const extractJobId = (href) => {
+			const match = String(href || '').match(/\/job_detail\/([^/?#.]+)\.html/i);
+			return match ? match[1] : '';
+		};
+		const parseLocation = (value) => {
+			const parts = clean(value).split('·').map((part) => clean(part)).filter(Boolean);
+			return {
+				city: parts[0] || '',
+				district: parts[1] || '',
+			};
+		};
+		const noResultTokens = ['暂无', '未找到', '没有找到', '暂无相关职位'];
+		const deadline = Date.now() + timeoutMs;
+
+		while (Date.now() < deadline) {
+			const cardCount = document.querySelectorAll('.job-card-box').length;
+			if (cardCount > 0) {
+				break;
+			}
+			const bodyText = clean(document.body?.innerText || '');
+			if (noResultTokens.some((token) => bodyText.includes(token))) {
+				break;
+			}
+			await sleep(200);
+		}
+
+		const cards = Array.from(document.querySelectorAll('.job-card-box'));
+		const jobs = [];
+		for (const card of cards) {
+			const link = card.querySelector('a.job-name, .job-title a[href*="/job_detail/"]');
+			const linkHref = link ? (link.getAttribute('href') || link.href || '') : '';
+			const jobId = extractJobId(linkHref);
+			const clickTarget = card.querySelector('.job-card-wrap') || card;
+			let jobInfo = {};
+			let securityId = '';
+
+			clickTarget.dispatchEvent(new MouseEvent('click', {
+				bubbles: true,
+				cancelable: true,
+				view: window,
+			}));
+
+			const detailDeadline = Date.now() + 3000;
+			while (Date.now() < detailDeadline) {
+				const nextInfo = window._jobInfo || {};
+				const infoJobId = clean(nextInfo.encryptId);
+				const infoTitle = clean(nextInfo.jobName);
+				const linkTitle = clean(link?.textContent || '');
+				if ((jobId && infoJobId === jobId) || (linkTitle && infoTitle === linkTitle)) {
+					jobInfo = nextInfo;
+					securityId = clean(nextInfo.securityId);
+					break;
+				}
+
+				const detailLink = jobId
+					? document.querySelector(`a[href*="/job_detail/${jobId}.html?securityId="]`)
+					: null;
+				const detailHref = detailLink ? (detailLink.getAttribute('href') || detailLink.href || '') : '';
+				const match = detailHref.match(/[?&]securityId=([^&#]+)/);
+				if (match) {
+					jobInfo = nextInfo;
+					securityId = decodeURIComponent(match[1]);
+					break;
+				}
+				await sleep(100);
+			}
+
+			const tags = Array.from(card.querySelectorAll('.job-info .tag-list li'))
+				.map((element) => clean(element.textContent))
+				.filter(Boolean);
+			const location = parseLocation(card.querySelector('.company-location')?.textContent || '');
+			jobs.push({
+				encryptJobId: clean(jobInfo.encryptId) || jobId,
+				jobName: clean(jobInfo.jobName) || clean(link?.textContent || ''),
+				brandName: clean(card.querySelector('.boss-name')?.textContent || ''),
+				salaryDesc: clean(jobInfo.salaryDesc) || clean(card.querySelector('.job-salary')?.textContent || ''),
+				cityName: clean(jobInfo.locationName) || location.city,
+				areaDistrict: location.district,
+				jobExperience: clean(jobInfo.experienceName) || tags[0] || '',
+				jobDegree: clean(jobInfo.degreeName) || tags[1] || '',
+				skills: tags.slice(2),
+				welfareList: [],
+				brandIndustry: '',
+				brandScaleName: '',
+				brandStageName: '',
+				bossName: '',
+				bossTitle: '',
+				bossOnline: Boolean(card.querySelector('.boss-online-icon')),
+				securityId,
+			});
+		}
+
+		const bodyText = clean(document.body?.innerText || '');
+		const currentPage = Number.parseInt(new URLSearchParams(window.location.search).get('page') || '1', 10);
+		const page = Number.isFinite(currentPage) && currentPage > 0 ? currentPage : 1;
+		return {
+			code: 0,
+			message: 'Success',
+			zpData: {
+				jobList: jobs,
+				hasMore: jobs.length >= pageSizeHint,
+				page,
+				source: 'jobs_page_dom_fallback',
+				empty: jobs.length === 0 && noResultTokens.some((token) => bodyText.includes(token)),
+			},
+		};
+	}
+"""
+
+
+def _build_candidate_jobs_page_url(params: dict[str, Any] | None) -> str:
+	import urllib.parse
+
+	if not params:
+		return CANDIDATE_JOBS_URL
+
+	query_params: list[tuple[str, str]] = []
+	for key in _CANDIDATE_JOBS_PAGE_PARAM_KEYS:
+		value = params.get(key)
+		if value is None:
+			continue
+		text = str(value).strip()
+		if not text:
+			continue
+		query_params.append((key, text))
+
+	if not query_params:
+		return CANDIDATE_JOBS_URL
+	return f"{CANDIDATE_JOBS_URL}?{urllib.parse.urlencode(query_params)}"
+
+
+def _scrape_jobs_page_via_playwright(page: Any, page_url: str) -> dict[str, Any]:
+	page.goto(page_url, wait_until="domcontentloaded", timeout=_NAV_TIMEOUT_MS)
+	result = page.evaluate(
+		_JOBS_PAGE_FALLBACK_SCRIPT,
+		{
+			"timeoutMs": _BROWSER_FETCH_TIMEOUT_MS,
+			"pageSizeHint": 15,
+		},
+	)
+	return cast("dict[str, Any]", result)
+
+
+def _matches_page_url(target_url: str, preferred_page_url: str) -> bool:
+	normalized_target = target_url.rstrip("/")
+	normalized_preferred = preferred_page_url.rstrip("/")
+	return normalized_target == normalized_preferred or normalized_target.startswith(f"{normalized_preferred}?")
+
+
+def _find_zhipin_target_by_page_url(
+	targets: list[dict[str, Any]],
+	preferred_page_url: str,
+) -> dict[str, Any] | None:
+	clean_matches: list[dict[str, Any]] = []
+	challenged_matches: list[dict[str, Any]] = []
+	for target in targets:
+		if target.get("type") != "page":
+			continue
+		url = str(target.get("url") or "")
+		if "zhipin.com" not in url or not _matches_page_url(url, preferred_page_url):
+			continue
+		if "_security_check=" in url:
+			challenged_matches.append(target)
+		else:
+			clean_matches.append(target)
+	if clean_matches:
+		return clean_matches[0]
+	if challenged_matches:
+		return challenged_matches[0]
+	return None
+
+
+def _pick_zhipin_target_ws(cdp_http_url: str, *, preferred_page_url: str | None = None) -> str:
 	targets = _load_cdp_targets(cdp_http_url)
+	if preferred_page_url:
+		preferred_target = _find_zhipin_target_by_page_url(targets, preferred_page_url)
+		if preferred_target is None:
+			try:
+				_open_cdp_tab(cdp_http_url, preferred_page_url)
+			except Exception:
+				preferred_target = None
+			else:
+				deadline = time.time() + _CDP_CHAT_PAGE_WAIT_SECONDS
+				while time.time() < deadline:
+					targets = _load_cdp_targets(cdp_http_url)
+					preferred_target = _find_zhipin_target_by_page_url(targets, preferred_page_url)
+					if preferred_target is not None:
+						break
+					time.sleep(0.5)
+		if preferred_target is not None:
+			target_ws = preferred_target.get("webSocketDebuggerUrl")
+			if target_ws:
+				return cast("str", target_ws)
 	chat_targets: list[dict[str, Any]] = []
 	job_targets: list[dict[str, Any]] = []
+	recommend_targets: list[dict[str, Any]] = []
 	home_targets: list[dict[str, Any]] = []
 	fallbacks: list[dict[str, Any]] = []
 	for target in targets:
@@ -700,13 +950,15 @@ def _pick_zhipin_target_ws(cdp_http_url: str) -> str:
 			continue
 		if "/web/geek/chat" in url:
 			chat_targets.append(target)
+		elif "/web/geek/recommend" in url:
+			recommend_targets.append(target)
 		elif "/web/geek/job" in url:
 			job_targets.append(target)
 		elif url.rstrip("/") == HOME_URL.rstrip("/"):
 			home_targets.append(target)
 		else:
 			fallbacks.append(target)
-	for target in [*chat_targets, *job_targets, *home_targets, *fallbacks]:
+	for target in [*chat_targets, *job_targets, *recommend_targets, *home_targets, *fallbacks]:
 		target_ws = target.get("webSocketDebuggerUrl")
 		if target_ws:
 			return cast("str", target_ws)
@@ -928,12 +1180,18 @@ def _cdp_evaluate_in_chat_tab(cdp_http_url: str, script: str, arg: Any) -> Any:
 		raise RuntimeError("CDP Runtime.evaluate timed out after 30s")
 
 
-def _cdp_evaluate_in_zhipin_tab(cdp_http_url: str, script: str, arg: Any) -> Any:
+def _cdp_evaluate_in_zhipin_tab(
+	cdp_http_url: str,
+	script: str,
+	arg: Any,
+	*,
+	preferred_page_url: str | None = None,
+) -> Any:
 	import json as _json
 
 	import websockets.sync.client as _ws_client
 
-	target_ws = _pick_zhipin_target_ws(cdp_http_url)
+	target_ws = _pick_zhipin_target_ws(cdp_http_url, preferred_page_url=preferred_page_url)
 	expression = _build_eval_expression(script, arg)
 
 	with _ws_client.connect(target_ws, max_size=8 * 1024 * 1024) as ws:
@@ -966,6 +1224,73 @@ def _cdp_evaluate_in_zhipin_tab(cdp_http_url: str, script: str, arg: Any) -> Any
 				)
 			return result
 		raise RuntimeError("CDP Runtime.evaluate timed out after 30s")
+
+
+def _scrape_jobs_page_via_cdp(cdp_http_url: str, page_url: str) -> dict[str, Any]:
+	import json as _json
+
+	import websockets.sync.client as _ws_client
+
+	target_ws = _pick_zhipin_target_ws(cdp_http_url, preferred_page_url=CANDIDATE_JOBS_URL)
+	expression = _build_eval_expression(
+		_JOBS_PAGE_FALLBACK_SCRIPT,
+		{
+			"timeoutMs": _BROWSER_FETCH_TIMEOUT_MS,
+			"pageSizeHint": 15,
+		},
+	)
+
+	with _ws_client.connect(target_ws, max_size=8 * 1024 * 1024) as ws:
+		ws.send(_json.dumps({"id": 1, "method": "Page.enable"}))
+		ws.send(_json.dumps({"id": 2, "method": "Runtime.enable"}))
+		ws.send(_json.dumps({
+			"id": 3,
+			"method": "Page.navigate",
+			"params": {"url": page_url},
+		}))
+
+		load_deadline = time.time() + 15.0
+		while time.time() < load_deadline:
+			raw = ws.recv(timeout=max(0.1, load_deadline - time.time()))
+			msg = _json.loads(raw)
+			if msg.get("id") == 3:
+				err = msg.get("error")
+				if err:
+					raise RuntimeError(f"CDP Page.navigate error: {err}")
+				continue
+			if msg.get("method") == "Page.loadEventFired":
+				break
+
+		ws.send(_json.dumps({
+			"id": 4,
+			"method": "Runtime.evaluate",
+			"params": {
+				"expression": expression,
+				"returnByValue": True,
+				"awaitPromise": True,
+			},
+		}))
+
+		eval_deadline = time.time() + 30.0
+		while time.time() < eval_deadline:
+			raw = ws.recv(timeout=max(0.1, eval_deadline - time.time()))
+			msg = _json.loads(raw)
+			if msg.get("id") != 4:
+				continue
+			err = msg.get("error")
+			if err:
+				raise RuntimeError(f"CDP Runtime.evaluate error: {err}")
+			result = msg.get("result", {}).get("result", {})
+			if "value" in result:
+				return cast("dict[str, Any]", result["value"])
+			exc_details = msg.get("result", {}).get("exceptionDetails")
+			if exc_details:
+				raise RuntimeError(
+					f"JS exception: {exc_details.get('text')} — "
+					f"{exc_details.get('exception', {}).get('description', '')[:300]}"
+				)
+			return cast("dict[str, Any]", result)
+		raise RuntimeError("CDP jobs page fallback timed out after 30s")
 
 
 def _cdp_evaluate_with_chat_events_in_chat_tab(

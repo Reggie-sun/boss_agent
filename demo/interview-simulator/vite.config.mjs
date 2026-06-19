@@ -79,6 +79,21 @@ function loadBridgeConfig() {
   };
 }
 
+function buildBossCliArgs(config, args) {
+  const cliArgs = [
+    "-c",
+    "from boss_agent_cli.main import cli; import sys; cli.main(args=sys.argv[1:], standalone_mode=False)",
+    "--json",
+    "--data-dir",
+    config.dataDir,
+  ];
+  if (config.cdpUrl) {
+    cliArgs.push("--cdp-url", config.cdpUrl);
+  }
+  cliArgs.push(...args);
+  return cliArgs;
+}
+
 async function readJsonWithTimeout(url, timeoutMs = 1500) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -595,6 +610,7 @@ export function resetDeliveryProbeCacheForTests() {
 }
 
 export {
+  buildBossCliArgs,
   buildBossDeliveryBlockPayload,
   detectBossDeliveryChannel,
   resolveBossAutoGreetCommandTimeoutMs,
@@ -626,14 +642,7 @@ function runBossJsonCommand(config, args, options = {}) {
   return new Promise((resolve, reject) => {
     const child = spawn(
       config.pythonBin,
-      [
-        "-c",
-        "from boss_agent_cli.main import cli; import sys; cli.main(args=sys.argv[1:], standalone_mode=False)",
-        "--json",
-        "--data-dir",
-        config.dataDir,
-        ...args,
-      ],
+      buildBossCliArgs(config, args),
       {
         cwd: config.repoRoot,
         env: {
@@ -723,14 +732,7 @@ function runBossJsonCommandStream(config, args, res, options = {}) {
   return new Promise((resolve) => {
     const child = spawn(
       config.pythonBin,
-      [
-        "-c",
-        "from boss_agent_cli.main import cli; import sys; cli.main(args=sys.argv[1:], standalone_mode=False)",
-        "--json",
-        "--data-dir",
-        config.dataDir,
-        ...args,
-      ],
+      buildBossCliArgs(config, args),
       {
         cwd: config.repoRoot,
         env: {
