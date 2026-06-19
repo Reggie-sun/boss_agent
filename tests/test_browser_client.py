@@ -13,6 +13,7 @@ from boss_agent_cli.api.browser_client import (
 	_NAV_TIMEOUT_MS,
 	BrowserChannelUnavailable,
 	BrowserSession,
+	_pick_zhipin_target_ws,
 	ensure_candidate_chat_page_via_cdp,
 )
 
@@ -91,6 +92,25 @@ def test_ensure_candidate_chat_page_uses_existing_chat_tab():
 	assert result["url"] == "https://www.zhipin.com/web/geek/chat"
 	mock_load.assert_called_once_with("http://127.0.0.1:9222")
 	mock_open.assert_not_called()
+
+
+def test_pick_zhipin_target_ws_prefers_candidate_chat_tab_over_jobs_tab():
+	with patch(
+		"boss_agent_cli.api.browser_client._load_cdp_targets",
+		return_value=[
+			{
+				"type": "page",
+				"url": "https://www.zhipin.com/web/geek/jobs",
+				"webSocketDebuggerUrl": "ws://jobs",
+			},
+			{
+				"type": "page",
+				"url": "https://www.zhipin.com/web/geek/chat",
+				"webSocketDebuggerUrl": "ws://chat",
+			},
+		],
+	):
+		assert _pick_zhipin_target_ws("http://127.0.0.1:9222") == "ws://chat"
 
 
 def test_ensure_candidate_chat_page_opens_chat_tab_when_missing():

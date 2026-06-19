@@ -185,6 +185,100 @@ test("detectBossDeliveryChannel reuses an in-flight CDP probe", async () => {
   }
 });
 
+test("detectBossDeliveryChannel reuses an existing candidate chat tab before opening a probe tab", async () => {
+  const originalFetch = globalThis.fetch;
+  const originalWebSocket = globalThis.WebSocket;
+  let createdTargets = 0;
+
+  class FakeWebSocket {
+    constructor(url) {
+      this.url = url;
+      queueMicrotask(() => this.onopen?.());
+    }
+
+    send(raw) {
+      const message = JSON.parse(raw);
+      const result = message.method === "Runtime.evaluate"
+        ? {
+            result: {
+              value: JSON.stringify({
+                href: "https://www.zhipin.com/web/geek/chat",
+                title: "BOSS直聘",
+                hasUserList: true,
+                bodySnippet: "候选人列表",
+              }),
+            },
+          }
+        : {};
+      queueMicrotask(() => {
+        this.onmessage?.({
+          data: JSON.stringify({
+            id: message.id,
+            result,
+          }),
+        });
+      });
+    }
+
+    close() {}
+  }
+
+  globalThis.WebSocket = FakeWebSocket;
+  globalThis.fetch = async (url, options = {}) => {
+    const requestUrl = String(url);
+
+    if (requestUrl === "http://cdp.test/json/version") {
+      return Response.json({
+        webSocketDebuggerUrl: "ws://cdp.test/browser",
+      });
+    }
+    if (requestUrl === "http://bridge.test/status") {
+      return Response.json({
+        ok: true,
+        extensionConnected: false,
+      });
+    }
+    if (requestUrl === "http://cdp.test/json/list") {
+      return Response.json([
+        {
+          id: "jobs-tab",
+          type: "page",
+          url: "https://www.zhipin.com/web/geek/jobs",
+          webSocketDebuggerUrl: "ws://cdp.test/jobs-tab",
+        },
+        {
+          id: "chat-tab",
+          type: "page",
+          url: "https://www.zhipin.com/web/geek/chat",
+          webSocketDebuggerUrl: "ws://cdp.test/chat-tab",
+        },
+      ]);
+    }
+    if (requestUrl.startsWith("http://cdp.test/json/new?")) {
+      createdTargets += 1;
+      throw new Error("existing chat tab should be reused before opening a probe tab");
+    }
+    throw new Error(`unexpected fetch: ${requestUrl}`);
+  };
+
+  try {
+    resetDeliveryProbeCacheForTests();
+    const state = await detectBossDeliveryChannel({
+      cdpUrl: "http://cdp.test",
+      bridgeUrl: "http://bridge.test",
+    });
+
+    assert.equal(state.available, true);
+    assert.equal(state.preflightStatus, "ready");
+    assert.equal(state.lastObservedUrl, "https://www.zhipin.com/web/geek/chat");
+    assert.equal(createdTargets, 0);
+  } finally {
+    resetDeliveryProbeCacheForTests();
+    globalThis.fetch = originalFetch;
+    globalThis.WebSocket = originalWebSocket;
+  }
+});
+
 test("detectBossDeliveryChannel fails fast when an in-flight CDP probe socket closes", async () => {
   const originalFetch = globalThis.fetch;
   const originalWebSocket = globalThis.WebSocket;

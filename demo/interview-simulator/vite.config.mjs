@@ -210,7 +210,22 @@ async function closeCdpProbeTarget(cdpUrl, targetId) {
   });
 }
 
-async function evaluateCdpProbeTarget(target, url) {
+async function listCdpTargets(cdpUrl) {
+  const payload = await readJsonWithTimeout(`${cdpUrl}/json/list`, 2000);
+  return Array.isArray(payload)
+    ? payload.filter((item) => item && typeof item === "object")
+    : [];
+}
+
+function findCandidateChatTarget(targets) {
+  return targets.find((target) => {
+    if (target?.type !== "page") return false;
+    const url = String(target?.url || "");
+    return url.includes("/web/geek/chat");
+  }) || null;
+}
+
+async function evaluateCdpProbeTarget(target, { url = BOSS_GEEK_CHAT_URL, navigate = true } = {}) {
   if (!target?.webSocketDebuggerUrl) {
     return {
       ok: false,
@@ -337,8 +352,10 @@ async function evaluateCdpProbeTarget(target, url) {
     await waitForSocketOpen;
     await send("Page.enable");
     await send("Runtime.enable");
-    await send("Page.navigate", { url });
-    await new Promise((resolve) => setTimeout(resolve, 6500));
+    if (navigate) {
+      await send("Page.navigate", { url });
+      await new Promise((resolve) => setTimeout(resolve, 6500));
+    }
 
     const result = await send("Runtime.evaluate", {
       expression: `(() => JSON.stringify({
@@ -450,8 +467,16 @@ async function detectBossDeliveryChannel(config) {
 }
 
 async function runCdpDeliveryProbe(config, baseState, cacheKey) {
-  const target = await createCdpProbeTarget(config.cdpUrl);
-  if (!target?.id) {
+  const existingChatTarget = findCandidateChatTarget(await listCdpTargets(config.cdpUrl));
+
+  let target = existingChatTarget;
+  let closeTargetId = "";
+  if (!target) {
+    target = await createCdpProbeTarget(config.cdpUrl);
+    closeTargetId = String(target?.id || "");
+  }
+
+  if (!target?.id && !target?.webSocketDebuggerUrl) {
     const unavailable = {
       ...baseState,
       available: false,
@@ -468,9 +493,12 @@ async function runCdpDeliveryProbe(config, baseState, cacheKey) {
 
   let probeResult;
   try {
-    probeResult = await evaluateCdpProbeTarget(target, BOSS_GEEK_CHAT_URL);
+    probeResult = await evaluateCdpProbeTarget(target, {
+      url: BOSS_GEEK_CHAT_URL,
+      navigate: !existingChatTarget,
+    });
   } finally {
-    await closeCdpProbeTarget(config.cdpUrl, target.id);
+    await closeCdpProbeTarget(config.cdpUrl, closeTargetId);
   }
 
   const redirectEvent = Array.isArray(probeResult?.navigationEvents)

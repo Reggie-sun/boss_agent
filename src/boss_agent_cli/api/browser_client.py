@@ -688,7 +688,9 @@ def _pick_chat_target_ws(cdp_http_url: str) -> str:
 
 def _pick_zhipin_target_ws(cdp_http_url: str) -> str:
 	targets = _load_cdp_targets(cdp_http_url)
-	preferred: list[dict[str, Any]] = []
+	chat_targets: list[dict[str, Any]] = []
+	job_targets: list[dict[str, Any]] = []
+	home_targets: list[dict[str, Any]] = []
 	fallbacks: list[dict[str, Any]] = []
 	for target in targets:
 		if target.get("type") != "page":
@@ -696,15 +698,15 @@ def _pick_zhipin_target_ws(cdp_http_url: str) -> str:
 		url = str(target.get("url") or "")
 		if "zhipin.com" not in url:
 			continue
-		if (
-			"/web/geek/chat" in url
-			or "/web/geek/job" in url
-			or url.rstrip("/") == HOME_URL.rstrip("/")
-		):
-			preferred.append(target)
+		if "/web/geek/chat" in url:
+			chat_targets.append(target)
+		elif "/web/geek/job" in url:
+			job_targets.append(target)
+		elif url.rstrip("/") == HOME_URL.rstrip("/"):
+			home_targets.append(target)
 		else:
 			fallbacks.append(target)
-	for target in [*preferred, *fallbacks]:
+	for target in [*chat_targets, *job_targets, *home_targets, *fallbacks]:
 		target_ws = target.get("webSocketDebuggerUrl")
 		if target_ws:
 			return cast("str", target_ws)
