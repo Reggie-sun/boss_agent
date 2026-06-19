@@ -20,6 +20,7 @@ import {
   bossBridgeErrorCode,
   bossBridgeErrorFromPayload,
   bossBridgeErrorMessage,
+  isBossAccountRiskMessage,
 } from "./bossBridgeErrors.js";
 import "./styles.css";
 
@@ -161,6 +162,21 @@ function normalizeBossJob(item) {
     city: String(item?.city || item?.cityName || ""),
     experience: String(item?.experience || item?.jobExperience || ""),
   };
+}
+
+function watcherRiskHint(watcherState) {
+  const directMessage = String(watcherState?.errorMessage || "").trim();
+  if (directMessage && isBossAccountRiskMessage(directMessage)) {
+    return directMessage;
+  }
+
+  const tasks = Array.isArray(watcherState?.tasks) ? watcherState.tasks.slice().reverse() : [];
+  const riskyTask = tasks.find((task) => {
+    const detail = String(task?.error_message || task?.action?.message || "").trim();
+    return Boolean(detail) && isBossAccountRiskMessage(detail);
+  });
+  if (!riskyTask) return "";
+  return String(riskyTask.error_message || riskyTask.action?.message || "").trim();
 }
 
 function resolveSecurityId({ manualSecurityId = "", selectedChatTarget = null, chatTargets = [] }) {
@@ -319,6 +335,10 @@ export function App() {
   const recentWatcherTasks = useMemo(
     () => watcherState.tasks.slice().reverse().slice(0, 6),
     [watcherState.tasks],
+  );
+  const watcherRiskStatusMessage = useMemo(
+    () => watcherRiskHint(watcherState),
+    [watcherState],
   );
   const normalizedBossJobs = useMemo(
     () => bossSearchJobs.map(normalizeBossJob),
@@ -518,10 +538,17 @@ export function App() {
       }
     } catch (error) {
       setBossSearchJobs([]);
-      if (bossBridgeErrorCode(error) === bossAccountRiskCode) {
+      const errorCode = bossBridgeErrorCode(error);
+      const watcherRiskOverride =
+        watcherRiskStatusMessage && (errorCode === "NETWORK_ERROR" || !errorCode)
+          ? `Boss 账号当前已被平台限制访问。${watcherRiskStatusMessage} 请回到 BOSS 官方页面手动处理或等待恢复后刷新重试。`
+          : "";
+      if (errorCode === bossAccountRiskCode || watcherRiskOverride) {
         setBossAutomationRiskLocked(true);
       }
-      setBossAutomationError(bossBridgeErrorMessage(error, "BOSS 搜索失败。"));
+      setBossAutomationError(
+        watcherRiskOverride || bossBridgeErrorMessage(error, "BOSS 搜索失败。"),
+      );
     } finally {
       setIsBossSearching(false);
     }
@@ -622,11 +649,16 @@ export function App() {
       await loadChatTargets();
     } catch (error) {
       setBossAutomationProgress(null);
-      if (bossBridgeErrorCode(error) === bossAccountRiskCode) {
+      const errorCode = bossBridgeErrorCode(error);
+      const watcherRiskOverride =
+        watcherRiskStatusMessage && (errorCode === "NETWORK_ERROR" || !errorCode)
+          ? `Boss 账号当前已被平台限制访问。${watcherRiskStatusMessage} 请回到 BOSS 官方页面手动处理或等待恢复后刷新重试。`
+          : "";
+      if (errorCode === bossAccountRiskCode || watcherRiskOverride) {
         setBossAutomationRiskLocked(true);
       }
       setBossAutomationError(
-        bossBridgeErrorMessage(error, "Agent 自动开聊失败。"),
+        watcherRiskOverride || bossBridgeErrorMessage(error, "Agent 自动开聊失败。"),
       );
     } finally {
       setIsBossAutoRunning(false);

@@ -70,6 +70,14 @@ class TestBossEnvelopeAdapter:
 		code, _ = self.plat.parse_error({"code": 36, "message": "risk"})
 		assert code == "ACCOUNT_RISK"
 
+	def test_parse_error_access_limited_message_as_account_risk(self) -> None:
+		code, msg = self.plat.parse_error({
+			"code": -1,
+			"message": "访问受限，您的账户存在异常行为，已暂时被限制访问！将于 2026-06-20 22:49 恢复正常",
+		})
+		assert code == "ACCOUNT_RISK"
+		assert "访问受限" in msg
+
 	def test_parse_error_unknown(self) -> None:
 		code, _ = self.plat.parse_error({"code": 999, "message": "unknown"})
 		assert code == "UNKNOWN"

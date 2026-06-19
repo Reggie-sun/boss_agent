@@ -75,6 +75,21 @@ _NAV_TIMEOUT_MS = 15000          # 页面导航超时（毫秒）
 _HEADLESS_NETWORKIDLE_GRACE_MS = 3000  # headless 预热的额外宽限，避免卡满 30s
 _BROWSER_FETCH_TIMEOUT_MS = 30000  # 页面内 fetch 超时，避免 CLI / 前端无限等待
 _CDP_CHAT_PAGE_WAIT_SECONDS = 15
+_ACCESS_LIMITED_URL_TOKENS = ("_security_check=", "/security-check")
+_ACCESS_LIMITED_TEXT_TOKENS = (
+	"访问受限",
+	"限制访问",
+	"异常行为",
+	"恢复正常",
+	"解除限制",
+)
+_ACCESS_LIMITED_STATE_SCRIPT = """
+	() => ({
+		url: location.href,
+		title: document.title,
+		bodyText: (document.body?.innerText || '').replace(/\\s+/g, ' ').trim().slice(0, 800),
+	})
+"""
 
 # macOS / Linux / Windows Chrome user data 默认路径
 _CHROME_USER_DATA_CANDIDATES = [
@@ -353,6 +368,68 @@ class BrowserSession:
 			or "Cannot find context with specified id" in message
 		)
 
+	@staticmethod
+	def _access_limited_result_from_snapshot(snapshot: dict[str, Any] | None) -> dict[str, Any] | None:
+		if not isinstance(snapshot, dict):
+			return None
+		url = str(snapshot.get("url") or "")
+		title = str(snapshot.get("title") or "")
+		body_text = str(snapshot.get("bodyText") or "")
+		combined = "\n".join(part for part in (url, title, body_text) if part)
+		if not combined:
+			return None
+		if not any(token in combined for token in (*_ACCESS_LIMITED_URL_TOKENS, *_ACCESS_LIMITED_TEXT_TOKENS)):
+			return None
+		excerpt = body_text[:160].strip()
+		message = (
+			"BOSS 页面访问受限：当前真实浏览器页面已显示“访问受限/账户存在异常行为”，"
+			"请回到 BOSS 官方页面手动处理或等待恢复后重试。"
+		)
+		if excerpt:
+			message = f"{message} 页面提示：{excerpt}"
+		return {
+			"code": endpoints.CODE_ACCOUNT_RISK,
+			"message": message,
+			"zpData": {
+				"pageUrl": url,
+				"pageTitle": title,
+			},
+		}
+
+	def _detect_access_limited_result(self, *, preferred_page_url: str | None = None) -> dict[str, Any] | None:
+		if self._raw_cdp_url:
+			try:
+				snapshot = _cdp_evaluate_in_zhipin_tab(
+					self._raw_cdp_url,
+					_ACCESS_LIMITED_STATE_SCRIPT,
+					None,
+					preferred_page_url=preferred_page_url,
+				)
+			except Exception:
+				return None
+			return self._access_limited_result_from_snapshot(cast("dict[str, Any] | None", snapshot))
+
+		if self._page is None:
+			return None
+
+		try:
+			page_url = str(self._page.url or "")
+		except Exception:
+			page_url = ""
+		try:
+			page_title = str(self._page.title() or "")
+		except Exception:
+			page_title = ""
+		try:
+			body_text = str(self._page.text_content("body") or "")
+		except Exception:
+			body_text = ""
+		return self._access_limited_result_from_snapshot({
+			"url": page_url,
+			"title": page_title,
+			"bodyText": body_text,
+		})
+
 	def request(self, method: str, url: str, *, params: dict[str, Any] | None = None, data: dict[str, Any] | None = None) -> dict[str, Any]:
 		self._ensure_started()
 		self._throttle.wait()
@@ -449,6 +526,8 @@ class BrowserSession:
 			else:
 				self._log(f"[boss] raw CDP browser fetch navigation retries exhausted: {last_error}")
 				result = {"code": -1, "message": "Failed to fetch", "zpData": {}}
+			if result.get("code") == -1:
+				result = self._detect_access_limited_result(preferred_page_url=preferred_page_url) or result
 			self._throttle.mark()
 			return cast("dict[str, Any]", result)
 
@@ -482,6 +561,9 @@ class BrowserSession:
 		else:
 			self._log(f"[boss] browser fetch evaluate navigation retries exhausted: {last_error}")
 			result = {"code": -1, "message": "Failed to fetch", "zpData": {}}
+
+		if result.get("code") == -1:
+			result = self._detect_access_limited_result(preferred_page_url=preferred_page_url) or result
 
 		self._throttle.mark()
 		return cast("dict[str, Any]", result)

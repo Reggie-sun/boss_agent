@@ -637,6 +637,35 @@ def test_request_uses_recommend_page_for_recommend_endpoint_when_raw_cdp_is_enab
 	assert mock_evaluate.call_args.kwargs["preferred_page_url"] == CANDIDATE_RECOMMEND_URL
 
 
+def test_request_upgrades_failed_fetch_to_account_risk_when_raw_cdp_page_is_access_limited():
+	session = BrowserSession(cookies={}, user_agent="", cdp_url="http://127.0.0.1:9229")
+	session._started = True
+	session._is_cdp = True
+	session._raw_cdp_url = "http://127.0.0.1:9229"
+	session._throttle = MagicMock()
+
+	with patch(
+		"boss_agent_cli.api.browser_client._cdp_evaluate_in_zhipin_tab",
+		side_effect=[
+			{"code": -1, "message": "browser fetch timeout after 30000ms", "zpData": {}},
+			{
+				"url": "https://www.zhipin.com/web/geek/jobs?_security_check=1",
+				"title": "访问受限",
+				"bodyText": "访问受限 您的账户存在异常行为，已暂时被限制访问！ 将于 2026-06-20 22:49 恢复正常",
+			},
+		],
+	) as mock_evaluate:
+		result = session.request(
+			"GET",
+			endpoints.SEARCH_URL,
+			params={"query": "RAG"},
+		)
+
+	assert result["code"] == endpoints.CODE_ACCOUNT_RISK
+	assert "访问受限" in result["message"]
+	assert mock_evaluate.call_count == 2
+
+
 def test_pick_zhipin_target_ws_opens_preferred_page_when_missing():
 	with (
 		patch(
@@ -698,6 +727,26 @@ def test_request_passes_fetch_timeout_to_browser_evaluation():
 	assert "setTimeout" in evaluate_script
 	assert "clearTimeout(timeoutId)" in evaluate_script
 	assert evaluate_args["timeoutMs"] == _BROWSER_FETCH_TIMEOUT_MS
+
+
+def test_request_upgrades_playwright_failed_fetch_to_account_risk_when_page_is_limited():
+	session = BrowserSession(cookies={}, user_agent="")
+	session._started = True
+	session._page = MagicMock()
+	session._page.url = "https://www.zhipin.com/web/geek/jobs?_security_check=1"
+	session._page.title.return_value = "访问受限"
+	session._page.text_content.return_value = "您的账户存在异常行为，已暂时被限制访问！"
+	session._throttle = MagicMock()
+	session._page.evaluate.return_value = {"code": -1, "message": "Failed to fetch", "zpData": {}}
+
+	result = session.request(
+		"GET",
+		endpoints.SEARCH_URL,
+		params={"query": "RAG"},
+	)
+
+	assert result["code"] == endpoints.CODE_ACCOUNT_RISK
+	assert "异常行为" in result["message"]
 
 
 def test_request_sets_fetch_referrer_option_instead_of_forbidden_header():

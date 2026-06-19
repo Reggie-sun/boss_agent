@@ -9,7 +9,15 @@ const bossAuthRecoveryCodes = new Set([
   "AUTH_EXPIRED",
   "TOKEN_REFRESH_FAILED",
 ]);
-const bossAccountRiskTokens = ["异常访问", "风控", "安全验证"];
+const bossAccountRiskTokens = [
+  "异常访问",
+  "风控",
+  "安全验证",
+  "访问受限",
+  "限制访问",
+  "异常行为",
+  "禁止使用",
+];
 const bossAuthExpiredTokens = [
   "登录状态已失效",
   "登录态过期",

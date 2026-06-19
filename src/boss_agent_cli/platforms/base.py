@@ -100,7 +100,17 @@ class Platform(ABC):
 			return "AUTH_EXPIRED", message
 		if any(token in lower_msg for token in ("too many", "rate", "频繁", "限流", "稍后再试")):
 			return "RATE_LIMITED", message
-		if any(token in lower_msg for token in ("risk", "forbidden", "风控", "安全验证", "异常访问")):
+		if any(token in lower_msg for token in (
+			"risk",
+			"forbidden",
+			"风控",
+			"安全验证",
+			"异常访问",
+			"访问受限",
+			"限制访问",
+			"异常行为",
+			"恢复正常",
+		)):
 			return "ACCOUNT_RISK", message
 		if "failed to fetch" in lower_msg:
 			return "NETWORK_ERROR", "平台请求失败：浏览器 fetch 未完成，请重试；如果连续失败，请刷新登录状态。"
