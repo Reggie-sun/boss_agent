@@ -488,15 +488,38 @@ def _serialize_target(target: RecentConversationTarget) -> dict[str, object]:
 	}
 
 
+def _cached_target_identity(conversation: ConversationRecord) -> tuple[str, ...]:
+	state = conversation.state if isinstance(conversation.state, dict) else {}
+	gid = str(state.get("gid") or state.get("friend_id") or state.get("uid") or "").strip()
+	if gid:
+		return ("gid", gid)
+	recruiter_id = str(conversation.recruiter_id or "").strip()
+	job_id = str(conversation.job_id or "").strip()
+	if recruiter_id and job_id:
+		return ("recruiter_job", recruiter_id, job_id)
+	security_id = str(state.get("security_id") or "").strip()
+	if security_id:
+		return ("security", security_id)
+	return ("conversation", conversation.conversation_id)
+
+
 def _cached_recent_targets(store: RagReplyStore, *, limit: int) -> list[dict[str, object]]:
 	targets: list[dict[str, object]] = []
+	seen_identities: set[tuple[str, ...]] = set()
+	unique_limit = max(limit, 0)
+	if unique_limit == 0:
+		return targets
 	for conversation in store.list_conversations():
 		if str(conversation.source or "") != "boss_sync":
+			continue
+		identity = _cached_target_identity(conversation)
+		if identity in seen_identities:
 			continue
 		state = conversation.state if isinstance(conversation.state, dict) else {}
 		security_id = str(state.get("security_id") or "").strip()
 		if not security_id:
 			continue
+		seen_identities.add(identity)
 		recruiter = store.get_recruiter(str(conversation.recruiter_id or "")) if conversation.recruiter_id else None
 		targets.append(
 			{
@@ -511,7 +534,7 @@ def _cached_recent_targets(store: RagReplyStore, *, limit: int) -> list[dict[str
 				"unread_count": int(state.get("unread_count") or 0),
 			}
 		)
-		if len(targets) >= limit:
+		if len(targets) >= unique_limit:
 			break
 	return targets
 

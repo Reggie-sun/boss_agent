@@ -232,25 +232,34 @@ class BossAutomationAdapter:
 		if error is not None:
 			self._raise_platform_error(error, fallback_message="沟通列表获取失败")
 
-		targets: list[RecentConversationTarget] = []
-		for raw_item in items[: max(limit, 0)]:
+		unique_limit = max(limit, 0)
+		if unique_limit == 0:
+			return []
+
+		targets_by_conversation_id: dict[str, RecentConversationTarget] = {}
+		target_order: list[str] = []
+		for raw_item in items:
 			if not isinstance(raw_item, dict):
 				continue
 			conversation = self._save_conversation_from_friend_item(raw_item)
-			targets.append(
-				RecentConversationTarget(
-					conversation_id=conversation.conversation_id,
-					security_id=str(conversation.state.get("security_id") or ""),
-					job_id=str(conversation.job_id or ""),
-					recruiter_name=str(raw_item.get("name") or raw_item.get("friendName") or ""),
-					company=str(raw_item.get("brandName") or raw_item.get("companyName") or ""),
-					title=str(raw_item.get("title") or ""),
-					last_message=str(raw_item.get("lastMsg") or ""),
-					last_message_at=conversation.last_message_at,
-					unread_count=int(raw_item.get("unreadMsgCount") or 0),
-				)
+			state = conversation.state if isinstance(conversation.state, dict) else {}
+			recruiter = self.store.get_recruiter(str(conversation.recruiter_id or "")) if conversation.recruiter_id else None
+			if conversation.conversation_id not in targets_by_conversation_id:
+				if len(target_order) >= unique_limit:
+					continue
+				target_order.append(conversation.conversation_id)
+			targets_by_conversation_id[conversation.conversation_id] = RecentConversationTarget(
+				conversation_id=conversation.conversation_id,
+				security_id=str(state.get("security_id") or ""),
+				job_id=str(conversation.job_id or ""),
+				recruiter_name=str(state.get("recruiter_name") or (recruiter.display_name if recruiter else "") or ""),
+				company=str(state.get("company") or (recruiter.company if recruiter else "") or ""),
+				title=str(state.get("title") or ""),
+				last_message=str(state.get("last_msg") or ""),
+				last_message_at=conversation.last_message_at,
+				unread_count=int(state.get("unread_count") or 0),
 			)
-		return targets
+		return [targets_by_conversation_id[conversation_id] for conversation_id in target_order]
 
 	def list_pipeline_candidates(
 		self,

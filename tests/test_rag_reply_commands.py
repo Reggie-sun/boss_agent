@@ -1439,6 +1439,64 @@ def test_rag_targets_excludes_frontend_bridge_cache_records(tmp_path: Path):
 	assert [item["conversation_id"] for item in parsed["data"]["targets"]] == ["boss_conv_cached_001"]
 
 
+def test_rag_targets_dedupes_legacy_security_id_cache_records(tmp_path: Path):
+	store = RagReplyStore(tmp_path / "boss-rag.sqlite3")
+	store.initialize()
+	store.save_recruiter(
+		RecruiterRecord(
+			recruiter_id="boss_recruiter_755278482",
+			display_name="李HR",
+			company="缓存公司",
+		)
+	)
+	store.save_conversation(
+		ConversationRecord(
+			conversation_id="boss_conv_sec_old_001",
+			source="boss_sync",
+			job_id="job_resume",
+			recruiter_id="boss_recruiter_755278482",
+			last_message_at="2026-06-16T12:00:00+00:00",
+			state={
+				"security_id": "sec_old_001",
+				"gid": "755278482",
+				"friend_id": "755278482",
+				"uid": "755278482",
+				"title": "HRBP",
+				"company": "缓存公司",
+				"last_msg": "对方已查看了您的附件简历",
+			},
+		)
+	)
+	store.save_conversation(
+		ConversationRecord(
+			conversation_id="boss_conv_sec_old_002",
+			source="boss_sync",
+			job_id="job_resume",
+			recruiter_id="boss_recruiter_755278482",
+			last_message_at="2026-06-15T12:00:00+00:00",
+			state={
+				"security_id": "sec_old_002",
+				"gid": "755278482",
+				"friend_id": "755278482",
+				"uid": "755278482",
+				"title": "HRBP",
+				"company": "缓存公司",
+				"last_msg": "对方已查看了您的附件简历",
+			},
+		)
+	)
+	runner = CliRunner()
+
+	result = runner.invoke(cli, ["--json", "--data-dir", str(tmp_path), "agent", "targets"])
+
+	assert result.exit_code == 0
+	parsed = json.loads(result.output)
+	assert parsed["ok"] is True
+	assert parsed["command"] == "agent-targets"
+	assert parsed["data"]["count"] == 1
+	assert [item["conversation_id"] for item in parsed["data"]["targets"]] == ["boss_conv_sec_old_001"]
+
+
 def test_rag_build_service_passes_rag_auth_config(monkeypatch, tmp_path: Path):
 	(tmp_path / "config.json").write_text(
 		json.dumps(

@@ -358,6 +358,53 @@ class _RotatingSecurityMessagePlatform:
 		return None
 
 
+class _DuplicateRecentTargetPlatform:
+	def is_success(self, response):
+		return response.get("code") == 0
+
+	def unwrap_data(self, response):
+		return response.get("zpData")
+
+	def parse_error(self, response):
+		return ("UNKNOWN", response.get("message", ""))
+
+	def friend_list(self, page=1):
+		assert page == 1
+		return {
+			"code": 0,
+			"zpData": {
+				"hasMore": False,
+				"result": [
+					{
+						"securityId": "sec_recent_001",
+						"uid": 755278482,
+						"friendId": 755278482,
+						"encryptJobId": "job_resume",
+						"name": "李HR",
+						"brandName": "TestCo",
+						"title": "HRBP",
+						"lastMsg": "对方已查看了您的附件简历",
+						"lastTS": 1781746548734,
+					},
+					{
+						"securityId": "sec_recent_002",
+						"uid": 755278482,
+						"friendId": 755278482,
+						"encryptJobId": "job_resume",
+						"name": "李HR",
+						"brandName": "TestCo",
+						"title": "HRBP",
+						"lastMsg": "对方已查看了您的附件简历",
+						"lastTS": 1781746548734,
+					},
+				],
+			},
+		}
+
+	def close(self):
+		return None
+
+
 def test_sync_jobs_maps_platform_job_detail_to_local_summary(tmp_path: Path):
 	store = RagReplyStore(tmp_path / "boss-rag.sqlite3")
 	store.initialize()
@@ -485,3 +532,14 @@ def test_sync_messages_keeps_identity_stable_when_security_id_rotates(tmp_path: 
 	messages = store.list_messages("boss_conv_755278482")
 	assert len(messages) == 1
 	assert messages[0].raw["securityId"] == "sec_rotating_2"
+
+
+def test_list_recent_targets_dedupes_rotating_security_ids(tmp_path: Path):
+	store = RagReplyStore(tmp_path / "boss-rag.sqlite3")
+	store.initialize()
+	adapter = BossAutomationAdapter(platform=_DuplicateRecentTargetPlatform(), store=store)
+
+	targets = adapter.list_recent_targets(limit=5)
+
+	assert len(targets) == 1
+	assert targets[0].conversation_id == "boss_conv_755278482"
