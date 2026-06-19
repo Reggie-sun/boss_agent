@@ -65,12 +65,14 @@ def _batch_greet_stop_reason(error_msg: str) -> str | None:
 		return "GREET_LIMIT"
 	if "failed to fetch" in lower_msg or "浏览器 fetch" in lower_msg:
 		return "NETWORK_ERROR"
+	if "环境存在异常" in error_msg:
+		return "TOKEN_REFRESH_FAILED"
 	if any(token in lower_msg for token in ("stoken", "token", "unauthorized")) or any(
 		token in error_msg for token in ("登录", "登陆", "未认证")
 	):
 		return "AUTH_EXPIRED"
 	if any(token in lower_msg for token in ("risk", "forbidden")) or any(
-		token in error_msg for token in ("环境存在异常", "异常访问", "风控", "安全验证")
+		token in error_msg for token in ("异常访问", "风控", "安全验证")
 	):
 		return "ACCOUNT_RISK"
 	return None

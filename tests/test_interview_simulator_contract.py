@@ -1,10 +1,18 @@
 from pathlib import Path
 
 
-def test_interview_simulator_classifies_account_risk_messages():
+def test_interview_simulator_uses_shared_boss_bridge_error_helpers():
 	repo_root = Path(__file__).resolve().parents[1]
 	app = (repo_root / "demo" / "interview-simulator" / "src" / "App.jsx").read_text()
+	helper = (repo_root / "demo" / "interview-simulator" / "src" / "bossBridgeErrors.js").read_text()
 
-	assert "function isBossAccountRiskMessage" in app
-	for token in ("环境存在异常", "异常访问", "风控", "安全验证"):
-		assert token in app
+	assert 'from "./bossBridgeErrors.js"' in app
+	assert "环境存在异常" not in app
+	for token in (
+		"bossBridgeErrorFromPayload",
+		"bossBridgeErrorMessage",
+		"inferBossBridgeErrorCodeFromMessage",
+		"TOKEN_REFRESH_FAILED",
+		"AUTH_EXPIRED",
+	):
+		assert token in helper

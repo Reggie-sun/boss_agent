@@ -586,12 +586,12 @@ def test_batch_greet_welfare_keeps_software_jobs_when_filtering_internet(
 	mock_auth_cls,
 	mock_client_cls,
 ):
-	"""RAG 岗常见软件行业标签不应被 broad 互联网筛选误杀。"""
+	"""RAG 岗常见计算机软件标签不应被 broad 互联网筛选误杀。"""
 	mock_cache = _ctx_mock(mock_cache_cls)
 	mock_cache.is_greeted.return_value = False
 	mock_client = _ctx_mock(mock_client_cls)
 	software_job = _make_raw_job("RAG 工程师", "sec_software", welfare=["周末双休"])
-	software_job["brandIndustry"] = "软件/信息服务"
+	software_job["brandIndustry"] = "计算机软件"
 	mock_client.search_jobs.return_value = {
 		"zpData": {
 			"hasMore": False,
@@ -621,6 +621,52 @@ def test_batch_greet_welfare_keeps_software_jobs_when_filtering_internet(
 	assert parsed["data"]["count"] == 1
 	assert parsed["data"]["candidates"][0]["security_id"] == "sec_software"
 	assert "双休(标签)" in parsed["data"]["candidates"][0]["welfare_match"]
+
+
+@patch("boss_agent_cli.commands.greet.time")
+@patch("boss_agent_cli.commands.greet.get_platform_instance")
+@patch("boss_agent_cli.commands.greet.AuthManager")
+@patch("boss_agent_cli.commands.greet.CacheStore")
+def test_batch_greet_environment_abnormal_without_explicit_code_stops_as_token_refresh_failed(
+	mock_cache_cls,
+	mock_auth_cls,
+	mock_client_cls,
+	mock_time,
+	legacy_args,
+):
+	"""message-only 的环境异常也应归到 token 刷新失败，而不是风控。"""
+	mock_cache = _ctx_mock(mock_cache_cls)
+	mock_cache.is_greeted.return_value = False
+	mock_client = _ctx_mock(mock_client_cls)
+	mock_client.search_jobs.return_value = {
+		"zpData": {"jobList": [
+			_make_raw_job("A", "s1"),
+			_make_raw_job("B", "s2"),
+			_make_raw_job("C", "s3"),
+		]}
+	}
+
+	def greet_side_effect(sid, jid, msg=""):
+		if sid == "s1":
+			return {"code": 0, "zpData": {}}
+		if sid == "s2":
+			return {"code": -1, "message": "您的环境存在异常."}
+		return {"code": 0, "zpData": {}}
+
+	mock_client.greet.side_effect = greet_side_effect
+	mock_client.is_success.side_effect = lambda response: response.get("code", 0) == 0
+	mock_client.parse_error.side_effect = lambda response: ("UNKNOWN", response.get("message", ""))
+	mock_time.sleep = MagicMock()
+
+	runner = CliRunner()
+	result = runner.invoke(cli, [*legacy_args, "batch-greet", "test", "--count", "3"])
+	assert result.exit_code == 0
+	parsed = json.loads(result.output)
+	assert parsed["data"]["total_greeted"] == 1
+	assert parsed["data"]["total_failed"] == 0
+	assert parsed["data"]["stopped_reason"] == "TOKEN_REFRESH_FAILED"
+	assert "环境存在异常" in parsed["data"]["stopped_error"]
+	assert mock_client.greet.call_count == 2
 
 
 @patch("boss_agent_cli.commands.greet.get_platform_instance")

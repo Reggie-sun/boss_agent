@@ -267,8 +267,24 @@ class TestPrefilterJob:
 		assert ok is True
 		assert reasons == []
 
+	@pytest.mark.parametrize("industry", ["计算机软件", "计算机服务"])
+	def test_broad_internet_industry_allows_real_software_card_labels(self, industry):
+		raw = _make_raw(industry=industry)
+		criteria = SearchFilterCriteria(query="RAG", industry="互联网")
+		ok, reasons = prefilter_job(raw, criteria)
+		assert ok is True
+		assert reasons == []
+
 	@pytest.mark.parametrize("industry", ["机器学习", "深度学习"])
 	def test_ai_industry_filter_allows_ml_card_labels(self, industry):
+		raw = _make_raw(industry=industry)
+		criteria = SearchFilterCriteria(query="RAG", industry="人工智能")
+		ok, reasons = prefilter_job(raw, criteria)
+		assert ok is True
+		assert reasons == []
+
+	@pytest.mark.parametrize("industry", ["计算机软件", "计算机服务"])
+	def test_ai_industry_filter_allows_real_software_card_labels(self, industry):
 		raw = _make_raw(industry=industry)
 		criteria = SearchFilterCriteria(query="RAG", industry="人工智能")
 		ok, reasons = prefilter_job(raw, criteria)
@@ -279,6 +295,14 @@ class TestPrefilterJob:
 	def test_broad_internet_filter_allows_ml_card_labels(self, industry):
 		raw = _make_raw(industry=industry)
 		criteria = SearchFilterCriteria(query="RAG", industry="互联网")
+		ok, reasons = prefilter_job(raw, criteria)
+		assert ok is True
+		assert reasons == []
+
+	@pytest.mark.parametrize("industry", ["计算机软件", "计算机服务"])
+	def test_software_industry_filter_allows_real_software_sub_labels(self, industry):
+		raw = _make_raw(industry=industry)
+		criteria = SearchFilterCriteria(query="RAG", industry="软件/信息服务")
 		ok, reasons = prefilter_job(raw, criteria)
 		assert ok is True
 		assert reasons == []

@@ -15,6 +15,12 @@ import {
   User,
   WarningCircle,
 } from "@phosphor-icons/react";
+import {
+  bossAccountRiskCode,
+  bossBridgeErrorCode,
+  bossBridgeErrorFromPayload,
+  bossBridgeErrorMessage,
+} from "./bossBridgeErrors.js";
 import "./styles.css";
 
 const starterPrompts = [
@@ -91,48 +97,6 @@ function formatBossExperienceSummary(value) {
   if (!selected.length) return "经验不限";
   if (selected.length <= 2) return selected.join("、");
   return `${selected[0]} +${selected.length - 1}`;
-}
-
-const bossAccountRiskCode = "ACCOUNT_RISK";
-const bossAccountRiskMessage =
-  "Boss 账号触发风控，已停止自动化访问。请回到 BOSS 官方页面手动处理，恢复后刷新本页面。";
-
-function isBossAccountRiskMessage(message) {
-  return ["环境存在异常", "异常访问", "风控", "安全验证"].some((token) =>
-    String(message || "").includes(token),
-  );
-}
-
-function bossBridgeErrorFromPayload(payload, fallback) {
-  const message =
-    payload?.errorMessage ||
-    payload?.error?.message ||
-    fallback;
-  const error = new Error(
-    message,
-  );
-  error.bossCode = payload?.error?.code || (
-    isBossAccountRiskMessage(message) ? bossAccountRiskCode : ""
-  );
-  return error;
-}
-
-function bossBridgeErrorCode(error) {
-  return error?.bossCode || "";
-}
-
-function bossBridgeErrorMessage(error, fallback) {
-  const message = error instanceof Error ? error.message : "";
-  if (
-    bossBridgeErrorCode(error) === bossAccountRiskCode ||
-    isBossAccountRiskMessage(message)
-  ) {
-    return bossAccountRiskMessage;
-  }
-  if (message === "Failed to fetch" || message.includes("NetworkError")) {
-    return "本地 Vite bridge 无响应。请刷新页面，或确认当前页面打开的是正在运行的 demo/interview-simulator dev server。";
-  }
-  return message || fallback;
 }
 
 function loadOrCreateSessionId() {
