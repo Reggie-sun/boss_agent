@@ -491,6 +491,8 @@ def _serialize_target(target: RecentConversationTarget) -> dict[str, object]:
 def _cached_recent_targets(store: RagReplyStore, *, limit: int) -> list[dict[str, object]]:
 	targets: list[dict[str, object]] = []
 	for conversation in store.list_conversations():
+		if str(conversation.source or "") != "boss_sync":
+			continue
 		state = conversation.state if isinstance(conversation.state, dict) else {}
 		security_id = str(state.get("security_id") or "").strip()
 		if not security_id:

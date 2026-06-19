@@ -1391,6 +1391,54 @@ def test_rag_targets_falls_back_to_cached_targets_when_live_read_disabled(tmp_pa
 	assert parsed["data"]["targets"][0]["security_id"] == "sec_cached_001"
 
 
+def test_rag_targets_excludes_frontend_bridge_cache_records(tmp_path: Path):
+	store = RagReplyStore(tmp_path / "boss-rag.sqlite3")
+	store.initialize()
+	store.save_recruiter(
+		RecruiterRecord(
+			recruiter_id="recruiter_001",
+			display_name="李HR",
+			company="缓存公司",
+		)
+	)
+	store.save_conversation(
+		ConversationRecord(
+			conversation_id="boss_conv_cached_001",
+			source="boss_sync",
+			job_id="job_cached_001",
+			recruiter_id="recruiter_001",
+			last_message_at="2026-06-15T12:00:00+00:00",
+			state={
+				"security_id": "sec_cached_001",
+				"title": "后端工程师",
+				"company": "缓存公司",
+				"last_msg": "最近方便沟通吗？",
+			},
+		)
+	)
+	store.save_conversation(
+		ConversationRecord(
+			conversation_id="smoke-frontend-session",
+			source="frontend_bridge",
+			last_message_at="2026-06-16T12:00:00+00:00",
+			state={
+				"origin": "interview-simulator",
+				"security_id": "sec_frontend_only",
+			},
+		)
+	)
+	runner = CliRunner()
+
+	result = runner.invoke(cli, ["--json", "--data-dir", str(tmp_path), "agent", "targets"])
+
+	assert result.exit_code == 0
+	parsed = json.loads(result.output)
+	assert parsed["ok"] is True
+	assert parsed["command"] == "agent-targets"
+	assert parsed["data"]["count"] == 1
+	assert [item["conversation_id"] for item in parsed["data"]["targets"]] == ["boss_conv_cached_001"]
+
+
 def test_rag_build_service_passes_rag_auth_config(monkeypatch, tmp_path: Path):
 	(tmp_path / "config.json").write_text(
 		json.dumps(
