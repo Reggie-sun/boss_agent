@@ -15,6 +15,18 @@ from boss_agent_cli.rag_reply.watcher_config import (
 )
 
 
+DRAFT_TEXT_REPLY_INTENTS = {
+    "project_question",
+    "resume_question",
+    "technical_question",
+    "general_question",
+    "smalltalk",
+    "resignation_status",
+    "personal_status",
+    "job_location_acceptance",
+}
+
+
 @dataclass(slots=True)
 class AutoReplyAction:
     kind: str
@@ -30,14 +42,7 @@ def build_action_for_draft(
 ) -> AutoReplyAction:
     intent = draft.intent
     draft_text = (draft.draft_text or "").strip()
-    if intent in {
-        "project_question",
-        "resume_question",
-        "smalltalk",
-        "resignation_status",
-        "personal_status",
-        "job_location_acceptance",
-    }:
+    if intent in DRAFT_TEXT_REPLY_INTENTS:
         if not draft_text:
             return AutoReplyAction(
                 kind="block", status_after_send="rag_failed", blocked_reason="empty_draft"
@@ -74,6 +79,10 @@ def build_action_for_draft(
 
 
 def _require_resume_file(value: str) -> str:
+    return require_resume_file(value)
+
+
+def require_resume_file(value: str) -> str:
     path = Path(value).expanduser()
     if not value.strip() or not path.is_file():
         raise WatcherConfigError(

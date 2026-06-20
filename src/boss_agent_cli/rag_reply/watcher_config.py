@@ -22,6 +22,7 @@ class WatcherConfig:
     live_sync: bool = False
     require_send_enabled: bool = True
     send_enabled: bool = False
+    proactive_resume_enabled: bool = False
 
     @classmethod
     def from_mapping(cls, values: dict[str, object]) -> "WatcherConfig":
@@ -50,6 +51,9 @@ class WatcherConfig:
                 values.get("boss_rag_watcher_require_send_enabled", True)
             ),
             send_enabled=bool(values.get("boss_rag_send_enabled", False)),
+            proactive_resume_enabled=bool(
+                values.get("boss_rag_proactive_resume_enabled", False)
+            ),
         )
 
 

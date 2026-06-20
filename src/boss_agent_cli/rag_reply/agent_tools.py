@@ -16,7 +16,9 @@ from boss_agent_cli.commands.pipeline import (
 from boss_agent_cli.display import error_contract_for_code
 from boss_agent_cli.rag_reply.auto_actions import (
     AutoReplyAction,
+    DRAFT_TEXT_REPLY_INTENTS,
     build_action_for_draft,
+    require_resume_file,
 )
 from boss_agent_cli.rag_reply.models import AuditLogRecord, DraftRecord, MessageRecord
 from boss_agent_cli.rag_reply.store import RagReplyStore
@@ -146,6 +148,7 @@ class BossAgentToolbox:
             )
         try:
             action = build_action_for_draft(draft, self.context.config)
+            action = self._with_proactive_resume(draft, action)
         except WatcherConfigError as exc:
             return _blocked_result(
                 error_code="INVALID_PARAM",
@@ -163,6 +166,26 @@ class BossAgentToolbox:
             ok=True,
             status="action_ready",
             data={"action": payload},
+        )
+
+    def _with_proactive_resume(
+        self, draft: DraftRecord, action: AutoReplyAction
+    ) -> AutoReplyAction:
+        if not self.context.config.proactive_resume_enabled:
+            return action
+        if action.kind != "send_text" or action.send_attachment_resume:
+            return action
+        if draft.intent not in DRAFT_TEXT_REPLY_INTENTS:
+            return action
+        if self._conversation_has_sent_resume(draft.conversation_id):
+            return action
+        return AutoReplyAction(
+            kind=action.kind,
+            message=action.message,
+            status_after_send=action.status_after_send,
+            send_attachment_resume=True,
+            resume_file=require_resume_file(self.context.config.resume_attachment_path),
+            blocked_reason=action.blocked_reason,
         )
 
     def resolve_boss_target(self, *, conversation_id: str) -> ToolResult:
@@ -418,6 +441,30 @@ class BossAgentToolbox:
             ):
                 processed.add(str(entry.payload["message_id"]))
         return processed
+
+    def _conversation_has_sent_resume(self, conversation_id: str) -> bool:
+        for entry in self.context.store.list_audit_logs(conversation_id):
+            payload = entry.payload
+            if payload.get("dry_run") is True:
+                continue
+            if entry.event_type == "resume_auto_send" and bool(
+                payload.get("resume_sent")
+            ):
+                return True
+            if entry.event_type != "watcher_task":
+                continue
+            delivery = payload.get("delivery") if isinstance(payload, dict) else {}
+            if isinstance(delivery, dict) and bool(delivery.get("resume_sent")):
+                return True
+            action = payload.get("action") if isinstance(payload, dict) else {}
+            if not isinstance(action, dict):
+                continue
+            if (
+                bool(action.get("send_attachment_resume"))
+                and payload.get("status") == "sent"
+            ):
+                return True
+        return False
 
     def _target_payload(self, conversation_id: str) -> dict[str, str]:
         conversation = self.context.store.get_conversation(conversation_id)

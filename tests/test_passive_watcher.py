@@ -22,6 +22,8 @@ from boss_agent_cli.rag_reply.watcher_config import WatcherConfig, WatcherConfig
 DRAFT_TEXT_INTENTS = [
     "project_question",
     "resume_question",
+    "technical_question",
+    "general_question",
     "smalltalk",
     "resignation_status",
     "personal_status",
@@ -747,6 +749,61 @@ def test_passive_watcher_resume_share_sends_attachment_resume(tmp_path):
     assert result.tasks[0]["action"]["send_attachment_resume"] is True
     assert delivery.calls[0]["send_attachment_resume"] is True
     assert delivery.calls[0]["resume_file"] == config.resume_attachment_path
+
+
+def test_passive_watcher_sends_proactive_resume_after_first_boss_reply(tmp_path):
+    store = _store(tmp_path)
+    store.save_conversation(
+        ConversationRecord(
+            conversation_id="conv_001",
+            source="boss_sync",
+            state={"security_id": "sec_001"},
+        )
+    )
+    store.save_message(
+        MessageRecord(
+            message_id="msg_001",
+            conversation_id="conv_001",
+            message_text="你好",
+            direction="inbound",
+            created_at="2026-06-17T08:00:00+00:00",
+        )
+    )
+    delivery = _RecordingDelivery()
+    config = _config(tmp_path)
+    config.live_sync = True
+    config.proactive_resume_enabled = True
+    watcher = BossPassiveWatcher(
+        store=store,
+        service=_integration_service(store),
+        config=config,
+        delivery=delivery,
+        message_syncer=_Syncer(),
+    )
+
+    first = watcher.run_once(live_sync=True)
+
+    assert first.processed == 1
+    assert first.tasks[0]["action"]["send_attachment_resume"] is True
+    assert delivery.calls[0]["send_attachment_resume"] is True
+    assert delivery.calls[0]["resume_file"] == config.resume_attachment_path
+
+    store.save_message(
+        MessageRecord(
+            message_id="msg_002",
+            conversation_id="conv_001",
+            message_text="介绍下你的 RAG 项目",
+            direction="inbound",
+            created_at="2026-06-17T08:01:00+00:00",
+        )
+    )
+
+    second = watcher.run_once(live_sync=True)
+
+    assert second.processed == 1
+    assert second.tasks[0]["action"]["send_attachment_resume"] is False
+    assert len(delivery.calls) == 2
+    assert delivery.calls[1]["send_attachment_resume"] is False
 
 
 def test_passive_watcher_processes_read_no_reply_pipeline_candidate(tmp_path):
