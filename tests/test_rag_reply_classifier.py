@@ -37,6 +37,8 @@ def test_project_question_uses_non_sensitive_path():
 		("如果让你设计检索、重排和引用溯源，你会怎么做？", "project_question"),
 		("你平时和产品、算法、后端是怎么协作的？", "resume_question"),
 		("你为什么觉得自己适合这个岗位？", "resume_question"),
+		("你做过哪些后端性能优化？", "resume_question"),
+		("你怎么优化接口性能和查询延迟？", "resume_question"),
 	],
 )
 def test_hr_interview_questions_map_to_expected_intents(message_text: str, expected_intent: str):
