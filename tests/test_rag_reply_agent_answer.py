@@ -38,6 +38,27 @@ def test_agent_answer_adapter_rewrites_grounded_answer_into_candidate_voice():
 	}
 
 
+def test_agent_answer_adapter_uses_direct_prompt_without_grounded_answer():
+	ai_service = _FakeAIService(
+		"""{"answer_text":"哈希表是一种通过哈希函数把 key 映射到数组位置的数据结构。","strategy":"按通用技术问答直接解释"}"""
+	)
+	adapter = AgentAnswerAdapter(ai_service=ai_service)
+
+	result = adapter.answer(
+		message_text="解释一下哈希表",
+		intent="general_question",
+		job_summary=None,
+		rag_answer="",
+		citations=[],
+	)
+
+	assert result.ok is True
+	assert result.answer.startswith("哈希表是一种")
+	assert result.reasoning_summary == {"strategy": "按通用技术问答直接解释"}
+	assert "中文通用问答助手" in ai_service.calls[0][0]["content"]
+	assert "Grounded answer" not in ai_service.calls[0][1]["content"]
+
+
 def test_agent_answer_adapter_returns_closed_result_on_parse_error():
 	adapter = AgentAnswerAdapter(ai_service=_FakeAIService("plain text"))
 

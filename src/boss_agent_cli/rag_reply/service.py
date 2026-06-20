@@ -142,6 +142,13 @@ class BossRagReplyService:
 		classification: ClassificationResult,
 		decision: ApprovalDecision,
 	) -> DraftRecord:
+		if classification.requires_direct_agent_answer:
+			return self._build_direct_agent_draft(
+				message=message,
+				classification=classification,
+				decision=decision,
+				job_summary=self._resolve_job_summary(message),
+			)
 		if classification.requires_rag:
 			return self._build_rag_backed_draft(message, classification, decision)
 		if classification.intent == "salary_or_offer":
@@ -214,6 +221,18 @@ class BossRagReplyService:
 				audit_status="rag_failed",
 				rag_session_id=rag_session_id,
 			)
+		if not self._rag_result_has_high_confidence(rag_result):
+			direct_draft = self._build_direct_agent_draft(
+				message=message,
+				classification=classification,
+				decision=decision,
+				job_summary=job_summary,
+				rag_session_id=rag_session_id,
+				fallback_from="enterprise_rag_low_confidence",
+				rag_result=rag_result,
+			)
+			if direct_draft.draft_text.strip():
+				return direct_draft
 		agent_answer = self._build_agent_answer(
 			message=message,
 			classification=classification,
@@ -260,6 +279,69 @@ class BossRagReplyService:
 		)
 		return draft
 
+	def _build_direct_agent_draft(
+		self,
+		*,
+		message: MessageRecord,
+		classification: ClassificationResult,
+		decision: ApprovalDecision,
+		job_summary: str | None,
+		rag_session_id: str | None = None,
+		fallback_from: str | None = None,
+		rag_result: RagAnswerProtocol | None = None,
+	) -> DraftRecord:
+		agent_result = self._build_agent_answer(
+			message=message,
+			classification=classification,
+			job_summary=job_summary,
+			rag_answer="",
+			citations=[],
+		)
+		evidence: dict[str, object] = {
+			"source": "boss_agent_ai",
+			"route": "direct_agent",
+		}
+		if fallback_from:
+			evidence.update(
+				{
+					"fallback_from": fallback_from,
+					"grounded_answer": "" if rag_result is None else rag_result.answer,
+					"citations": [] if rag_result is None else rag_result.citations,
+					"rag_reasoning_summary": None if rag_result is None else rag_result.reasoning_summary,
+					"rag_raw_response": None if rag_result is None else rag_result.raw_response,
+					"rag_error_message": None if rag_result is None else rag_result.error_message,
+				}
+			)
+		if agent_result is not None and agent_result.ok and agent_result.answer.strip():
+			evidence["reasoning_summary"] = agent_result.reasoning_summary
+			evidence["agent_raw_response"] = agent_result.raw_response
+			return DraftRecord.new(
+				conversation_id=message.conversation_id,
+				source_message_id=message.message_id,
+				draft_text=agent_result.answer,
+				intent=classification.intent,
+				risk_labels=decision.risk_labels,
+				evidence=evidence,
+				approval_required=decision.approval_required,
+				send_allowed=False,
+				audit_status="draft_created",
+				rag_session_id=rag_session_id,
+			)
+		if agent_result is not None and agent_result.error_message:
+			evidence["agent_error_message"] = agent_result.error_message
+		return DraftRecord.new(
+			conversation_id=message.conversation_id,
+			source_message_id=message.message_id,
+			draft_text="",
+			intent=classification.intent,
+			risk_labels=decision.risk_labels,
+			evidence=evidence,
+			approval_required=decision.approval_required,
+			send_allowed=False,
+			audit_status="agent_answer_failed",
+			rag_session_id=rag_session_id,
+		)
+
 	def _build_agent_answer(
 		self,
 		*,
@@ -278,6 +360,15 @@ class BossRagReplyService:
 			rag_answer=rag_answer,
 			citations=citations,
 		)
+
+	@staticmethod
+	def _rag_result_has_high_confidence(rag_result: RagAnswerProtocol) -> bool:
+		if not rag_result.ok or not rag_result.answer.strip():
+			return False
+		citations = rag_result.citations or []
+		if not citations:
+			return False
+		return True
 
 	def _build_fallback_draft(
 		self,

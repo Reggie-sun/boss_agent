@@ -129,7 +129,7 @@ def test_draft_command_saves_draft_and_audit_log(tmp_path):
 	assert messages[-1].message_text == "这是候选草稿"
 
 
-def test_draft_command_routes_technical_explanation_questions_to_rag(tmp_path):
+def test_draft_command_routes_technical_explanation_questions_to_direct_agent_answer(tmp_path):
 	store = RagReplyStore(tmp_path / "boss-rag.sqlite3")
 	store.initialize()
 	store.save_conversation(ConversationRecord(conversation_id="conv_001", source="manual_import"))
@@ -141,18 +141,55 @@ def test_draft_command_routes_technical_explanation_questions_to_rag(tmp_path):
 			direction="inbound",
 		)
 	)
-	rag_adapter = _FakeRagAdapter(_FakeRagResult(ok=True, answer="神经网络是一类通过多层参数学习模式的模型。", citations=[]))
+	rag_adapter = _FakeRagAdapter(_FakeRagResult(ok=True, answer="不应该调用 RAG", citations=[]))
+	agent_adapter = _FakeAgentAnswerAdapter(
+		_FakeRagResult(ok=True, answer="神经网络是一类通过多层参数学习模式的模型。", citations=[])
+	)
 	service = BossRagReplyService(
 		store=store,
 		rag_adapter=rag_adapter,
+		agent_answer_adapter=agent_adapter,
 	)
 
 	draft = service.create_draft_for_message("msg_001")
 
 	assert draft.intent == "technical_question"
 	assert draft.draft_text == "神经网络是一类通过多层参数学习模式的模型。"
-	assert rag_adapter.calls
-	assert "解释一下神经网络" in rag_adapter.calls[0]["rag_question"]
+	assert rag_adapter.calls == []
+	assert agent_adapter.calls[0]["message_text"] == "解释一下神经网络"
+	assert agent_adapter.calls[0]["rag_answer"] == ""
+
+
+def test_draft_command_routes_general_questions_to_direct_agent_answer(tmp_path):
+	store = RagReplyStore(tmp_path / "boss-rag.sqlite3")
+	store.initialize()
+	store.save_conversation(ConversationRecord(conversation_id="conv_001", source="manual_import"))
+	store.save_message(
+		MessageRecord(
+			message_id="msg_001",
+			conversation_id="conv_001",
+			message_text="你觉得火星适合居住吗",
+			direction="inbound",
+		)
+	)
+	rag_adapter = _FakeRagAdapter(_FakeRagResult(ok=True, answer="不应该调用 RAG", citations=[]))
+	agent_adapter = _FakeAgentAnswerAdapter(
+		_FakeRagResult(ok=True, answer="目前看火星还不适合人类长期自然居住。", citations=[])
+	)
+	service = BossRagReplyService(
+		store=store,
+		rag_adapter=rag_adapter,
+		agent_answer_adapter=agent_adapter,
+	)
+
+	draft = service.create_draft_for_message("msg_001")
+
+	assert draft.intent == "general_question"
+	assert draft.draft_text == "目前看火星还不适合人类长期自然居住。"
+	assert draft.evidence["source"] == "boss_agent_ai"
+	assert rag_adapter.calls == []
+	assert agent_adapter.calls[0]["message_text"] == "你觉得火星适合居住吗"
+	assert agent_adapter.calls[0]["rag_answer"] == ""
 
 
 def test_draft_command_uses_agent_answer_adapter_when_rag_succeeds(tmp_path):
@@ -202,6 +239,50 @@ def test_draft_command_uses_agent_answer_adapter_when_rag_succeeds(tmp_path):
 		"agent_strategy": {"strategy": "改写成第一人称"},
 	}
 	assert agent_adapter.calls[0]["rag_answer"] == "候选人负责企业级 RAG 项目的检索链路和问答编排。"
+
+
+def test_draft_command_uses_direct_agent_answer_when_rag_has_low_confidence(tmp_path):
+	store = RagReplyStore(tmp_path / "boss-rag.sqlite3")
+	store.initialize()
+	store.save_conversation(ConversationRecord(conversation_id="conv_001", source="manual_import"))
+	store.save_message(
+		MessageRecord(
+			message_id="msg_001",
+			conversation_id="conv_001",
+			message_text="你这个RAG项目具体做了什么？",
+			direction="inbound",
+		)
+	)
+	rag_adapter = _FakeRagAdapter(
+		_FakeRagResult(
+			ok=True,
+			answer="这是一段没有任何引用支撑的 RAG 回答。",
+			citations=[],
+			reasoning_summary={"confidence": "low"},
+		)
+	)
+	agent_adapter = _FakeAgentAnswerAdapter(
+		_FakeRagResult(
+			ok=True,
+			answer="我可以先按通用方式回答，等有明确材料命中时再展开项目细节。",
+			citations=[],
+			reasoning_summary={"strategy": "RAG 低置信时走 direct LLM"},
+		)
+	)
+	service = BossRagReplyService(
+		store=store,
+		rag_adapter=rag_adapter,
+		agent_answer_adapter=agent_adapter,
+	)
+
+	draft = service.create_draft_for_message("msg_001")
+
+	assert draft.draft_text == "我可以先按通用方式回答，等有明确材料命中时再展开项目细节。"
+	assert draft.evidence["source"] == "boss_agent_ai"
+	assert draft.evidence["fallback_from"] == "enterprise_rag_low_confidence"
+	assert draft.evidence["grounded_answer"] == "这是一段没有任何引用支撑的 RAG 回答。"
+	assert rag_adapter.calls
+	assert agent_adapter.calls[0]["rag_answer"] == ""
 
 
 def test_draft_command_falls_back_to_grounded_answer_when_agent_rewrite_fails(tmp_path):

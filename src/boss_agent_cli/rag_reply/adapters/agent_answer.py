@@ -45,6 +45,34 @@ AGENT_ANSWER_PROMPT = """你是一个面试问答 Agent，需要把 grounded RAG
 ```
 """
 
+DIRECT_AGENT_PROMPT = """你是一个中文通用问答助手，正在为本地前端测试生成直接回答。
+
+## 用户问题
+{message_text}
+
+## 问题意图
+{intent}
+
+## 岗位摘要
+{job_summary}
+
+## 约束
+1. 直接回答用户问题，不要说“根据知识库 / 根据资料 / RAG 显示”。
+2. 如果问题是通用知识、技术概念或闲聊，按通用 LLM 问答方式回答。
+3. 如果问题涉及候选人的个人经历、薪资、联系方式、面试安排、到岗时间等敏感或缺少上下文的信息，不要编造；可以说明需要候选人本人确认或补充信息。
+4. 输出中文，回答自然、简洁、可继续追问。
+5. 不要输出 Markdown 标题、代码块或多版本候选答案。
+
+## 输出要求
+只返回 JSON，不要包含其他内容：
+```json
+{{
+  "answer_text": "最终回答正文",
+  "strategy": "一句话说明本次回答策略"
+}}
+```
+"""
+
 
 @dataclass(slots=True)
 class AgentAnswerResult:
@@ -74,6 +102,12 @@ class AgentAnswerAdapter:
 		rag_answer: str,
 		citations: list[dict[str, Any]] | None = None,
 	) -> AgentAnswerResult:
+		if not (rag_answer or "").strip():
+			return self._direct_answer(
+				message_text=message_text,
+				intent=intent,
+				job_summary=job_summary,
+			)
 		if self.ai_service is None:
 			return self._rule_based_rewrite(message_text=message_text, rag_answer=rag_answer)
 		prompt = AGENT_ANSWER_PROMPT.format(
@@ -100,6 +134,40 @@ class AgentAnswerAdapter:
 			ok=True,
 			answer=answer_text,
 			citations=list(citations or []),
+			reasoning_summary={"strategy": str(payload.get("strategy") or "").strip()},
+			raw_response=payload,
+		)
+
+	def _direct_answer(
+		self,
+		*,
+		message_text: str,
+		intent: str,
+		job_summary: str | None,
+	) -> AgentAnswerResult:
+		if self.ai_service is None:
+			return self._rule_based_rewrite(message_text=message_text, rag_answer="")
+		prompt = DIRECT_AGENT_PROMPT.format(
+			message_text=message_text or "（空）",
+			intent=intent or "unknown",
+			job_summary=job_summary or "（无）",
+		)
+		try:
+			raw = self.ai_service.chat(
+				[
+					{"role": "system", "content": "你是中文通用问答助手。所有输出使用 JSON 格式。"},
+					{"role": "user", "content": prompt},
+				]
+			)
+			payload = self._parse_json_response(raw)
+		except (AIServiceError, ValueError):
+			return self._rule_based_rewrite(message_text=message_text, rag_answer="")
+		answer_text = str(payload.get("answer_text") or "").strip()
+		if not answer_text:
+			return self._rule_based_rewrite(message_text=message_text, rag_answer="")
+		return AgentAnswerResult(
+			ok=True,
+			answer=answer_text,
 			reasoning_summary={"strategy": str(payload.get("strategy") or "").strip()},
 			raw_response=payload,
 		)

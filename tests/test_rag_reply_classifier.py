@@ -37,10 +37,27 @@ def test_project_question_uses_non_sensitive_path():
 		"讲一下 transformer 和神经网络的区别",
 	],
 )
-def test_technical_explanation_questions_are_routed_to_rag(message_text: str):
+def test_technical_explanation_questions_use_direct_agent_answer(message_text: str):
 	result = classify_message(message_text)
 	assert result.intent == "technical_question"
-	assert result.requires_rag is True
+	assert result.requires_rag is False
+	assert result.requires_direct_agent_answer is True
+	assert result.risk_labels == []
+
+
+@pytest.mark.parametrize(
+	"message_text",
+	[
+		"解释一下哈希表",
+		"今天天气怎么样",
+		"你觉得火星适合居住吗",
+	],
+)
+def test_general_questions_default_to_direct_agent_answer(message_text: str):
+	result = classify_message(message_text)
+	assert result.intent == "general_question"
+	assert result.requires_rag is False
+	assert result.requires_direct_agent_answer is True
 	assert result.risk_labels == []
 
 

@@ -9,6 +9,7 @@ INTENTS = {
 	"project_question",
 	"resume_question",
 	"technical_question",
+	"general_question",
 	"salary_or_offer",
 	"resume_share_request",
 	"availability_or_schedule",
@@ -115,12 +116,22 @@ class ClassificationResult:
 
 	@property
 	def requires_rag(self) -> bool:
-		return self.intent in {"project_question", "resume_question", "technical_question"}
+		return self.intent in {"project_question", "resume_question"}
+
+	@property
+	def requires_direct_agent_answer(self) -> bool:
+		return self.intent in {"technical_question", "general_question"}
 
 
 def classify_message(message_text: str) -> ClassificationResult:
 	"""Classify a recruiter message using rule-first sensitive detection."""
 	text = (message_text or "").strip()
+	if not text:
+		return ClassificationResult(
+			intent="unsafe_or_unclear",
+			risk_labels=["human_approval_required", "sensitive_intent", "unsafe_or_unclear"],
+			classifier_source="fallback",
+		)
 	lower_text = text.lower()
 	for intent, patterns in SENSITIVE_RULES:
 		if any(re.search(pattern, lower_text, flags=re.IGNORECASE) for pattern in patterns):
@@ -160,7 +171,7 @@ def classify_message(message_text: str) -> ClassificationResult:
 			classifier_source="heuristic",
 		)
 	return ClassificationResult(
-		intent="unsafe_or_unclear",
-		risk_labels=["human_approval_required", "sensitive_intent", "unsafe_or_unclear"],
+		intent="general_question",
+		risk_labels=[],
 		classifier_source="fallback",
 	)
