@@ -14,6 +14,7 @@ from boss_agent_cli.api.browser_client import (
 	_HEADLESS_NETWORKIDLE_GRACE_MS,
 	_NAV_TIMEOUT_MS,
 	BrowserChannelUnavailable,
+	BossAccessLimitedError,
 	BrowserSession,
 	_build_candidate_jobs_page_url,
 	_pick_zhipin_target_ws,
@@ -149,6 +150,31 @@ def test_ensure_candidate_chat_page_opens_chat_tab_when_missing():
 		"http://127.0.0.1:9222",
 		"https://www.zhipin.com/web/geek/chat",
 	)
+
+
+def test_ensure_candidate_chat_page_stops_when_access_limited_tab_exists():
+	with patch(
+		"boss_agent_cli.api.browser_client._load_cdp_targets",
+		return_value=[
+			{
+				"type": "page",
+				"url": "https://www.zhipin.com/web/passport/zp/403.html?callbackUrl=https%3A%2F%2Fwww.zhipin.com%2Fweb%2Fgeek%2Fchat&code=32",
+				"title": "访问受限",
+			},
+		],
+	) as mock_load, patch("boss_agent_cli.api.browser_client._open_cdp_tab") as mock_open:
+		result = ensure_candidate_chat_page_via_cdp(
+			"http://127.0.0.1:9222",
+			wait_seconds=0,
+		)
+
+	assert result["ok"] is False
+	assert result["status"] == "account_risk"
+	assert result["code"] == "ACCOUNT_RISK"
+	assert result["recoverable"] is False
+	assert "code=32" in result["url"]
+	mock_load.assert_called_once_with("http://127.0.0.1:9222")
+	mock_open.assert_not_called()
 
 
 def test_read_devtools_active_port_missing(tmp_path):
@@ -696,6 +722,29 @@ def test_request_upgrades_failed_fetch_to_account_risk_when_raw_cdp_page_is_code
 	assert mock_evaluate.call_count == 2
 
 
+def test_try_raw_cdp_stops_on_access_limited_without_opening_home():
+	session = BrowserSession(cookies={}, user_agent="", cdp_url="http://127.0.0.1:9229")
+	result = {
+		"code": endpoints.CODE_ACCOUNT_RISK,
+		"message": "BOSS 页面访问受限：code=32",
+		"zpData": {"pageUrl": "https://www.zhipin.com/web/passport/zp/403.html?code=32"},
+	}
+
+	with (
+		patch(
+			"boss_agent_cli.api.browser_client._pick_zhipin_target_ws",
+			side_effect=BossAccessLimitedError(result),
+		),
+		patch("boss_agent_cli.api.browser_client._open_cdp_tab") as mock_open,
+	):
+		assert session._try_raw_cdp() is True
+
+	assert session._started is True
+	assert session._is_cdp is True
+	assert session._access_limited_result == result
+	mock_open.assert_not_called()
+
+
 def test_pick_zhipin_target_ws_opens_preferred_page_when_missing():
 	with (
 		patch(
@@ -730,6 +779,30 @@ def test_pick_zhipin_target_ws_opens_preferred_page_when_missing():
 	assert result == "ws://jobs"
 	mock_open.assert_called_once_with(CDP_DEFAULT_URL, CANDIDATE_JOBS_URL)
 	assert mock_targets.call_count == 2
+
+
+def test_pick_zhipin_target_ws_does_not_open_preferred_page_when_access_limited():
+	with (
+		patch(
+			"boss_agent_cli.api.browser_client._load_cdp_targets",
+			return_value=[
+				{
+					"type": "page",
+					"url": "https://www.zhipin.com/web/passport/zp/403.html?callbackUrl=https%3A%2F%2Fwww.zhipin.com%2Fweb%2Fgeek%2Fjobs&code=32",
+					"title": "访问受限",
+					"webSocketDebuggerUrl": "ws://risk",
+				},
+			],
+		) as mock_targets,
+		patch("boss_agent_cli.api.browser_client._open_cdp_tab") as mock_open,
+	):
+		with pytest.raises(BossAccessLimitedError) as exc_info:
+			_pick_zhipin_target_ws(CDP_DEFAULT_URL, preferred_page_url=CANDIDATE_JOBS_URL)
+
+	assert exc_info.value.result["code"] == endpoints.CODE_ACCOUNT_RISK
+	assert "code=32" in exc_info.value.result["zpData"]["pageUrl"]
+	mock_open.assert_not_called()
+	mock_targets.assert_called_once_with(CDP_DEFAULT_URL)
 
 
 def test_preferred_zhipin_page_url_maps_search_and_recommend_endpoints():

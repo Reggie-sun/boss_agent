@@ -378,6 +378,9 @@ export function App() {
     setBossAutomationError((current) =>
       current && isBossAccountRiskMessage(current) ? current : lockMessage,
     );
+    setWatcherState((current) =>
+      current.running ? { ...current, running: false } : current,
+    );
   }, [watcherRiskStatusMessage]);
 
   function updateBossSearchForm(field, value) {
@@ -457,6 +460,12 @@ export function App() {
   }
 
   async function runWatcherOnce() {
+    if (watcherRiskStatusMessage) {
+      setWatcherState((current) =>
+        current.running ? { ...current, running: false } : current,
+      );
+      return;
+    }
     setIsWatcherBusy(true);
     try {
       const response = await fetch("/api/agent/watcher/run", {
@@ -477,9 +486,12 @@ export function App() {
         }));
       }
     } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : "运行 watcher 失败。";
+      const isAccountRisk = isBossAccountRiskMessage(errorMessage);
       setWatcherState((current) => ({
         ...current,
-        errorMessage: error instanceof Error ? error.message : "运行 watcher 失败。",
+        running: isAccountRisk ? false : current.running,
+        errorMessage,
       }));
     } finally {
       setIsWatcherBusy(false);
@@ -487,7 +499,7 @@ export function App() {
   }
 
   useEffect(() => {
-    if (!watcherState.running || isWatcherBusy) return undefined;
+    if (!watcherState.running || isWatcherBusy || watcherRiskStatusMessage) return undefined;
     const timer = window.setInterval(() => {
       runWatcherOnce();
     }, 20_000);

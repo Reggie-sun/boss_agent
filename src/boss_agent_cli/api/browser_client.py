@@ -68,6 +68,14 @@ class BrowserChannelUnavailable(RuntimeError):
 			"请用 --remote-debugging-port=9229 打开真实 Chrome 后重试。"
 		)
 
+class BossAccessLimitedError(RuntimeError):
+	"""Existing CDP Chrome is already on a BOSS access-limited page."""
+
+	def __init__(self, result: dict[str, Any]) -> None:
+		self.result = result
+		super().__init__(str(result.get("message") or "BOSS 页面访问受限"))
+
+
 # 超时常量
 _CDP_PROBE_TIMEOUT = 3           # CDP 探测 HTTP 超时（秒）
 _CDP_CONNECT_TIMEOUT_MS = 10000  # CDP 握手超时，避免 Chrome 端口存在但连接挂住
@@ -129,6 +137,7 @@ class BrowserSession:
 		self._bridge_client: Any = None
 		self._is_bridge = False
 		self._raw_cdp_url: str | None = None
+		self._access_limited_result: dict[str, Any] | None = None
 
 	def _log(self, message: str) -> None:
 		"""通过注入的 logger 输出，受 --log-level 控制。"""
@@ -172,6 +181,14 @@ class BrowserSession:
 			return False
 		try:
 			ws_url = _pick_zhipin_target_ws(self._cdp_url)
+		except BossAccessLimitedError as exc:
+			self._raw_cdp_url = self._cdp_url
+			self._access_limited_result = exc.result
+			self._started = True
+			self._is_cdp = True
+			self._is_bridge = False
+			self._log(f"[boss] Raw CDP 检测到 BOSS 访问受限，停止自动开页 ({self._cdp_url})")
+			return True
 		except Exception:
 			try:
 				_open_cdp_tab(self._cdp_url, HOME_URL)
@@ -442,6 +459,9 @@ class BrowserSession:
 
 		referer = endpoints.REFERER_MAP.get(url, f"{endpoints.BASE_URL}/")
 		preferred_page_url = _preferred_zhipin_page_url(url)
+		if self._access_limited_result is not None:
+			self._throttle.mark()
+			return self._access_limited_result
 
 		# Bridge 模式：通过扩展 fetch
 		if self._is_bridge and self._bridge_client:
@@ -523,6 +543,10 @@ class BrowserSession:
 						evaluate_args,
 						preferred_page_url=preferred_page_url,
 					)
+					break
+				except BossAccessLimitedError as exc:
+					result = exc.result
+					self._access_limited_result = result
 					break
 				except Exception as exc:
 					if not self._is_navigation_context_error(exc):
@@ -1009,6 +1033,11 @@ def _pick_zhipin_target_ws(cdp_http_url: str, *, preferred_page_url: str | None 
 	if preferred_page_url:
 		preferred_target = _find_zhipin_target_by_page_url(targets, preferred_page_url)
 		if preferred_target is None:
+			access_limited_target = _find_access_limited_target(targets)
+			if access_limited_target is not None:
+				result = _access_limited_result_from_target(access_limited_target)
+				if result is not None:
+					raise BossAccessLimitedError(result)
 			try:
 				_open_cdp_tab(cdp_http_url, preferred_page_url)
 			except Exception:
@@ -1020,6 +1049,11 @@ def _pick_zhipin_target_ws(cdp_http_url: str, *, preferred_page_url: str | None 
 					preferred_target = _find_zhipin_target_by_page_url(targets, preferred_page_url)
 					if preferred_target is not None:
 						break
+					access_limited_target = _find_access_limited_target(targets)
+					if access_limited_target is not None:
+						result = _access_limited_result_from_target(access_limited_target)
+						if result is not None:
+							raise BossAccessLimitedError(result)
 					time.sleep(0.5)
 		if preferred_target is not None:
 			target_ws = preferred_target.get("webSocketDebuggerUrl")
@@ -1030,11 +1064,15 @@ def _pick_zhipin_target_ws(cdp_http_url: str, *, preferred_page_url: str | None 
 	recommend_targets: list[dict[str, Any]] = []
 	home_targets: list[dict[str, Any]] = []
 	fallbacks: list[dict[str, Any]] = []
+	access_limited_targets: list[dict[str, Any]] = []
 	for target in targets:
 		if target.get("type") != "page":
 			continue
 		url = str(target.get("url") or "")
 		if "zhipin.com" not in url:
+			continue
+		if _access_limited_result_from_target(target) is not None:
+			access_limited_targets.append(target)
 			continue
 		if "/web/geek/chat" in url:
 			chat_targets.append(target)
@@ -1050,6 +1088,10 @@ def _pick_zhipin_target_ws(cdp_http_url: str, *, preferred_page_url: str | None 
 		target_ws = target.get("webSocketDebuggerUrl")
 		if target_ws:
 			return cast("str", target_ws)
+	if access_limited_targets:
+		result = _access_limited_result_from_target(access_limited_targets[0])
+		if result is not None:
+			raise BossAccessLimitedError(result)
 	raise RuntimeError(
 		"No existing BOSS tab found. Open https://www.zhipin.com/ in this Chrome profile and retry."
 	)
@@ -1100,6 +1142,42 @@ def _find_zhipin_login_target(targets: list[dict[str, Any]]) -> dict[str, Any] |
 	return None
 
 
+def _access_limited_result_from_target(target: dict[str, Any]) -> dict[str, Any] | None:
+	return BrowserSession._access_limited_result_from_snapshot({
+		"url": str(target.get("url") or ""),
+		"title": str(target.get("title") or ""),
+		"bodyText": "",
+	})
+
+
+def _find_access_limited_target(targets: list[dict[str, Any]]) -> dict[str, Any] | None:
+	for target in targets:
+		if target.get("type") != "page":
+			continue
+		if _access_limited_result_from_target(target) is not None:
+			return target
+	return None
+
+
+def _access_limited_chat_payload(cdp_url: str, target: dict[str, Any]) -> dict[str, Any]:
+	result = _access_limited_result_from_target(target) or {
+		"code": endpoints.CODE_ACCOUNT_RISK,
+		"message": "BOSS 页面访问受限，请回到 BOSS 官方页面手动处理或等待恢复后重试。",
+		"zpData": {},
+	}
+	return {
+		"ok": False,
+		"status": "account_risk",
+		"code": "ACCOUNT_RISK",
+		"message": str(result.get("message") or "BOSS 页面访问受限"),
+		"recoverable": False,
+		"recovery_action": "停止自动化访问，回到 BOSS 官方页面手动处理或等待恢复后再刷新重试",
+		"url": str(target.get("url") or ""),
+		"title": str(target.get("title") or ""),
+		"cdp_url": cdp_url,
+	}
+
+
 def ensure_candidate_chat_page_via_cdp(
 	cdp_http_url: str | None = None,
 	*,
@@ -1126,6 +1204,10 @@ def ensure_candidate_chat_page_via_cdp(
 	chat_target = _find_candidate_chat_target(targets)
 	if chat_target is not None:
 		return _candidate_chat_ready_payload(cdp_url, chat_target, opened=False)
+
+	access_limited_target = _find_access_limited_target(targets)
+	if access_limited_target is not None:
+		return _access_limited_chat_payload(cdp_url, access_limited_target)
 
 	try:
 		_open_cdp_tab(cdp_url, CANDIDATE_CHAT_URL)
@@ -1156,6 +1238,10 @@ def ensure_candidate_chat_page_via_cdp(
 		chat_target = _find_candidate_chat_target(targets)
 		if chat_target is not None:
 			return _candidate_chat_ready_payload(cdp_url, chat_target, opened=True)
+
+		access_limited_target = _find_access_limited_target(targets)
+		if access_limited_target is not None:
+			return _access_limited_chat_payload(cdp_url, access_limited_target)
 
 		login_target = _find_zhipin_login_target(targets)
 		if login_target is not None:
@@ -1319,7 +1405,10 @@ def _scrape_jobs_page_via_cdp(cdp_http_url: str, page_url: str) -> dict[str, Any
 
 	import websockets.sync.client as _ws_client
 
-	target_ws = _pick_zhipin_target_ws(cdp_http_url, preferred_page_url=CANDIDATE_JOBS_URL)
+	try:
+		target_ws = _pick_zhipin_target_ws(cdp_http_url, preferred_page_url=CANDIDATE_JOBS_URL)
+	except BossAccessLimitedError as exc:
+		return exc.result
 	expression = _build_eval_expression(
 		_JOBS_PAGE_FALLBACK_SCRIPT,
 		{
