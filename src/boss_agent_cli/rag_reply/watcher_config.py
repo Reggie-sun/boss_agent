@@ -98,9 +98,13 @@ def salary_preset_reply(value: str) -> str:
     return normalized or salary_handoff_reply()
 
 
-def build_interview_window_reply(config: WatcherConfig) -> str:
-    windows = _require_present(config.interview_windows, "boss_rag_interview_windows")
+def interview_window_reply(value: str) -> str:
+    windows = _require_present(value, "boss_rag_interview_windows")
     return (
-        f"可以的，我这边通常{windows}方便面试。"
+        f"我这边通常{windows}方便面试。"
         "您可以发几个可选时间，我确认后会尽快回复。"
     )
+
+
+def build_interview_window_reply(config: WatcherConfig) -> str:
+    return interview_window_reply(config.interview_windows)

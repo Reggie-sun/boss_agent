@@ -117,7 +117,7 @@ def test_interview_intents_use_configured_window_reply(tmp_path, intent):
     assert action == AutoReplyAction(
         kind="send_text",
         message=(
-            "可以的，我这边通常工作日 20:00 后，周末全天方便面试。"
+            "我这边通常工作日 20:00 后，周末全天方便面试。"
             "您可以发几个可选时间，我确认后会尽快回复。"
         ),
     )

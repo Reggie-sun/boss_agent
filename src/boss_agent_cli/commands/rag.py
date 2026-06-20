@@ -198,6 +198,7 @@ def _build_service(ctx: click.Context) -> BossRagReplyService:
 		fallback_adapter=_build_ai_fallback_adapter(ctx),
 		agent_answer_adapter=_build_agent_answer_adapter(ctx),
 		salary_reply=str(config.get("boss_rag_salary_reply") or ""),
+		interview_windows=str(config.get("boss_rag_interview_windows") or ""),
 	)
 
 

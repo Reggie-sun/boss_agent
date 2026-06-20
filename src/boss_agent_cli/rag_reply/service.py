@@ -6,7 +6,7 @@ import hashlib
 from dataclasses import dataclass
 from typing import Protocol
 
-from boss_agent_cli.rag_reply.classifier import ClassificationResult, classify_message
+from boss_agent_cli.rag_reply.classifier import ClassificationResult, classify_message_with_context
 from boss_agent_cli.rag_reply.clipboard import copy_text
 from boss_agent_cli.rag_reply.models import (
 	ApprovalEventRecord,
@@ -18,7 +18,10 @@ from boss_agent_cli.rag_reply.models import (
 from boss_agent_cli.rag_reply.policy import ApprovalDecision, build_approval_decision
 from boss_agent_cli.rag_reply.question_builder import build_answer_objective, build_rag_question
 from boss_agent_cli.rag_reply.store import RagReplyStore
-from boss_agent_cli.rag_reply.watcher_config import salary_preset_reply
+from boss_agent_cli.rag_reply.watcher_config import (
+	interview_window_reply,
+	salary_preset_reply,
+)
 
 
 class RagAnswerProtocol(Protocol):
@@ -81,18 +84,23 @@ class BossRagReplyService:
 		fallback_adapter: FallbackAdapterProtocol | None = None,
 		agent_answer_adapter: AgentAnswerAdapterProtocol | None = None,
 		salary_reply: str = "",
+		interview_windows: str = "",
 	) -> None:
 		self.store = store
 		self.rag_adapter = rag_adapter
 		self.fallback_adapter = fallback_adapter
 		self.agent_answer_adapter = agent_answer_adapter
 		self.salary_reply = salary_reply.strip()
+		self.interview_windows = interview_windows.strip()
 
 	def create_draft_for_message(self, message_id: str) -> DraftRecord:
 		message = self.store.get_message(message_id)
 		if message is None:
 			raise LookupError(f"Unknown message_id={message_id}")
-		classification = classify_message(message.message_text)
+		classification = classify_message_with_context(
+			message.message_text,
+			self._conversation_memory_messages(message),
+		)
 		decision = build_approval_decision(classification.intent, classification.risk_labels)
 		draft = self._build_draft(message, classification, decision)
 		self.store.save_draft(draft)
@@ -163,7 +171,10 @@ class BossRagReplyService:
 			draft_text=self._local_draft_text(message, classification.intent),
 			intent=classification.intent,
 			risk_labels=decision.risk_labels,
-			evidence={"source": "local_policy", "reason": classification.classifier_source},
+			evidence={
+				"source": "local_policy",
+				"reason": self._local_policy_reason(classification.intent, classification.classifier_source),
+			},
 			approval_required=decision.approval_required,
 			send_allowed=decision.send_allowed,
 			audit_status=decision.audit_status,
@@ -493,6 +504,13 @@ class BossRagReplyService:
 		job = self.store.get_job(message.job_id)
 		return None if job is None else job.summary
 
+	def _conversation_memory_messages(self, message: MessageRecord) -> list[str]:
+		return [
+			record.message_text
+			for record in self.store.list_messages(message.conversation_id)
+			if record.message_id != message.message_id and record.message_text.strip()
+		][-8:]
+
 	@staticmethod
 	def _merge_reasoning_summaries(
 		*,
@@ -536,8 +554,7 @@ class BossRagReplyService:
 			)
 		)
 
-	@staticmethod
-	def _local_draft_text(message: MessageRecord, intent: str) -> str:
+	def _local_draft_text(self, message: MessageRecord, intent: str) -> str:
 		if intent == "job_detail_question":
 			return "我想进一步了解这个岗位的核心职责、团队协作方式，以及前 3 个月的重点目标。"
 		if intent == "smalltalk":
@@ -551,11 +568,21 @@ class BossRagReplyService:
 		if intent == "job_location_acceptance":
 			return "这个工作地点可以接受，具体办公地点、到岗安排和通勤细节可以继续沟通确认。"
 		if intent == "availability_or_schedule":
-			return "我可以配合安排沟通时间，工作日晚上或周末通常更方便；如果您这边有明确时间，我也可以尽量协调。"
+			return self._interview_window_text()
 		if intent == "interview_time":
-			return "可以的，我这边可以配合面试安排。您方便给我几个可选时间吗？我确认后会尽快回复。"
+			return self._interview_window_text()
 		if intent == "salary_or_offer":
 			return salary_preset_reply("")
 		if intent in {"contact_exchange", "unsafe_or_unclear"}:
 			return ""
 		return message.message_text
+
+	def _interview_window_text(self) -> str:
+		if self.interview_windows:
+			return interview_window_reply(self.interview_windows)
+		return "我可以配合安排沟通时间，工作日晚上或周末通常更方便；如果您这边有明确时间，我也可以尽量协调。"
+
+	def _local_policy_reason(self, intent: str, classifier_source: str) -> str:
+		if intent in {"availability_or_schedule", "interview_time"} and self.interview_windows:
+			return "interview_windows_preset"
+		return classifier_source

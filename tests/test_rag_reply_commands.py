@@ -1506,6 +1506,7 @@ def test_rag_build_service_passes_rag_auth_config(monkeypatch, tmp_path: Path):
 				"boss_rag_rag_api_key": "configured-rag-integration-key-123456",
 				"boss_rag_rag_auth_mode": "x_api_key",
 				"boss_rag_salary_reply": "当前薪资和期望薪资按候选人预设回复。",
+				"boss_rag_interview_windows": "工作日 17:30 后",
 			}
 		),
 		encoding="utf-8",
@@ -1550,6 +1551,7 @@ def test_rag_build_service_passes_rag_auth_config(monkeypatch, tmp_path: Path):
 				"boss_rag_rag_api_key": "configured-rag-integration-key-123456",
 				"boss_rag_rag_auth_mode": "x_api_key",
 				"boss_rag_salary_reply": "当前薪资和期望薪资按候选人预设回复。",
+				"boss_rag_interview_windows": "工作日 17:30 后",
 			},
 		}
 	)
@@ -1558,6 +1560,7 @@ def test_rag_build_service_passes_rag_auth_config(monkeypatch, tmp_path: Path):
 
 	assert service is not None
 	assert service.salary_reply == "当前薪资和期望薪资按候选人预设回复。"
+	assert service.interview_windows == "工作日 17:30 后"
 	assert captured == {
 		"base_url": "http://127.0.0.1:8020",
 		"timeout_seconds": 11,

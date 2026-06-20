@@ -82,7 +82,7 @@ def test_interview_window_reply_uses_configured_windows():
     )
 
     assert build_interview_window_reply(config) == (
-        "可以的，我这边通常工作日 20:00 后，周末全天方便面试。"
+        "我这边通常工作日 20:00 后，周末全天方便面试。"
         "您可以发几个可选时间，我确认后会尽快回复。"
     )
 

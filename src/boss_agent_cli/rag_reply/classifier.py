@@ -39,7 +39,15 @@ SENSITIVE_RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
 	("salary_or_offer", (r"薪资", r"工资", r"薪酬", r"offer", r"待遇")),
 	("resume_share_request", (r"发.*简历", r"简历.*发", r"附件简历", r"一份简历", r"简历过来", r"把简历.*发")),
 	("contact_exchange", (r"微信", r"\bvx\b", r"联系方式", r"手机号", r"电话", r"邮箱", r"加我")),
-	("interview_time", (r"面试", r"几点", r"哪天", r"约.*面", r"时间面")),
+	("interview_time", (
+		r"面试",
+		r"几点",
+		r"哪天",
+		r"约.*面",
+		r"时间面",
+		r"(今天|明天|后天|本周|下周|周[一二三四五六日天]|星期[一二三四五六日天]).{0,8}(上午|下午|晚上|中午|早上)?\s*\d{1,2}\s*(点半|点|[:：]\d{2}).{0,8}(可以|方便|行|吗)",
+		r"(上午|下午|晚上|中午|早上)\s*\d{1,2}\s*(点半|点|[:：]\d{2}).{0,8}(可以|方便|行|吗)",
+	)),
 	("availability_or_schedule", (r"方便", r"有空", r"可约", r"什么时候方便", r"时间安排")),
 	("resignation_status", (r"离职", r"离岗", r"离职时间", r"什么时候离")),
 	("personal_status", (r"在职", r"目前状态", r"当前状态", r"现在还在职", r"是否在职")),
@@ -106,6 +114,15 @@ TECHNICAL_QUESTION_PATTERNS = (
 )
 JOB_DETAIL_PATTERNS = (r"你对我们岗位", r"有什么想问", r"还有什么问题", r"了解这个岗位")
 SMALLTALK_PATTERNS = (r"你好", r"您好", r"收到", r"好的", r"谢谢", r"辛苦", r"在吗")
+SCHEDULE_FOLLOWUP_PATTERNS = (
+	r"这个时间",
+	r"这个安排",
+	r"那.{0,6}(可以|方便|行|呢)",
+	r"\d{1,2}\s*(点半|点|[:：]\d{2})",
+	r"(今天|明天|后天|上午|下午|晚上|中午|早上)",
+	r"(可以|方便|行|ok|OK)吗",
+)
+SCHEDULE_CONTEXT_INTENTS = {"interview_time", "availability_or_schedule"}
 
 
 @dataclass(slots=True)
@@ -175,3 +192,34 @@ def classify_message(message_text: str) -> ClassificationResult:
 		risk_labels=[],
 		classifier_source="fallback",
 	)
+
+
+def classify_message_with_context(
+	message_text: str,
+	context_messages: list[str] | tuple[str, ...],
+) -> ClassificationResult:
+	"""Classify a message using same-conversation memory for ambiguous follow-ups."""
+	result = classify_message(message_text)
+	if result.intent != "general_question":
+		return result
+	if not _looks_like_schedule_followup(message_text):
+		return result
+	if not _has_schedule_context(context_messages):
+		return result
+	return ClassificationResult(
+		intent="interview_time",
+		risk_labels=["human_approval_required", "sensitive_intent", "interview_time"],
+		classifier_source="conversation_memory",
+	)
+
+
+def _looks_like_schedule_followup(message_text: str) -> bool:
+	text = (message_text or "").strip()
+	return any(re.search(pattern, text, flags=re.IGNORECASE) for pattern in SCHEDULE_FOLLOWUP_PATTERNS)
+
+
+def _has_schedule_context(context_messages: list[str] | tuple[str, ...]) -> bool:
+	for text in context_messages[-8:]:
+		if classify_message(text).intent in SCHEDULE_CONTEXT_INTENTS:
+			return True
+	return False

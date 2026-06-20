@@ -538,6 +538,72 @@ def test_salary_question_falls_back_to_agent_handoff_when_preset_missing(tmp_pat
 	assert rag_adapter.calls == []
 
 
+def test_interview_time_question_uses_configured_windows_without_rag(tmp_path):
+	store = RagReplyStore(tmp_path / "boss-rag.sqlite3")
+	store.initialize()
+	store.save_conversation(ConversationRecord(conversation_id="conv_001", source="manual_import"))
+	store.save_message(
+		MessageRecord(
+			message_id="msg_001",
+			conversation_id="conv_001",
+			message_text="明天下午2点可以吗？",
+			direction="inbound",
+		)
+	)
+	rag_adapter = _FakeRagAdapter(_FakeRagResult(ok=True, answer="unused", citations=[]))
+	service = BossRagReplyService(
+		store=store,
+		rag_adapter=rag_adapter,
+		interview_windows="工作日 17:30 后",
+	)
+
+	draft = service.create_draft_for_message("msg_001")
+
+	assert draft.intent == "interview_time"
+	assert "工作日 17:30 后" in draft.draft_text
+	assert "明天下午2点是否合适" not in draft.draft_text
+	assert draft.evidence["source"] == "local_policy"
+	assert draft.send_allowed is False
+	assert draft.approval_required is True
+	assert rag_adapter.calls == []
+
+
+def test_interview_time_followup_uses_conversation_memory_and_configured_windows(tmp_path):
+	store = RagReplyStore(tmp_path / "boss-rag.sqlite3")
+	store.initialize()
+	store.save_conversation(ConversationRecord(conversation_id="conv_001", source="manual_import"))
+	store.save_message(
+		MessageRecord(
+			message_id="msg_000",
+			conversation_id="conv_001",
+			message_text="您好，想约一下技术面试。",
+			direction="inbound",
+		)
+	)
+	store.save_message(
+		MessageRecord(
+			message_id="msg_001",
+			conversation_id="conv_001",
+			message_text="这个时间可以吗？",
+			direction="inbound",
+		)
+	)
+	rag_adapter = _FakeRagAdapter(_FakeRagResult(ok=True, answer="unused", citations=[]))
+	service = BossRagReplyService(
+		store=store,
+		rag_adapter=rag_adapter,
+		interview_windows="工作日 17:30 后",
+	)
+
+	draft = service.create_draft_for_message("msg_001")
+
+	assert draft.intent == "interview_time"
+	assert "工作日 17:30 后" in draft.draft_text
+	assert draft.evidence["source"] == "local_policy"
+	assert draft.evidence["reason"] == "interview_windows_preset"
+	assert rag_adapter.calls == []
+
+
 def test_job_location_question_generates_safe_local_draft(tmp_path):
 	store = RagReplyStore(tmp_path / "boss-rag.sqlite3")
 	store.initialize()

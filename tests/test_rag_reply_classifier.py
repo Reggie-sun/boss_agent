@@ -1,6 +1,6 @@
 import pytest
 
-from boss_agent_cli.rag_reply.classifier import classify_message
+from boss_agent_cli.rag_reply.classifier import classify_message, classify_message_with_context
 
 
 @pytest.mark.parametrize(
@@ -9,6 +9,7 @@ from boss_agent_cli.rag_reply.classifier import classify_message
 		("期望薪资多少？", "salary_or_offer"),
 		("方便发一份简历过来吗？", "resume_share_request"),
 		("什么时候方便面试？", "interview_time"),
+		("明天下午2点可以吗？", "interview_time"),
 		("现在是在职吗？", "personal_status"),
 		("为什么离职？", "resignation_status"),
 		("这个工作地点可以接受吗？", "job_location_acceptance"),
@@ -59,6 +60,21 @@ def test_general_questions_default_to_direct_agent_answer(message_text: str):
 	assert result.requires_rag is False
 	assert result.requires_direct_agent_answer is True
 	assert result.risk_labels == []
+
+
+@pytest.mark.parametrize("message_text", ["这个时间可以吗？", "那 2 点呢？"])
+def test_contextual_schedule_followups_use_conversation_memory(message_text: str):
+	result = classify_message_with_context(
+		message_text,
+		[
+			"您好，想约一下技术面试。",
+			"我这边通常工作日 17:30 后方便面试。",
+		],
+	)
+
+	assert result.intent == "interview_time"
+	assert result.classifier_source == "conversation_memory"
+	assert "human_approval_required" in result.risk_labels
 
 
 @pytest.mark.parametrize(
