@@ -75,7 +75,13 @@ _NAV_TIMEOUT_MS = 15000          # 页面导航超时（毫秒）
 _HEADLESS_NETWORKIDLE_GRACE_MS = 3000  # headless 预热的额外宽限，避免卡满 30s
 _BROWSER_FETCH_TIMEOUT_MS = 30000  # 页面内 fetch 超时，避免 CLI / 前端无限等待
 _CDP_CHAT_PAGE_WAIT_SECONDS = 15
-_ACCESS_LIMITED_URL_TOKENS = ("_security_check=", "/security-check")
+_ACCESS_LIMITED_URL_TOKENS = (
+	"_security_check=",
+	"/security-check",
+	"/web/passport/zp/403",
+	"403.html",
+	"code=32",
+)
 _ACCESS_LIMITED_TEXT_TOKENS = (
 	"访问受限",
 	"限制访问",

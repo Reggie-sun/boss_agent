@@ -110,6 +110,8 @@ class Platform(ABC):
 			"限制访问",
 			"异常行为",
 			"恢复正常",
+			"403.html",
+			"code=32",
 		)):
 			return "ACCOUNT_RISK", message
 		if "failed to fetch" in lower_msg:

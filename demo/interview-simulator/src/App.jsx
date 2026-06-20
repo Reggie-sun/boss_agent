@@ -179,6 +179,12 @@ function watcherRiskHint(watcherState) {
   return String(riskyTask.error_message || riskyTask.action?.message || "").trim();
 }
 
+function bossWatcherRiskLockMessage(watcherRiskStatusMessage) {
+  return watcherRiskStatusMessage
+    ? `Boss 账号当前已被平台限制访问。${watcherRiskStatusMessage} 请回到 BOSS 官方页面手动处理或等待恢复后刷新重试。`
+    : "";
+}
+
 function resolveSecurityId({ manualSecurityId = "", selectedChatTarget = null, chatTargets = [] }) {
   const direct = String(manualSecurityId).trim();
   if (direct) return direct;
@@ -365,6 +371,15 @@ export function App() {
     : "Agent 全自动";
   const bossSearchActionsDisabled = bossAutomationRiskLocked || !bossSearchForm.query.trim();
 
+  useEffect(() => {
+    const lockMessage = bossWatcherRiskLockMessage(watcherRiskStatusMessage);
+    if (!lockMessage) return;
+    setBossAutomationRiskLocked(true);
+    setBossAutomationError((current) =>
+      current && isBossAccountRiskMessage(current) ? current : lockMessage,
+    );
+  }, [watcherRiskStatusMessage]);
+
   function updateBossSearchForm(field, value) {
     setBossSearchForm((current) => ({
       ...current,
@@ -541,7 +556,7 @@ export function App() {
       const errorCode = bossBridgeErrorCode(error);
       const watcherRiskOverride =
         watcherRiskStatusMessage && (errorCode === "NETWORK_ERROR" || !errorCode)
-          ? `Boss 账号当前已被平台限制访问。${watcherRiskStatusMessage} 请回到 BOSS 官方页面手动处理或等待恢复后刷新重试。`
+          ? bossWatcherRiskLockMessage(watcherRiskStatusMessage)
           : "";
       if (errorCode === bossAccountRiskCode || watcherRiskOverride) {
         setBossAutomationRiskLocked(true);
@@ -652,7 +667,7 @@ export function App() {
       const errorCode = bossBridgeErrorCode(error);
       const watcherRiskOverride =
         watcherRiskStatusMessage && (errorCode === "NETWORK_ERROR" || !errorCode)
-          ? `Boss 账号当前已被平台限制访问。${watcherRiskStatusMessage} 请回到 BOSS 官方页面手动处理或等待恢复后刷新重试。`
+          ? bossWatcherRiskLockMessage(watcherRiskStatusMessage)
           : "";
       if (errorCode === bossAccountRiskCode || watcherRiskOverride) {
         setBossAutomationRiskLocked(true);

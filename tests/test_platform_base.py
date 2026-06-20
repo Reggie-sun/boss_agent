@@ -78,6 +78,14 @@ class TestBossEnvelopeAdapter:
 		assert code == "ACCOUNT_RISK"
 		assert "访问受限" in msg
 
+	def test_parse_error_code32_403_url_as_account_risk(self) -> None:
+		code, msg = self.plat.parse_error({
+			"code": -1,
+			"message": "https://www.zhipin.com/web/passport/zp/403.html?callbackUrl=https%3A%2F%2Fwww.zhipin.com%2Fweb%2Fgeek%2Fchat&code=32",
+		})
+		assert code == "ACCOUNT_RISK"
+		assert "code=32" in msg
+
 	def test_parse_error_unknown(self) -> None:
 		code, _ = self.plat.parse_error({"code": 999, "message": "unknown"})
 		assert code == "UNKNOWN"

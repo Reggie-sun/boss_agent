@@ -666,6 +666,36 @@ def test_request_upgrades_failed_fetch_to_account_risk_when_raw_cdp_page_is_acce
 	assert mock_evaluate.call_count == 2
 
 
+def test_request_upgrades_failed_fetch_to_account_risk_when_raw_cdp_page_is_code32_403():
+	session = BrowserSession(cookies={}, user_agent="", cdp_url="http://127.0.0.1:9229")
+	session._started = True
+	session._is_cdp = True
+	session._raw_cdp_url = "http://127.0.0.1:9229"
+	session._throttle = MagicMock()
+
+	with patch(
+		"boss_agent_cli.api.browser_client._cdp_evaluate_in_zhipin_tab",
+		side_effect=[
+			{"code": -1, "message": "Failed to fetch", "zpData": {}},
+			{
+				"url": "https://www.zhipin.com/web/passport/zp/403.html?callbackUrl=https%3A%2F%2Fwww.zhipin.com%2Fweb%2Fgeek%2Fchat&appName=www_zhipin_com_B&code=32",
+				"title": "",
+				"bodyText": "",
+			},
+		],
+	) as mock_evaluate:
+		result = session.request(
+			"GET",
+			endpoints.SEARCH_URL,
+			params={"query": "RAG"},
+		)
+
+	assert result["code"] == endpoints.CODE_ACCOUNT_RISK
+	assert "访问受限" in result["message"]
+	assert result["zpData"]["pageUrl"].endswith("code=32")
+	assert mock_evaluate.call_count == 2
+
+
 def test_pick_zhipin_target_ws_opens_preferred_page_when_missing():
 	with (
 		patch(

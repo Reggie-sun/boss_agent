@@ -17,6 +17,8 @@ const bossAccountRiskTokens = [
   "限制访问",
   "异常行为",
   "禁止使用",
+  "403.html",
+  "code=32",
 ];
 const bossAuthExpiredTokens = [
   "登录状态已失效",

@@ -7,6 +7,7 @@ import {
   bossBridgeErrorFromPayload,
   bossBridgeErrorMessage,
   inferBossBridgeErrorCodeFromMessage,
+  isBossAccountRiskMessage,
 } from "./bossBridgeErrors.js";
 
 test("inferBossBridgeErrorCodeFromMessage treats 环境存在异常 as token refresh failure", () => {
@@ -45,6 +46,18 @@ test("bossBridgeErrorMessage keeps explicit account risk responses locked", () =
 
   assert.equal(bossBridgeErrorCode(error), bossAccountRiskCode);
   assert.match(bossBridgeErrorMessage(error, "BOSS 搜索失败。"), /风控|安全验证/);
+});
+
+test("code 32 passport 403 url is treated as account risk", () => {
+  const message =
+    "https://www.zhipin.com/web/passport/zp/403.html?callbackUrl=https%3A%2F%2Fwww.zhipin.com%2Fweb%2Fgeek%2Fchat&appName=www_zhipin_com_B&code=32";
+
+  assert.equal(isBossAccountRiskMessage(message), true);
+  assert.equal(inferBossBridgeErrorCodeFromMessage(message), bossAccountRiskCode);
+  assert.match(
+    bossBridgeErrorMessage(new Error(message), "BOSS 搜索失败。"),
+    /风控|自动化访问/,
+  );
 });
 
 test("bossBridgeErrorMessage keeps auth-expired responses out of the risk bucket", () => {
