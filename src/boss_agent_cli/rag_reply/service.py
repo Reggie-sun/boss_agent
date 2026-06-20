@@ -573,8 +573,10 @@ class BossRagReplyService:
 			return self._interview_window_text()
 		if intent == "salary_or_offer":
 			return salary_preset_reply("")
-		if intent in {"contact_exchange", "unsafe_or_unclear"}:
-			return ""
+		if intent == "contact_exchange":
+			return "可以先在 BOSS 直聘上沟通，后续如果流程需要，我再配合补充联系方式。"
+		if intent == "unsafe_or_unclear":
+			return "这条信息我需要先确认一下，稍后再回复您。"
 		return message.message_text
 
 	def _interview_window_text(self) -> str:

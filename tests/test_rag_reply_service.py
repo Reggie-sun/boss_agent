@@ -476,6 +476,35 @@ def test_resume_share_request_generates_local_approval_draft(tmp_path):
 	assert rag_adapter.calls == []
 
 
+def test_contact_exchange_generates_safe_local_approval_draft(tmp_path):
+	store = RagReplyStore(tmp_path / "boss-rag.sqlite3")
+	store.initialize()
+	store.save_conversation(ConversationRecord(conversation_id="conv_001", source="manual_import"))
+	store.save_message(
+		MessageRecord(
+			message_id="msg_001",
+			conversation_id="conv_001",
+			message_text="方便加微信沟通吗？",
+			direction="inbound",
+		)
+	)
+	rag_adapter = _FakeRagAdapter(_FakeRagResult(ok=True, answer="unused", citations=[]))
+	service = BossRagReplyService(
+		store=store,
+		rag_adapter=rag_adapter,
+	)
+
+	draft = service.create_draft_for_message("msg_001")
+
+	assert draft.intent == "contact_exchange"
+	assert "BOSS 直聘" in draft.draft_text
+	assert "微信" not in draft.draft_text
+	assert draft.evidence["source"] == "local_policy"
+	assert draft.send_allowed is False
+	assert draft.approval_required is True
+	assert rag_adapter.calls == []
+
+
 def test_salary_question_uses_preset_reply_without_rag(tmp_path):
 	store = RagReplyStore(tmp_path / "boss-rag.sqlite3")
 	store.initialize()
