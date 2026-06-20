@@ -97,6 +97,58 @@ test("buildBossDeliveryBlockPayload returns a non-risk CDP-required response", (
   assert.doesNotMatch(blocked.body.errorMessage, /环境存在异常|异常访问|风控|安全验证/);
 });
 
+test("detectBossDeliveryChannel does not open a CDP probe tab when chat tab is missing", async () => {
+  const originalFetch = globalThis.fetch;
+  let createdTargets = 0;
+
+  globalThis.fetch = async (url, options = {}) => {
+    const requestUrl = String(url);
+
+    if (requestUrl === "http://cdp.test/json/version") {
+      return Response.json({
+        webSocketDebuggerUrl: "ws://cdp.test/browser",
+      });
+    }
+    if (requestUrl === "http://bridge.test/status") {
+      return Response.json({
+        ok: true,
+        extensionConnected: false,
+      });
+    }
+    if (requestUrl === "http://cdp.test/json/list") {
+      return Response.json([
+        {
+          id: "jobs-tab",
+          type: "page",
+          url: "https://www.zhipin.com/web/geek/jobs",
+          webSocketDebuggerUrl: "ws://cdp.test/jobs-tab",
+        },
+      ]);
+    }
+    if (requestUrl.startsWith("http://cdp.test/json/new?")) {
+      createdTargets += 1;
+      throw new Error(`delivery health probe must not open CDP target via ${options.method || "GET"}`);
+    }
+    throw new Error(`unexpected fetch: ${requestUrl}`);
+  };
+
+  try {
+    resetDeliveryProbeCacheForTests();
+    const state = await detectBossDeliveryChannel({
+      cdpUrl: "http://cdp.test",
+      bridgeUrl: "http://bridge.test",
+    });
+
+    assert.equal(state.available, false);
+    assert.equal(state.preflightStatus, "chat_tab_missing");
+    assert.match(state.errorMessage, /手动打开|chat/);
+    assert.equal(createdTargets, 0);
+  } finally {
+    resetDeliveryProbeCacheForTests();
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test("resolveCommandTimeoutMs treats zero as default instead of infinite wait", () => {
   assert.equal(resolveCommandTimeoutMs("0"), 45_000);
   assert.equal(resolveCommandTimeoutMs(""), 45_000);
@@ -112,49 +164,11 @@ test("resolveBossAutoGreetCommandTimeoutMs scales for 150-candidate batches", ()
   assert.equal(resolveBossAutoGreetCommandTimeoutMs(45_000, "999"), 1_680_000);
 });
 
-test("detectBossDeliveryChannel reuses an in-flight CDP probe", async () => {
+test("detectBossDeliveryChannel reuses an in-flight missing-chat probe", async () => {
   const originalFetch = globalThis.fetch;
-  const originalWebSocket = globalThis.WebSocket;
-  let createdTargets = 0;
-  let closedTargets = 0;
-
-  class FakeWebSocket {
-    constructor(url) {
-      this.url = url;
-      queueMicrotask(() => this.onopen?.());
-    }
-
-    send(raw) {
-      const message = JSON.parse(raw);
-      const result = message.method === "Runtime.evaluate"
-        ? {
-            result: {
-              value: JSON.stringify({
-                href: "https://www.zhipin.com/web/geek/chat",
-                title: "BOSS直聘",
-                hasUserList: true,
-                bodySnippet: "候选人列表",
-              }),
-            },
-          }
-        : {};
-      queueMicrotask(() => {
-        this.onmessage?.({
-          data: JSON.stringify({
-            id: message.id,
-            result,
-          }),
-        });
-      });
-    }
-
-    close() {}
-  }
-
-  globalThis.WebSocket = FakeWebSocket;
+  let listCalls = 0;
   globalThis.fetch = async (url, options = {}) => {
     const requestUrl = String(url);
-    const method = options.method || "GET";
 
     if (requestUrl === "http://cdp.test/json/version") {
       return Response.json({
@@ -167,17 +181,20 @@ test("detectBossDeliveryChannel reuses an in-flight CDP probe", async () => {
         extensionConnected: false,
       });
     }
-    if (requestUrl.startsWith("http://cdp.test/json/new?")) {
-      assert.equal(method, "PUT");
-      createdTargets += 1;
-      return Response.json({
-        id: `target-${createdTargets}`,
-        webSocketDebuggerUrl: `ws://cdp.test/target-${createdTargets}`,
-      });
+    if (requestUrl === "http://cdp.test/json/list") {
+      listCalls += 1;
+      await new Promise((resolve) => setTimeout(resolve, 25));
+      return Response.json([
+        {
+          id: "jobs-tab",
+          type: "page",
+          url: "https://www.zhipin.com/web/geek/jobs",
+          webSocketDebuggerUrl: "ws://cdp.test/jobs-tab",
+        },
+      ]);
     }
-    if (requestUrl.startsWith("http://cdp.test/json/close/")) {
-      closedTargets += 1;
-      return new Response("OK");
+    if (requestUrl.startsWith("http://cdp.test/json/new?")) {
+      throw new Error(`missing-chat probe must not open CDP target via ${options.method || "GET"}`);
     }
     throw new Error(`unexpected fetch: ${requestUrl}`);
   };
@@ -195,16 +212,14 @@ test("detectBossDeliveryChannel reuses an in-flight CDP probe", async () => {
       }),
     ]);
 
-    assert.equal(first.available, true);
-    assert.equal(second.available, true);
-    assert.equal(first.preflightStatus, "ready");
-    assert.equal(second.preflightStatus, "ready");
-    assert.equal(createdTargets, 1);
-    assert.equal(closedTargets, 1);
+    assert.equal(first.available, false);
+    assert.equal(second.available, false);
+    assert.equal(first.preflightStatus, "chat_tab_missing");
+    assert.equal(second.preflightStatus, "chat_tab_missing");
+    assert.equal(listCalls, 1);
   } finally {
     resetDeliveryProbeCacheForTests();
     globalThis.fetch = originalFetch;
-    globalThis.WebSocket = originalWebSocket;
   }
 });
 
@@ -306,7 +321,6 @@ test("detectBossDeliveryChannel fails fast when an in-flight CDP probe socket cl
   const originalFetch = globalThis.fetch;
   const originalWebSocket = globalThis.WebSocket;
   let createdTargets = 0;
-  let closedTargets = 0;
 
   class FakeWebSocket {
     constructor(url) {
@@ -324,8 +338,6 @@ test("detectBossDeliveryChannel fails fast when an in-flight CDP probe socket cl
   globalThis.WebSocket = FakeWebSocket;
   globalThis.fetch = async (url, options = {}) => {
     const requestUrl = String(url);
-    const method = options.method || "GET";
-
     if (requestUrl === "http://cdp.test/json/version") {
       return Response.json({
         webSocketDebuggerUrl: "ws://cdp.test/browser",
@@ -337,17 +349,19 @@ test("detectBossDeliveryChannel fails fast when an in-flight CDP probe socket cl
         extensionConnected: false,
       });
     }
-    if (requestUrl.startsWith("http://cdp.test/json/new?")) {
-      assert.equal(method, "PUT");
-      createdTargets += 1;
-      return Response.json({
-        id: `target-${createdTargets}`,
-        webSocketDebuggerUrl: `ws://cdp.test/target-${createdTargets}`,
-      });
+    if (requestUrl === "http://cdp.test/json/list") {
+      return Response.json([
+        {
+          id: "chat-tab",
+          type: "page",
+          url: "https://www.zhipin.com/web/geek/chat",
+          webSocketDebuggerUrl: "ws://cdp.test/chat-tab",
+        },
+      ]);
     }
-    if (requestUrl.startsWith("http://cdp.test/json/close/")) {
-      closedTargets += 1;
-      return new Response("OK");
+    if (requestUrl.startsWith("http://cdp.test/json/new?")) {
+      createdTargets += 1;
+      throw new Error(`existing-chat probe must not open CDP target via ${options.method || "GET"}`);
     }
     throw new Error(`unexpected fetch: ${requestUrl}`);
   };
@@ -376,8 +390,7 @@ test("detectBossDeliveryChannel fails fast when an in-flight CDP probe socket cl
     assert.equal(second.preflightStatus, "probe_failed");
     assert.match(first.errorMessage, /WebSocket closed/);
     assert.match(second.errorMessage, /WebSocket closed/);
-    assert.equal(createdTargets, 1);
-    assert.equal(closedTargets, 1);
+    assert.equal(createdTargets, 0);
   } finally {
     resetDeliveryProbeCacheForTests();
     globalThis.fetch = originalFetch;

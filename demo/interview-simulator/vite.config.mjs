@@ -108,23 +108,6 @@ async function readJsonWithTimeout(url, timeoutMs = 1500) {
   }
 }
 
-async function readTextWithTimeout(url, { method = "GET", timeoutMs = 1500 } = {}) {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
-  try {
-    const response = await fetch(url, { method, signal: controller.signal });
-    return {
-      ok: response.ok,
-      status: response.status,
-      text: await response.text(),
-    };
-  } catch {
-    return null;
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
 async function postJsonWithTimeout(url, payload, timeoutMs = 3000) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -203,26 +186,6 @@ async function evaluateBridgeProbe(bridgeUrl) {
     href: String(data.href || ""),
     title: String(data.title || ""),
   };
-}
-
-async function createCdpProbeTarget(cdpUrl) {
-  const response = await readTextWithTimeout(
-    `${cdpUrl}/json/new?${encodeURIComponent("about:blank")}`,
-    { method: "PUT", timeoutMs: 2000 },
-  );
-  if (!response?.ok || !response.text) return null;
-  try {
-    return JSON.parse(response.text);
-  } catch {
-    return null;
-  }
-}
-
-async function closeCdpProbeTarget(cdpUrl, targetId) {
-  if (!targetId) return;
-  await readTextWithTimeout(`${cdpUrl}/json/close/${targetId}`, {
-    timeoutMs: 1500,
-  });
 }
 
 async function listCdpTargets(cdpUrl) {
@@ -484,14 +447,23 @@ async function detectBossDeliveryChannel(config) {
 async function runCdpDeliveryProbe(config, baseState, cacheKey) {
   const existingChatTarget = findCandidateChatTarget(await listCdpTargets(config.cdpUrl));
 
-  let target = existingChatTarget;
-  let closeTargetId = "";
-  if (!target) {
-    target = await createCdpProbeTarget(config.cdpUrl);
-    closeTargetId = String(target?.id || "");
+  if (!existingChatTarget) {
+    const missing = {
+      ...baseState,
+      available: false,
+      preflightStatus: "chat_tab_missing",
+      errorMessage:
+        "未检测到已打开的 Boss 聊天页。为避免自动创建或导航 BOSS 页面，请手动打开 https://www.zhipin.com/web/geek/chat 后刷新本页面。",
+    };
+    cachedDeliveryProbe = {
+      key: cacheKey,
+      expiresAt: Date.now() + DELIVERY_PROBE_CACHE_TTL_MS,
+      value: missing,
+    };
+    return missing;
   }
 
-  if (!target?.id && !target?.webSocketDebuggerUrl) {
+  if (!existingChatTarget?.id && !existingChatTarget?.webSocketDebuggerUrl) {
     const unavailable = {
       ...baseState,
       available: false,
@@ -507,14 +479,10 @@ async function runCdpDeliveryProbe(config, baseState, cacheKey) {
   }
 
   let probeResult;
-  try {
-    probeResult = await evaluateCdpProbeTarget(target, {
-      url: BOSS_GEEK_CHAT_URL,
-      navigate: !existingChatTarget,
-    });
-  } finally {
-    await closeCdpProbeTarget(config.cdpUrl, closeTargetId);
-  }
+  probeResult = await evaluateCdpProbeTarget(existingChatTarget, {
+    url: BOSS_GEEK_CHAT_URL,
+    navigate: false,
+  });
 
   const redirectEvent = Array.isArray(probeResult?.navigationEvents)
     ? probeResult.navigationEvents.find((item) => String(item?.url || "").includes("/web/user/"))
