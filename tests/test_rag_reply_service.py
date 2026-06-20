@@ -129,6 +129,32 @@ def test_draft_command_saves_draft_and_audit_log(tmp_path):
 	assert messages[-1].message_text == "这是候选草稿"
 
 
+def test_draft_command_routes_technical_explanation_questions_to_rag(tmp_path):
+	store = RagReplyStore(tmp_path / "boss-rag.sqlite3")
+	store.initialize()
+	store.save_conversation(ConversationRecord(conversation_id="conv_001", source="manual_import"))
+	store.save_message(
+		MessageRecord(
+			message_id="msg_001",
+			conversation_id="conv_001",
+			message_text="解释一下神经网络",
+			direction="inbound",
+		)
+	)
+	rag_adapter = _FakeRagAdapter(_FakeRagResult(ok=True, answer="神经网络是一类通过多层参数学习模式的模型。", citations=[]))
+	service = BossRagReplyService(
+		store=store,
+		rag_adapter=rag_adapter,
+	)
+
+	draft = service.create_draft_for_message("msg_001")
+
+	assert draft.intent == "technical_question"
+	assert draft.draft_text == "神经网络是一类通过多层参数学习模式的模型。"
+	assert rag_adapter.calls
+	assert "解释一下神经网络" in rag_adapter.calls[0]["rag_question"]
+
+
 def test_draft_command_uses_agent_answer_adapter_when_rag_succeeds(tmp_path):
 	store = RagReplyStore(tmp_path / "boss-rag.sqlite3")
 	store.initialize()

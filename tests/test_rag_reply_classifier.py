@@ -31,6 +31,20 @@ def test_project_question_uses_non_sensitive_path():
 
 
 @pytest.mark.parametrize(
+	"message_text",
+	[
+		"解释一下神经网络",
+		"讲一下 transformer 和神经网络的区别",
+	],
+)
+def test_technical_explanation_questions_are_routed_to_rag(message_text: str):
+	result = classify_message(message_text)
+	assert result.intent == "technical_question"
+	assert result.requires_rag is True
+	assert result.risk_labels == []
+
+
+@pytest.mark.parametrize(
 	("message_text", "expected_intent"),
 	[
 		("请介绍一下你做的企业级 RAG 项目，重点说职责、技术方案和结果。", "project_question"),

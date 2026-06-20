@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  buildAgentAskResponsePayload,
   buildBossCliArgs,
   buildBossDeliveryBlockPayload,
   detectBossDeliveryChannel,
@@ -95,6 +96,31 @@ test("buildBossDeliveryBlockPayload returns a non-risk CDP-required response", (
   assert.equal(blocked.body.browserChannel, browserChannel);
   assert.equal(blocked.body.delivery.status, "browser_channel_unavailable");
   assert.doesNotMatch(blocked.body.errorMessage, /环境存在异常|异常访问|风控|安全验证/);
+});
+
+test("buildAgentAskResponsePayload rejects empty successful agent drafts", () => {
+  const response = buildAgentAskResponsePayload({
+    payload: {
+      command: ["agent", "ask"],
+      data: {
+        answer: "",
+        audit_status: "draft_created",
+        draft: {
+          draft_text: "",
+          audit_status: "draft_created",
+          intent: "unsafe_or_unclear",
+        },
+      },
+    },
+    question: "解释一下神经网络",
+    sessionId: "session-test",
+  });
+
+  assert.equal(response.statusCode, 502);
+  assert.equal(response.body.ok, false);
+  assert.match(response.body.errorMessage, /未能生成可用回答/);
+  assert.equal(response.body.auditStatus, "draft_created");
+  assert.equal(response.body.draftIntent, "unsafe_or_unclear");
 });
 
 test("detectBossDeliveryChannel does not open a CDP probe tab when chat tab is missing", async () => {

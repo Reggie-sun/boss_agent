@@ -8,6 +8,7 @@ from dataclasses import dataclass
 INTENTS = {
 	"project_question",
 	"resume_question",
+	"technical_question",
 	"salary_or_offer",
 	"resume_share_request",
 	"availability_or_schedule",
@@ -87,6 +88,21 @@ RESUME_PATTERNS = (
 	r"缓存",
 	r"数据库.*优化",
 )
+TECHNICAL_QUESTION_PATTERNS = (
+	r"神经网络",
+	r"transformer",
+	r"机器学习",
+	r"深度学习",
+	r"大模型",
+	r"\bllm\b",
+	r"embedding",
+	r"向量",
+	r"微调",
+	r"训练",
+	r"推理",
+	r"注意力",
+	r"\bnlp\b",
+)
 JOB_DETAIL_PATTERNS = (r"你对我们岗位", r"有什么想问", r"还有什么问题", r"了解这个岗位")
 SMALLTALK_PATTERNS = (r"你好", r"您好", r"收到", r"好的", r"谢谢", r"辛苦", r"在吗")
 
@@ -99,7 +115,7 @@ class ClassificationResult:
 
 	@property
 	def requires_rag(self) -> bool:
-		return self.intent in {"project_question", "resume_question"}
+		return self.intent in {"project_question", "resume_question", "technical_question"}
 
 
 def classify_message(message_text: str) -> ClassificationResult:
@@ -122,6 +138,12 @@ def classify_message(message_text: str) -> ClassificationResult:
 	if any(re.search(pattern, lower_text, flags=re.IGNORECASE) for pattern in RESUME_PATTERNS):
 		return ClassificationResult(
 			intent="resume_question",
+			risk_labels=[],
+			classifier_source="heuristic",
+		)
+	if any(re.search(pattern, lower_text, flags=re.IGNORECASE) for pattern in TECHNICAL_QUESTION_PATTERNS):
+		return ClassificationResult(
+			intent="technical_question",
 			risk_labels=[],
 			classifier_source="heuristic",
 		)

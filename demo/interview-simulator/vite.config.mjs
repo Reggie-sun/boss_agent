@@ -578,6 +578,7 @@ export function resetDeliveryProbeCacheForTests() {
 }
 
 export {
+  buildAgentAskResponsePayload,
   buildBossCliArgs,
   buildBossDeliveryBlockPayload,
   detectBossDeliveryChannel,
@@ -603,6 +604,60 @@ function normalizeThread(sessionId, messages) {
     turnCount: safeMessages.filter((item) => item.role === "user").length,
     messageCount: safeMessages.length,
     messages: safeMessages,
+  };
+}
+
+function buildAgentAskResponsePayload({ payload, question, sessionId }) {
+  const data = payload?.data || {};
+  const draft = data.draft && typeof data.draft === "object" ? data.draft : {};
+  const thread = normalizeThread(sessionId, data.thread);
+  const answer = String(data.answer || draft.draft_text || "");
+  const auditStatus = String(data.audit_status || draft.audit_status || "answered");
+  const draftIntent = String(draft.intent || "");
+  const rawResponse = {
+    command: payload?.command,
+    conversationId: data.conversation_id,
+    draft,
+    question,
+  };
+
+  if (!answer.trim()) {
+    return {
+      statusCode: 502,
+      body: {
+        ok: false,
+        errorMessage:
+          data.error_message || "BOSS_AGENT workflow 未能生成可用回答。",
+        auditStatus,
+        draftIntent,
+        draft,
+        rawResponse,
+        thread,
+      },
+    };
+  }
+
+  return {
+    statusCode: 200,
+    body: {
+      ok: true,
+      answer,
+      citations: Array.isArray(data.citations) ? data.citations : [],
+      reasoningSummary:
+        data.reasoning_summary && typeof data.reasoning_summary === "object"
+          ? data.reasoning_summary
+          : null,
+      auditStatus,
+      draftId: String(draft.draft_id || ""),
+      draftIntent,
+      draft,
+      rawResponse,
+      delivery:
+        data.delivery && typeof data.delivery === "object"
+          ? data.delivery
+          : null,
+      thread,
+    },
   };
 }
 
@@ -1394,50 +1449,13 @@ function createRagBridgePlugin() {
       if (autoSendResume) args.push("--auto-send-resume");
 
       const payload = await runBossJsonCommand(bridgeConfig, args);
-      const data = payload.data || {};
-      const draft = data.draft || {};
-      const thread = normalizeThread(sessionId, data.thread);
-
-      if (data.audit_status === "rag_failed" && !String(data.answer || "").trim()) {
-        res.statusCode = 502;
-        res.end(
-          JSON.stringify({
-            ok: false,
-            errorMessage:
-              data.error_message || "BOSS_AGENT workflow 未能生成可用回答。",
-            auditStatus: String(data.audit_status || "rag_failed"),
-            thread,
-          }),
-        );
-        return true;
-      }
-
-      res.end(
-          JSON.stringify({
-            ok: true,
-            answer: String(data.answer || draft.draft_text || ""),
-            citations: Array.isArray(data.citations) ? data.citations : [],
-          reasoningSummary:
-            data.reasoning_summary && typeof data.reasoning_summary === "object"
-              ? data.reasoning_summary
-              : null,
-          auditStatus: String(data.audit_status || draft.audit_status || "answered"),
-          draftId: String(draft.draft_id || ""),
-          draftIntent: String(draft.intent || ""),
-          draft,
-          rawResponse: {
-            command: payload.command,
-            conversationId: data.conversation_id,
-            draft,
-            question,
-          },
-          delivery:
-            data.delivery && typeof data.delivery === "object"
-              ? data.delivery
-              : null,
-          thread,
-        }),
-      );
+      const responsePayload = buildAgentAskResponsePayload({
+        payload,
+        question,
+        sessionId,
+      });
+      res.statusCode = responsePayload.statusCode;
+      res.end(JSON.stringify(responsePayload.body));
       return true;
     } catch (error) {
       const payload = error?.commandPayload;
