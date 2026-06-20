@@ -7,17 +7,26 @@ CDP_URL := http://$(CDP_HOST):$(CDP_PORT)
 CDP_START_URL ?= https://www.zhipin.com/web/geek/chat
 CDP_UNIT ?= boss-agent-cdp-$(CDP_PORT)
 CHROME ?= $(shell if [ -x /opt/google/chrome/chrome ]; then echo /opt/google/chrome/chrome; else command -v google-chrome 2>/dev/null || command -v google-chrome-stable 2>/dev/null || command -v chromium 2>/dev/null || command -v chromium-browser 2>/dev/null; fi)
+PYTHON ?= python
+BOSS_DATA_DIR ?= $(HOME)/.boss-agent
+RESUME_ATTACHMENT_PATH ?= $(CURDIR)/孙瑞杰的简历.pdf
+AGENT_PROACTIVE_RESUME ?= true
+BOSS_CLI ?= $(PYTHON) -c 'from boss_agent_cli.main import cli; import sys; cli.main(args=sys.argv[1:])'
 
-.PHONY: help cdp cdp-check cdp-url
+.PHONY: help cdp cdp-check cdp-url agent-auto-reply
 
 help:
 	@echo "Targets:"
-	@echo "  make cdp        Start a real Chrome with CDP on $(CDP_URL)"
-	@echo "  make cdp-check  Check whether $(CDP_URL) exposes DevTools"
-	@echo "  make cdp-url    Print the CDP URL"
+	@echo "  make cdp               Start a real Chrome with CDP on $(CDP_URL)"
+	@echo "  make cdp-check         Check whether $(CDP_URL) exposes DevTools"
+	@echo "  make cdp-url           Print the CDP URL"
+	@echo "  make agent-auto-reply  Start live Boss Agent auto replies"
 	@echo ""
 	@echo "Variables:"
 	@echo "  CHROME=/path/to/chrome CDP_PORT=9229 CDP_PROFILE=$(CDP_PROFILE)"
+	@echo "  PYTHON=python BOSS_DATA_DIR=$(BOSS_DATA_DIR)"
+	@echo "  RESUME_ATTACHMENT_PATH=$(RESUME_ATTACHMENT_PATH)"
+	@echo "  AGENT_PROACTIVE_RESUME=$(AGENT_PROACTIVE_RESUME)"
 
 cdp:
 	@if [ -z "$(CHROME)" ]; then \
@@ -68,3 +77,17 @@ cdp-check:
 
 cdp-url:
 	@echo "$(CDP_URL)"
+
+agent-auto-reply: cdp-check
+	@echo "Starting live Boss Agent auto replies on $(CDP_URL)"
+	@echo "Data dir: $(BOSS_DATA_DIR)"
+	@echo "Resume attachment: $(RESUME_ATTACHMENT_PATH)"
+	PYTHONPATH="$(CURDIR)/src$${PYTHONPATH:+:$$PYTHONPATH}" \
+	BOSS_RAG_ALLOW_MESSAGE_READ=true \
+	BOSS_RAG_SEND_ENABLED=true \
+	BOSS_RAG_WATCHER_ENABLED=true \
+	BOSS_RAG_WATCHER_DRY_RUN=false \
+	BOSS_RAG_WATCHER_LIVE_SYNC=true \
+	BOSS_RAG_PROACTIVE_RESUME_ENABLED=$(AGENT_PROACTIVE_RESUME) \
+	BOSS_RAG_RESUME_ATTACHMENT_PATH="$(RESUME_ATTACHMENT_PATH)" \
+	$(BOSS_CLI) --json --data-dir "$(BOSS_DATA_DIR)" --cdp-url "$(CDP_URL)" agent watcher-run --loop --live-sync --ensure-chat-page
