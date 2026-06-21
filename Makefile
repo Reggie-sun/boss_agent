@@ -12,9 +12,10 @@ BOSS_DATA_DIR ?= $(HOME)/.boss-agent
 RESUME_ATTACHMENT_PATH ?= $(CURDIR)/孙瑞杰的简历.pdf
 AGENT_PROACTIVE_RESUME ?= true
 AGENT_READ_NO_REPLY_LIMIT ?= 1
+AGENT_STOP_GRACE_SECONDS ?= 2
 BOSS_CLI ?= $(PYTHON) -c 'from boss_agent_cli.main import cli; import sys; cli.main(args=sys.argv[1:])'
 
-.PHONY: help cdp cdp-check cdp-url agent-auto-reply
+.PHONY: help cdp cdp-check cdp-url agent-auto-reply agent-auto-reply-stop
 
 help:
 	@echo "Targets:"
@@ -29,6 +30,7 @@ help:
 	@echo "  RESUME_ATTACHMENT_PATH=$(RESUME_ATTACHMENT_PATH)"
 	@echo "  AGENT_PROACTIVE_RESUME=$(AGENT_PROACTIVE_RESUME)"
 	@echo "  AGENT_READ_NO_REPLY_LIMIT=$(AGENT_READ_NO_REPLY_LIMIT)"
+	@echo "  AGENT_STOP_GRACE_SECONDS=$(AGENT_STOP_GRACE_SECONDS)"
 
 cdp:
 	@if [ -z "$(CHROME)" ]; then \
@@ -80,7 +82,27 @@ cdp-check:
 cdp-url:
 	@echo "$(CDP_URL)"
 
-agent-auto-reply: cdp-check
+agent-auto-reply-stop:
+	@old_pids="$$(pgrep -f -- 'boss_agent_cli\.main.*--data-dir $(BOSS_DATA_DIR).*agent watcher-run --loo[p]' || true)"; \
+	if [ -n "$$old_pids" ]; then \
+		echo "Stopping existing Boss Agent auto reply watcher(s): $$old_pids"; \
+		kill $$old_pids 2>/dev/null || true; \
+		sleep "$(AGENT_STOP_GRACE_SECONDS)"; \
+		still_running=""; \
+		for pid in $$old_pids; do \
+			if kill -0 "$$pid" 2>/dev/null; then \
+				still_running="$${still_running:+$$still_running }$$pid"; \
+			fi; \
+		done; \
+		if [ -n "$$still_running" ]; then \
+			echo "Force stopping existing Boss Agent auto reply watcher(s): $$still_running"; \
+			kill -9 $$still_running 2>/dev/null || true; \
+		fi; \
+	else \
+		echo "No existing Boss Agent auto reply watcher found."; \
+	fi
+
+agent-auto-reply: agent-auto-reply-stop cdp-check
 	@echo "Starting live Boss Agent auto replies on $(CDP_URL)"
 	@echo "Data dir: $(BOSS_DATA_DIR)"
 	@echo "Resume attachment: $(RESUME_ATTACHMENT_PATH)"

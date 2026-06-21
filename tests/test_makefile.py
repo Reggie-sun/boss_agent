@@ -32,6 +32,19 @@ def test_agent_auto_reply_make_target_runs_live_watcher_with_explicit_gates():
 	assert "agent watcher-run --loop --live-sync --ensure-chat-page" in output
 
 
+def test_agent_auto_reply_stops_existing_watcher_before_starting():
+	result = _make("--dry-run", "agent-auto-reply")
+
+	output = (result.stdout + result.stderr).replace("\\\n", " ")
+	assert result.returncode == 0, output
+	stop_index = output.find("pgrep -f")
+	start_index = output.find("Starting live Boss Agent auto replies")
+	assert stop_index >= 0, output
+	assert start_index >= 0, output
+	assert stop_index < start_index, output
+	assert "agent watcher-run --loo[p]" in output
+
+
 def test_help_mentions_agent_auto_reply_make_target():
 	result = _make("help")
 
