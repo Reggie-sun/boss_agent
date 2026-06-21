@@ -4,7 +4,7 @@
 
 **Goal:** 在保留当前 `BOSS_AGENT` reply、watcher、Boss 自动开聊、自动投简历、CLI、MCP、Docker 和 demo conversation 的前提下，新增 commercial-ready 的 tenant/user/profile/RAG 资料层、会话 profile binding、真实 usage/quota gate，以及可被 Product Design 插件重构的前端数据面。
 
-**Architecture:** `BOSS_AGENT` 继续拥有业务状态和安全 gate：tenant、user、profile、upload、binding、usage、audit、reply/outreach policy 都落在本地 SQLite。外部 Enterprise RAG 继续负责检索和回答；新增 `RagProfileConnector` 作为薄适配层，暴露 profile-aware contract，但当前 `/api/v1/chat/ask` fallback 不发送上游 schema 不支持的 `metadata` 字段。前端先稳定 bridge/API contract，再通过 Product Design workflow 做视觉和交互重构。
+**Architecture:** `BOSS_AGENT` 继续拥有业务状态和安全 gate：tenant、user、profile、upload、binding、usage、audit、reply/outreach policy 都落在本地 SQLite。外部 Enterprise RAG 继续负责检索和回答；RAG 的帐号/租户身份通过 `X-API-Key` 或 `Authorization: Bearer` 进入上游 `AuthContext`，不是通过 chat body 里的 `tenant_id` 或泛用 `metadata` 覆盖。新增 `RagProfileConnector` 作为薄适配层，暴露 profile-aware contract：它把本地 profile 映射到 RAG credential reference 和可选 `document_id`/`category_id` scope，当前 `/api/v1/chat/ask` fallback 不发送上游 schema 不支持的 `metadata` 字段。前端先稳定 bridge/API contract，再通过 Product Design workflow 做视觉和交互重构。
 
 **Tech Stack:** Python 3.10+, Click, sqlite3, dataclasses, httpx, pytest, React 19, Vite 6, existing Boss bridge/CDP delivery helpers, Product Design plugin.
 
@@ -37,6 +37,7 @@
 - `src/boss_agent_cli/rag_reply/store.py` 已提供 `RagReplyStore.connect()`、JSON encode/decode 和现有 record CRUD，适合复用同一个 SQLite 文件。
 - `src/boss_agent_cli/rag_reply/service.py` 负责 message -> classify -> RAG/direct -> draft -> audit，目前用 per-conversation `rag_session_id`。
 - `src/boss_agent_cli/rag_reply/adapters/rag_http.py` 只调用 `POST /api/v1/chat/ask`，现有测试断言 payload 没有 `metadata`。
+- 当前 Enterprise RAG 已支持多帐号/租户，但身份来自 auth header 解析出的 `AuthContext`；`ChatRequest` body 不包含 `tenant_id` 或泛用 `metadata`，只应使用已支持的 `document_id`/`category_id` 做检索范围约束。
 - `src/boss_agent_cli/rag_reply/adapters/agent_answer.py` 仍有本地候选人事实模板，后期必须收缩成通用 answer shaping。
 - `src/boss_agent_cli/rag_reply/watcher_config.py`、`auto_actions.py`、`agent_tools.py` 承担 watcher 自动回复、联系方式、面试时间、附件简历 gate。
 - `src/boss_agent_cli/commands/rag.py` 是 `agent`/`rag` CLI 中心，也负责构造 service、watcher 和真实发送。
@@ -70,6 +71,9 @@
 - Create `src/boss_agent_cli/rag_reply/adapters/rag_profile.py`  
   profile-aware RAG connector。当前 chat/ask fallback 不发送 unsupported `metadata`；profile identity 写入本地 `rag_calls` 和 connector result。
 
+- Create `src/boss_agent_cli/rag_reply/adapters/profile_rag_auth.py`
+  把 profile 的 RAG auth binding 解析为 `RagHttpAdapter` 配置；只存 credential reference，不把 API key/token 明文写入 SQLite。
+
 - Modify `src/boss_agent_cli/rag_reply/schema.py`  
   追加 profile/commercial tables，不改旧表名，不迁移删除旧数据。
 
@@ -80,7 +84,7 @@
   保持 prompt 最小化，只接受 HR 问题、岗位摘要、objective；不把 tenant/user/profile 当自然语言 stuffing。
 
 - Modify `src/boss_agent_cli/rag_reply/adapters/rag_http.py`
-  保持 `/api/v1/chat/ask` contract 稳定；不能为了 profile context 添加 `metadata` payload。
+  保持 `/api/v1/chat/ask` contract 稳定；不能为了 profile context 添加 `metadata` payload，可选透传当前 RAG schema 已支持的 `document_id`/`category_id`。
 
 - Modify `src/boss_agent_cli/rag_reply/watcher_config.py`, `auto_actions.py`, `agent_tools.py`
   从 `ProfileConfig` 生成 effective watcher config，并将 reply/outreach/proactive resume gates 分开。
@@ -222,6 +226,8 @@ SUBSCRIPTION_STATUSES = {"trial", "active", "past_due", "suspended", "canceled"}
 PROFILE_STATUSES = {"active", "archived"}
 UPLOAD_STATUSES = {"queued", "uploaded", "indexed", "failed"}
 BINDING_SOURCES = {"manual", "default", "imported"}
+RAG_AUTH_MODES = {"inherit", "none", "x_api_key", "bearer"}
+RAG_SCOPE_TYPES = {"none", "document_id", "category_id"}
 
 METRIC_PROFILE_COUNT = "profile_count"
 METRIC_UPLOAD_COUNT = "profile_upload_count"
@@ -326,6 +332,18 @@ class ConversationProfileBindingRecord:
 
 
 @dataclass(slots=True)
+class ProfileRagAuthBindingRecord:
+    tenant_id: str
+    user_id: str
+    profile_id: str
+    auth_mode: str = "inherit"
+    credential_ref: str = ""
+    scope_type: str = "none"
+    scope_id: str = ""
+    updated_at: str = field(default_factory=utc_now_iso)
+
+
+@dataclass(slots=True)
 class UsageCounterRecord:
     tenant_id: str
     user_id: str
@@ -349,6 +367,7 @@ user_profiles(profile_id PRIMARY KEY, tenant_id, user_id, display_name, target_t
 profile_configs(profile_id PRIMARY KEY, tenant_id, contact_phone, contact_wechat, interview_windows, salary_reply_policy, resume_attachment_path, reply_auto_send_enabled, outreach_auto_send_enabled, proactive_resume_enabled, updated_at)
 profile_uploads(upload_id PRIMARY KEY, tenant_id, user_id, profile_id, source_filename, source_type, source_size_bytes, rag_document_id, status, error_message, created_at, updated_at)
 conversation_profile_bindings(conversation_id PRIMARY KEY, tenant_id, user_id, profile_id, knowledge_base_id, binding_source, created_at, updated_at)
+profile_rag_auth_bindings(profile_id PRIMARY KEY, tenant_id, user_id, auth_mode, credential_ref, scope_type, scope_id, updated_at)
 usage_counters(tenant_id, user_id, profile_id, metric_name, period_start, period_end, used_count, limit_count, updated_at, PRIMARY KEY(tenant_id, user_id, profile_id, metric_name, period_start, period_end))
 ```
 
@@ -497,6 +516,8 @@ Create `src/boss_agent_cli/rag_reply/profile_service.py` using `RagReplyStore.co
 - `list_uploads(self, profile_id: str) -> list[ProfileUploadRecord]`
 - `bind_conversation(self, record: ConversationProfileBindingRecord) -> None`
 - `get_conversation_binding(self, conversation_id: str) -> ConversationProfileBindingRecord | None`
+- `save_profile_rag_auth_binding(self, record: ProfileRagAuthBindingRecord) -> None`
+- `get_profile_rag_auth_binding(self, profile_id: str) -> ProfileRagAuthBindingRecord | None`
 - `save_usage_counter(self, record: UsageCounterRecord) -> None`
 - `get_usage_counter(self, tenant_id: str, user_id: str, profile_id: str, metric_name: str, period_start: str, period_end: str) -> UsageCounterRecord | None`
 - `increment_usage(self, *, tenant_id: str, user_id: str, profile_id: str, metric_name: str, period_start: str, period_end: str, amount: int = 1) -> UsageCounterRecord`
@@ -624,6 +645,8 @@ Expected: pytest PASS.
 
 **Files:**
 - Create: `src/boss_agent_cli/rag_reply/adapters/rag_profile.py`
+- Create: `src/boss_agent_cli/rag_reply/adapters/profile_rag_auth.py`
+- Modify: `src/boss_agent_cli/rag_reply/adapters/rag_http.py`
 - Modify: `tests/test_rag_reply_rag_http.py`
 - Test: `tests/test_rag_profile_connector.py`
 
@@ -638,7 +661,8 @@ from boss_agent_cli.rag_reply.adapters.rag_profile import RagProfileConnector
 
 
 def test_ask_profile_requires_complete_identity():
-    connector = RagProfileConnector(rag_adapter=SimpleNamespace(answer=lambda **kwargs: None))
+    resolver = SimpleNamespace(resolve=lambda binding: SimpleNamespace(rag_adapter=SimpleNamespace(answer=lambda **kwargs: None), document_id="", category_id=""))
+    connector = RagProfileConnector(rag_auth_resolver=resolver)
 
     result = connector.ask_profile(
         tenant_id="tenant_001",
@@ -671,7 +695,8 @@ def test_ask_profile_wraps_current_chat_ask_without_metadata():
             approval_required=True,
         )
 
-    connector = RagProfileConnector(rag_adapter=SimpleNamespace(answer=fake_answer))
+    resolver = SimpleNamespace(resolve=lambda binding: SimpleNamespace(rag_adapter=SimpleNamespace(answer=fake_answer), document_id="", category_id=""))
+    connector = RagProfileConnector(rag_auth_resolver=resolver)
     result = connector.ask_profile(
         tenant_id="tenant_001",
         user_id="user_001",
@@ -688,7 +713,60 @@ def test_ask_profile_wraps_current_chat_ask_without_metadata():
     assert result.profile_context["profile_id"] == "profile_ai"
 ```
 
-- [ ] **Step 2: Implement connector**
+- [ ] **Step 2: Add RAG auth resolver**
+
+Create `src/boss_agent_cli/rag_reply/adapters/profile_rag_auth.py` with a tiny resolver:
+
+- Input: `ProfileRagAuthBindingRecord | None`, the loaded CLI config, and the existing default RAG adapter settings.
+- Output: a resolved adapter, optional `document_id`/`category_id`, and secret-free `public_context`.
+- `auth_mode="inherit"` uses the existing global `boss_rag_rag_api_key`/`boss_rag_rag_auth_mode`.
+- `auth_mode="x_api_key"` or `auth_mode="bearer"` resolves `credential_ref` as a config/env key name, then creates a `RagHttpAdapter` with that credential.
+- The resolver never writes the resolved secret into SQLite, draft evidence, `rag_calls.request`, logs, or frontend responses.
+- `scope_type="document_id"` maps to `document_id`; `scope_type="category_id"` maps to `category_id`; `scope_type="none"` sends no extra scope.
+
+Add tests that prove:
+
+```python
+def test_profile_rag_auth_uses_profile_specific_bearer_without_leaking_secret():
+    binding = ProfileRagAuthBindingRecord(
+        tenant_id="tenant_001",
+        user_id="user_001",
+        profile_id="profile_ai",
+        auth_mode="bearer",
+        credential_ref="RAG_PROFILE_AI_TOKEN",
+    )
+    resolver = ProfileRagAuthResolver(
+        config={"RAG_PROFILE_AI_TOKEN": "secret-token"},
+        default_base_url="http://127.0.0.1:8020",
+        default_timeout_seconds=20,
+        default_api_key="",
+        default_auth_mode="none",
+    )
+
+    resolved = resolver.resolve(binding)
+
+    assert resolved.rag_adapter._build_headers() == {"Authorization": "Bearer secret-token"}
+    assert resolved.public_context["credential_ref"] == "RAG_PROFILE_AI_TOKEN"
+    assert "secret-token" not in str(resolved.public_context)
+
+
+def test_profile_rag_auth_maps_category_scope_to_supported_chat_field():
+    binding = ProfileRagAuthBindingRecord(
+        tenant_id="tenant_001",
+        user_id="user_001",
+        profile_id="profile_ai",
+        scope_type="category_id",
+        scope_id="cat_ai",
+    )
+    resolver = ProfileRagAuthResolver(config={}, default_base_url="http://127.0.0.1:8020")
+
+    resolved = resolver.resolve(binding)
+
+    assert resolved.category_id == "cat_ai"
+    assert resolved.document_id == ""
+```
+
+- [ ] **Step 3: Implement connector**
 
 Create `rag_profile.py` with:
 
@@ -708,10 +786,10 @@ class RagProfileAnswerResult:
 
 
 class RagProfileConnector:
-    def __init__(self, *, rag_adapter) -> None:
-        self.rag_adapter = rag_adapter
+    def __init__(self, *, rag_auth_resolver) -> None:
+        self.rag_auth_resolver = rag_auth_resolver
 
-    def ask_profile(self, *, tenant_id: str, user_id: str, profile_id: str, knowledge_base_id: str, question: str, conversation_id: str, mode: str = "accurate") -> RagProfileAnswerResult:
+    def ask_profile(self, *, tenant_id: str, user_id: str, profile_id: str, knowledge_base_id: str, question: str, conversation_id: str, rag_auth_binding=None, mode: str = "accurate") -> RagProfileAnswerResult:
         profile_context = {
             "tenant_id": tenant_id.strip(),
             "user_id": user_id.strip(),
@@ -721,10 +799,13 @@ class RagProfileConnector:
         if not all(profile_context.values()):
             return RagProfileAnswerResult(False, "", [], profile_context, error_message="tenant_id/user_id/profile_id/knowledge_base_id are required.", audit_status="profile_context_invalid")
         session_hash = hashlib.sha1(f"{conversation_id}:{profile_id}:{knowledge_base_id}".encode("utf-8")).hexdigest()[:16]
-        result = self.rag_adapter.answer(
+        resolved = self.rag_auth_resolver.resolve(rag_auth_binding)
+        result = resolved.rag_adapter.answer(
             rag_question=question,
             session_id=f"boss-profile-{session_hash}",
             mode=mode,
+            document_id=resolved.document_id or None,
+            category_id=resolved.category_id or None,
         )
         return RagProfileAnswerResult(
             ok=bool(result.ok),
@@ -742,9 +823,23 @@ class RagProfileConnector:
 
 Add import for `hashlib`. Keep upload/status methods as explicit future-facing methods when the external RAG exposes endpoints; do not route upload through `/api/v1/chat/ask`.
 
-- [ ] **Step 3: Preserve `RagHttpAdapter` chat/ask contract**
+- [ ] **Step 4: Preserve `RagHttpAdapter` chat/ask contract**
 
 Do not add `metadata`, `tenant_id`, `user_id`, `profile_id`, or `knowledge_base_id` into `RagHttpAdapter.answer()` payload for current `/api/v1/chat/ask`.
+
+It is OK to add optional `document_id` and `category_id` parameters because current Enterprise RAG `ChatRequest` supports them:
+
+```python
+payload = {
+    "question": rag_question,
+    "session_id": session_id,
+    "mode": mode,
+}
+if document_id:
+    payload["document_id"] = document_id
+if category_id:
+    payload["category_id"] = category_id
+```
 
 Keep this assertion in `tests/test_rag_reply_rag_http.py`:
 
@@ -752,13 +847,13 @@ Keep this assertion in `tests/test_rag_reply_rag_http.py`:
 assert "metadata" not in captured["json"]
 ```
 
-- [ ] **Step 4: Verify and commit**
+- [ ] **Step 5: Verify and commit**
 
 Run:
 
 ```bash
 pytest tests/test_rag_profile_connector.py tests/test_rag_reply_rag_http.py -v
-git add src/boss_agent_cli/rag_reply/adapters/rag_profile.py tests/test_rag_profile_connector.py tests/test_rag_reply_rag_http.py
+git add src/boss_agent_cli/rag_reply/adapters/rag_profile.py src/boss_agent_cli/rag_reply/adapters/profile_rag_auth.py src/boss_agent_cli/rag_reply/adapters/rag_http.py tests/test_rag_profile_connector.py tests/test_rag_reply_rag_http.py
 git commit -m "feat: add profile-aware RAG connector"
 ```
 
@@ -885,9 +980,10 @@ evidence={"source": "profile_policy", "reason": "profile_binding_required"}
 
 - [ ] **Step 4: Call profile connector and record evidence**
 
-When `profile_context` exists, call:
+When `profile_context` exists, also load the optional RAG auth/scope binding:
 
 ```python
+rag_auth_binding = self.profile_service.get_profile_rag_auth_binding(profile_context["profile_id"])
 profile_result = self.profile_rag_connector.ask_profile(
     tenant_id=profile_context["tenant_id"],
     user_id=profile_context["user_id"],
@@ -895,6 +991,7 @@ profile_result = self.profile_rag_connector.ask_profile(
     knowledge_base_id=profile_context["knowledge_base_id"],
     question=rag_question,
     conversation_id=message.conversation_id,
+    rag_auth_binding=rag_auth_binding,
 )
 ```
 
@@ -905,10 +1002,16 @@ Save `RagCallRecord.request` with:
     "question": rag_question,
     "message_id": message.message_id,
     "profile_context": profile_context,
+    "rag_auth": {
+        "auth_mode": rag_auth_binding.auth_mode if rag_auth_binding else "inherit",
+        "credential_ref": rag_auth_binding.credential_ref if rag_auth_binding else "",
+        "scope_type": rag_auth_binding.scope_type if rag_auth_binding else "none",
+        "scope_id": rag_auth_binding.scope_id if rag_auth_binding else "",
+    },
 }
 ```
 
-Do not put profile identity inside the natural-language `rag_question`.
+Do not put profile identity inside the natural-language `rag_question`. Do not persist resolved API keys or bearer tokens in `RagCallRecord.request`.
 
 - [ ] **Step 5: Verify and commit**
 
@@ -1026,6 +1129,7 @@ Required commands:
 - `agent profile config set --tenant-id --profile-id [--contact-phone] [--contact-wechat] [--interview-windows] [--salary-reply-policy] [--resume-attachment-path] [--reply-auto-send-enabled/--no-reply-auto-send-enabled] [--outreach-auto-send-enabled/--no-outreach-auto-send-enabled] [--proactive-resume-enabled/--no-proactive-resume-enabled]`
 - `agent profile upload --tenant-id --user-id --profile-id --type --file`
 - `agent profile upload-status --profile-id`
+- `agent profile rag-auth set --tenant-id --user-id --profile-id --auth-mode inherit|none|x_api_key|bearer [--credential-ref CONFIG_OR_ENV_KEY] [--scope-type none|document_id|category_id] [--scope-id VALUE]`
 - `agent conversation bind-profile --conversation-id --tenant-id --user-id --profile-id [--binding-source manual|default|imported]`
 - `agent conversation profile --conversation-id`
 - `agent usage summary --tenant-id [--user-id] [--profile-id]`
@@ -1080,13 +1184,20 @@ rag_adapter = RagHttpAdapter(
     auth_mode=str(config.get("boss_rag_rag_auth_mode", "none")),
 )
 profile_service = ProfileService(store)
+rag_auth_resolver = ProfileRagAuthResolver(
+    config=config,
+    default_base_url=config.get("boss_rag_rag_base_url"),
+    default_timeout_seconds=int(config.get("boss_rag_rag_timeout_seconds", 20)),
+    default_api_key=config.get("boss_rag_rag_api_key"),
+    default_auth_mode=str(config.get("boss_rag_rag_auth_mode", "none")),
+)
 return BossRagReplyService(
     store=store,
     rag_adapter=rag_adapter,
     fallback_adapter=_build_ai_fallback_adapter(ctx),
     agent_answer_adapter=_build_agent_answer_adapter(ctx),
     profile_service=profile_service,
-    profile_rag_connector=RagProfileConnector(rag_adapter=rag_adapter),
+    profile_rag_connector=RagProfileConnector(rag_auth_resolver=rag_auth_resolver),
     salary_reply=str(config.get("boss_rag_salary_reply") or ""),
     interview_windows=str(config.get("boss_rag_interview_windows") or ""),
 )
