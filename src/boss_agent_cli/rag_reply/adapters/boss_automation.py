@@ -10,7 +10,7 @@ from datetime import UTC, datetime
 from typing import Any, Protocol
 
 from boss_agent_cli.api.models import JobDetail, JobItem
-from boss_agent_cli.commands.friend_list_pages import collect_friend_list_items
+from boss_agent_cli.commands.friend_list_pages import MAX_FRIEND_LIST_PAGES, collect_friend_list_items
 from boss_agent_cli.display import error_contract_for_code
 from boss_agent_cli.pipeline_state import build_pipeline_items, select_read_no_reply_candidates
 from boss_agent_cli.rag_reply.models import (
@@ -26,6 +26,7 @@ from boss_agent_cli.rag_reply.store import RagReplyStore
 
 _RECENT_FRIEND_LIST_PAGES = 1
 _RECENT_CONVERSATION_LIMIT = 5
+_CONVERSATION_SYNC_BATCH_SIZE = 5
 
 
 class BossPlatformProtocol(Protocol):
@@ -160,10 +161,7 @@ class BossAutomationAdapter:
 		)
 
 	def sync_messages(self, *, conversation_id: str | None = None) -> SyncMessagesResult:
-		# V1 read-only sync is intentionally scoped to recent conversations.
-		# The BOSS friend-list endpoint does not reliably expose hasMore, and
-		# deep pagination can stall the workflow before any message history is read.
-		items, error = collect_friend_list_items(self.platform, max_pages=_RECENT_FRIEND_LIST_PAGES)
+		items, error = collect_friend_list_items(self.platform, max_pages=MAX_FRIEND_LIST_PAGES)
 		if error is not None:
 			self._raise_platform_error(error, fallback_message="沟通列表获取失败")
 
@@ -173,38 +171,39 @@ class BossAutomationAdapter:
 		seen_message_ids: set[str] = set()
 		selected_items = self._select_friend_items(items, conversation_id)
 		if conversation_id is None:
-			selected_items = self._select_recent_and_unread_friend_items(selected_items)
+			selected_items = self._dedupe_friend_items(selected_items)
 
-		for raw_item in selected_items:
-			if not isinstance(raw_item, dict):
-				continue
-			conversation = self._save_conversation_from_friend_item(raw_item)
-			if conversation.conversation_id not in conversation_ids:
-				conversation_ids.append(conversation.conversation_id)
-
-			gid = str(conversation.state.get("gid", ""))
-			security_id = str(conversation.state.get("security_id", ""))
-			if not gid or not security_id:
-				continue
-
-			raw_history = self.platform.chat_history(gid, security_id, page=1, count=50)
-			history = self._unwrap_or_raise(raw_history, fallback_message="聊天记录获取失败")
-			messages = history.get("messages") or history.get("historyMsgList") or []
-			for index, raw_message in enumerate(messages):
-				record = self._message_record_from_raw(
-					raw_message,
-					conversation=conversation,
-					gid=gid,
-					import_batch_id=import_batch_id,
-					index=index,
-				)
-				if record is None:
+		for batch in self._friend_item_batches(selected_items, size=_CONVERSATION_SYNC_BATCH_SIZE):
+			for raw_item in batch:
+				if not isinstance(raw_item, dict):
 					continue
-				if record.message_id in seen_message_ids:
+				conversation = self._save_conversation_from_friend_item(raw_item)
+				if conversation.conversation_id not in conversation_ids:
+					conversation_ids.append(conversation.conversation_id)
+
+				gid = str(conversation.state.get("gid", ""))
+				security_id = str(conversation.state.get("security_id", ""))
+				if not gid or not security_id:
 					continue
-				seen_message_ids.add(record.message_id)
-				self.store.save_message(record)
-				message_ids.append(record.message_id)
+
+				raw_history = self.platform.chat_history(gid, security_id, page=1, count=50)
+				history = self._unwrap_or_raise(raw_history, fallback_message="聊天记录获取失败")
+				messages = history.get("messages") or history.get("historyMsgList") or []
+				for index, raw_message in enumerate(messages):
+					record = self._message_record_from_raw(
+						raw_message,
+						conversation=conversation,
+						gid=gid,
+						import_batch_id=import_batch_id,
+						index=index,
+					)
+					if record is None:
+						continue
+					if record.message_id in seen_message_ids:
+						continue
+					seen_message_ids.add(record.message_id)
+					self.store.save_message(record)
+					message_ids.append(record.message_id)
 
 		self.store.append_audit_log(
 			AuditLogRecord.new(
@@ -483,26 +482,26 @@ class BossAutomationAdapter:
 			)
 		return matched
 
-	def _select_recent_and_unread_friend_items(self, items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+	def _dedupe_friend_items(self, items: list[dict[str, Any]]) -> list[dict[str, Any]]:
 		selected: list[dict[str, Any]] = []
 		seen: set[str] = set()
 
-		def add(item: dict[str, Any]) -> None:
+		for item in items:
+			if not isinstance(item, dict):
+				continue
 			key = self._conversation_id(item)
 			if key in seen:
-				return
+				continue
 			seen.add(key)
 			selected.append(item)
 
-		for item in items[:_RECENT_CONVERSATION_LIMIT]:
-			if isinstance(item, dict):
-				add(item)
-
-		for item in items[_RECENT_CONVERSATION_LIMIT:]:
-			if isinstance(item, dict) and self._unread_count(item) > 0:
-				add(item)
-
 		return selected
+
+	@staticmethod
+	def _friend_item_batches(items: list[dict[str, Any]], *, size: int) -> list[list[dict[str, Any]]]:
+		if size <= 0:
+			return [items]
+		return [items[index : index + size] for index in range(0, len(items), size)]
 
 	def _unwrap_or_raise(self, response: dict[str, Any], *, fallback_message: str) -> dict[str, Any]:
 		if not self.platform.is_success(response):
@@ -539,13 +538,6 @@ class BossAutomationAdapter:
 		gid = str(raw_item.get("uid") or raw_item.get("encryptUid") or "")
 		security_id = str(raw_item.get("securityId") or "")
 		return f"boss_recruiter_{gid or security_id or 'unknown'}"
-
-	@staticmethod
-	def _unread_count(raw_item: dict[str, Any]) -> int:
-		try:
-			return int(raw_item.get("unreadMsgCount") or 0)
-		except (TypeError, ValueError):
-			return 0
 
 	@staticmethod
 	def _build_job_summary(title: str, company: str, salary: str, city: str, description: str) -> str:
