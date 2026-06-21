@@ -4,7 +4,7 @@ export const watcherRiskLockWindowMs = 10 * 60 * 1000;
 const bossLoginRefreshMessage =
   "Boss 登录状态已失效或 token 刷新失败。请回到 BOSS 官方页面确认已登录，再刷新本页面后重试。";
 const bossAccountRiskMessage =
-  "Boss 账号触发风控，已停止自动化访问。请回到 BOSS 官方页面手动处理，恢复后刷新本页面。";
+  "当前 Boss 页面或自动化通道被安全检查拦截，已停止自动化访问。请先在 BOSS 官方页面确认页面可正常访问，恢复后回到本页解除本地锁再重试。";
 const bossAuthRecoveryCodes = new Set([
   "AUTH_REQUIRED",
   "AUTH_EXPIRED",
@@ -133,6 +133,6 @@ export function watcherRiskHint(watcherState, options = {}) {
 
 export function bossWatcherRiskLockMessage(watcherRiskStatusMessage) {
   return watcherRiskStatusMessage
-    ? `Boss 账号当前已被平台限制访问。${watcherRiskStatusMessage} 请回到 BOSS 官方页面手动处理或等待恢复后刷新重试。`
+    ? `当前 Boss 页面或自动化通道被安全检查拦截。${watcherRiskStatusMessage} 请先在 BOSS 官方页面确认页面可正常访问，恢复后回到本页解除本地锁再重试。`
     : "";
 }

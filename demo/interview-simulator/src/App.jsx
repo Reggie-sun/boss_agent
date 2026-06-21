@@ -723,6 +723,12 @@ export function App() {
     }
   }
 
+  async function handleClearBossAutomationRisk() {
+    setBossAutomationRiskLocked(false);
+    setBossAutomationError("");
+    await refreshWatcherStatus();
+  }
+
   useEffect(() => {
     let cancelled = false;
     async function loadBridgeState() {
@@ -1391,7 +1397,9 @@ export function App() {
             handleBossAutoGreet={handleBossAutoGreet}
             bossAutoButtonLabel={bossAutoButtonLabel}
             selectedProfileId={selectedProfileId}
+            bossAutomationRiskLocked={bossAutomationRiskLocked}
             bossAutomationError={bossAutomationError}
+            onClearBossAutomationRisk={handleClearBossAutomationRisk}
             bossAutomationProgress={bossAutomationProgress}
             bossAutomationIsGreeting={bossAutomationIsGreeting}
             bossAutomationProgressCurrent={bossAutomationProgressCurrent}

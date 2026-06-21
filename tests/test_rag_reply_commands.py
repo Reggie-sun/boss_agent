@@ -869,6 +869,29 @@ def test_agent_watcher_status_returns_recent_tasks(tmp_path: Path):
 	assert payload["data"]["tasks"] == []
 
 
+def test_agent_watcher_status_reports_paused_after_global_pause(tmp_path: Path):
+	(tmp_path / "config.json").write_text(
+		json.dumps({"boss_rag_watcher_enabled": True}),
+		encoding="utf-8",
+	)
+	runner = CliRunner()
+	pause = runner.invoke(
+		cli,
+		["--json", "--data-dir", str(tmp_path), "agent", "watcher-pause"],
+	)
+	status = runner.invoke(
+		cli,
+		["--json", "--data-dir", str(tmp_path), "agent", "watcher-status"],
+	)
+
+	assert pause.exit_code == 0
+	assert status.exit_code == 0
+	payload = json.loads(status.output)
+	assert payload["data"]["configured"] is True
+	assert payload["data"]["paused_by_control"] is True
+	assert payload["data"]["running"] is False
+
+
 def test_agent_watcher_status_returns_flattened_recent_tasks(tmp_path: Path):
 	store = RagReplyStore(tmp_path / "boss-rag.sqlite3")
 	store.initialize()

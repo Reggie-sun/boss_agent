@@ -29,7 +29,9 @@ export function OutreachWorkspace({
   handleBossAutoGreet,
   bossAutoButtonLabel,
   selectedProfileId,
+  bossAutomationRiskLocked,
   bossAutomationError,
+  onClearBossAutomationRisk,
   bossAutomationProgress,
   bossAutomationIsGreeting,
   bossAutomationProgressCurrent,
@@ -213,6 +215,15 @@ export function OutreachWorkspace({
             <div className="apply-result apply-result--error">
               <WarningCircle size={18} weight="fill" />
               <span>{bossAutomationError}</span>
+              {bossAutomationRiskLocked ? (
+                <button
+                  type="button"
+                  className="apply-result__action"
+                  onClick={onClearBossAutomationRisk}
+                >
+                  已处理，解除本地锁
+                </button>
+              ) : null}
             </div>
           ) : null}
 

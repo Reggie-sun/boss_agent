@@ -1839,12 +1839,13 @@ def test_passive_watcher_respects_global_pause_and_resume(tmp_path):
     delivery = _RecordingDelivery()
     config = _config(tmp_path)
     config.live_sync = True
+    syncer = _Syncer()
     watcher = BossPassiveWatcher(
         store=store,
         service=_integration_service(store),
         config=config,
         delivery=delivery,
-        message_syncer=_Syncer(),
+        message_syncer=syncer,
     )
 
     paused = watcher.run_once(live_sync=True)
@@ -1853,6 +1854,7 @@ def test_passive_watcher_respects_global_pause_and_resume(tmp_path):
     assert paused.blocked == 1
     assert paused.tasks[0]["status"] == "paused"
     assert delivery.calls == []
+    assert syncer.calls == 0
 
     store.append_audit_log(
         AuditLogRecord.new(

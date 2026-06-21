@@ -274,6 +274,23 @@ def _watcher_result_payload(result: WatcherRunResult) -> dict[str, object]:
 	}
 
 
+def _watcher_global_pause_active(store: RagReplyStore) -> bool:
+	paused = False
+	for entry in store.list_audit_logs():
+		if entry.event_type != "watcher_control":
+			continue
+		payload = entry.payload if isinstance(entry.payload, dict) else {}
+		applies_globally = entry.entity_id == "global" or payload.get("scope") == "global"
+		if not applies_globally:
+			continue
+		action = str(payload.get("action") or "").lower()
+		if action == "pause":
+			paused = True
+		elif action == "resume":
+			paused = False
+	return paused
+
+
 def _emit_watcher_cycle_progress(cycle: int, result: WatcherRunResult) -> None:
 	click.echo(
 		(
@@ -1689,6 +1706,7 @@ def rag_send_cmd(
 def rag_watcher_status_cmd(ctx: click.Context, limit: int) -> None:
 	store = _resolve_store(ctx)
 	config = _build_watcher_config(ctx)
+	paused_by_control = _watcher_global_pause_active(store)
 	safe_limit = max(1, min(limit, 50))
 	task_entries = [
 		entry
@@ -1700,7 +1718,9 @@ def rag_watcher_status_cmd(ctx: click.Context, limit: int) -> None:
 		ctx,
 		_workflow_command(ctx, "watcher-status"),
 		{
-			"running": config.enabled,
+			"configured": config.enabled,
+			"paused_by_control": paused_by_control,
+			"running": config.enabled and not paused_by_control,
 			"dry_run": config.dry_run,
 			"tasks": [_watcher_audit_payload(entry) for entry in recent_tasks],
 		},

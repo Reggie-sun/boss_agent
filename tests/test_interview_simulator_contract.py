@@ -97,6 +97,20 @@ def test_interview_simulator_profile_hub_hides_manual_kb_and_tracks_uploads():
 	assert "/uploads" in profile_bridge
 
 
+def test_interview_simulator_boss_risk_copy_is_page_scoped_and_clearable():
+	repo_root = Path(__file__).resolve().parents[1]
+	app = (repo_root / "demo" / "interview-simulator" / "src" / "App.jsx").read_text(encoding="utf-8")
+	errors = (repo_root / "demo" / "interview-simulator" / "src" / "bossBridgeErrors.js").read_text(encoding="utf-8")
+	outreach = (repo_root / "demo" / "interview-simulator" / "src" / "views" / "OutreachWorkspace.jsx").read_text(encoding="utf-8")
+
+	assert "Boss 账号触发风控" not in errors
+	assert "Boss 账号当前已被平台限制访问" not in errors
+	assert "当前 Boss 页面或自动化通道" in errors
+	assert "handleClearBossAutomationRisk" in app
+	assert "onClearBossAutomationRisk" in outreach
+	assert "已处理，解除本地锁" in outreach
+
+
 def test_interview_simulator_profile_binding_uses_cli_supported_source():
 	repo_root = Path(__file__).resolve().parents[1]
 	profile_hub = (repo_root / "demo" / "interview-simulator" / "src" / "views" / "ProfileHub.jsx").read_text(encoding="utf-8")

@@ -1791,6 +1791,24 @@ button {
   flex: 0 0 auto;
 }
 
+.apply-result > span {
+  min-width: 0;
+  flex: 1 1 auto;
+  overflow-wrap: anywhere;
+}
+
+.apply-result__action {
+  flex: 0 0 auto;
+  padding: 7px 10px;
+  border: 1px solid currentColor;
+  border-radius: 8px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 0.78rem;
+  cursor: pointer;
+}
+
 .apply-result__content {
   min-width: 0;
   display: flex;

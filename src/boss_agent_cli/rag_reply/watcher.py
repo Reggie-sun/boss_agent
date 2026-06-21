@@ -95,6 +95,27 @@ class BossPassiveWatcher:
     def run_once(self, *, live_sync: bool | None = None) -> WatcherRunResult:
         if live_sync is None:
             live_sync = self.config.live_sync
+        if self._is_paused(""):
+            task = self._record_run_task(
+                {
+                    "message_id": "",
+                    "conversation_id": "",
+                    "draft_id": "",
+                    "intent": "unknown",
+                    "status": "paused",
+                    "error_message": "watcher_paused",
+                    "dry_run": self.config.dry_run,
+                    "action": {},
+                    "delivery": {},
+                    "live_sync": bool(live_sync),
+                }
+            )
+            return WatcherRunResult(
+                processed=0,
+                skipped=0,
+                blocked=1,
+                tasks=[task],
+            )
         if not live_sync and not self.config.dry_run:
             task = self._record_run_task(
                 _sync_blocked_task(
