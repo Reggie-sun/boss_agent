@@ -103,5 +103,119 @@ CREATE_TABLE_STATEMENTS = (
 		created_at TEXT NOT NULL
 	)
 	""",
+	"""
+	CREATE TABLE IF NOT EXISTS tenants (
+		tenant_id TEXT PRIMARY KEY,
+		display_name TEXT NOT NULL,
+		plan_code TEXT NOT NULL,
+		subscription_status TEXT NOT NULL,
+		license_key_hash TEXT NOT NULL,
+		payment_provider TEXT NOT NULL,
+		provider_customer_id TEXT NOT NULL,
+		provider_subscription_id TEXT NOT NULL,
+		created_at TEXT NOT NULL,
+		updated_at TEXT NOT NULL
+	)
+	""",
+	"""
+	CREATE TABLE IF NOT EXISTS users (
+		user_id TEXT PRIMARY KEY,
+		tenant_id TEXT NOT NULL,
+		display_name TEXT NOT NULL,
+		email TEXT NOT NULL,
+		role TEXT NOT NULL,
+		status TEXT NOT NULL,
+		created_at TEXT NOT NULL,
+		updated_at TEXT NOT NULL
+	)
+	""",
+	"""
+	CREATE TABLE IF NOT EXISTS user_profiles (
+		profile_id TEXT PRIMARY KEY,
+		tenant_id TEXT NOT NULL,
+		user_id TEXT NOT NULL,
+		display_name TEXT NOT NULL,
+		target_title TEXT NOT NULL,
+		knowledge_base_id TEXT NOT NULL,
+		status TEXT NOT NULL,
+		created_at TEXT NOT NULL,
+		updated_at TEXT NOT NULL
+	)
+	""",
+	"""
+	CREATE TABLE IF NOT EXISTS profile_configs (
+		profile_id TEXT PRIMARY KEY,
+		tenant_id TEXT NOT NULL,
+		contact_phone TEXT NOT NULL,
+		contact_wechat TEXT NOT NULL,
+		interview_windows TEXT NOT NULL,
+		salary_reply_policy TEXT NOT NULL,
+		resume_attachment_path TEXT NOT NULL,
+		reply_auto_send_enabled INTEGER NOT NULL,
+		outreach_auto_send_enabled INTEGER NOT NULL,
+		proactive_resume_enabled INTEGER NOT NULL,
+		updated_at TEXT NOT NULL
+	)
+	""",
+	"""
+	CREATE TABLE IF NOT EXISTS profile_uploads (
+		upload_id TEXT PRIMARY KEY,
+		tenant_id TEXT NOT NULL,
+		user_id TEXT NOT NULL,
+		profile_id TEXT NOT NULL,
+		source_filename TEXT NOT NULL,
+		source_type TEXT NOT NULL,
+		source_size_bytes INTEGER NOT NULL,
+		rag_document_id TEXT NOT NULL,
+		status TEXT NOT NULL,
+		error_message TEXT NOT NULL,
+		created_at TEXT NOT NULL,
+		updated_at TEXT NOT NULL
+	)
+	""",
+	"""
+	CREATE TABLE IF NOT EXISTS conversation_profile_bindings (
+		conversation_id TEXT PRIMARY KEY,
+		tenant_id TEXT NOT NULL,
+		user_id TEXT NOT NULL,
+		profile_id TEXT NOT NULL,
+		knowledge_base_id TEXT NOT NULL,
+		binding_source TEXT NOT NULL,
+		created_at TEXT NOT NULL,
+		updated_at TEXT NOT NULL
+	)
+	""",
+	"""
+	CREATE TABLE IF NOT EXISTS profile_rag_auth_bindings (
+		profile_id TEXT PRIMARY KEY,
+		tenant_id TEXT NOT NULL,
+		user_id TEXT NOT NULL,
+		auth_mode TEXT NOT NULL,
+		credential_ref TEXT NOT NULL,
+		scope_type TEXT NOT NULL,
+		scope_id TEXT NOT NULL,
+		updated_at TEXT NOT NULL
+	)
+	""",
+	"""
+	CREATE TABLE IF NOT EXISTS usage_counters (
+		tenant_id TEXT NOT NULL,
+		user_id TEXT NOT NULL,
+		profile_id TEXT NOT NULL,
+		metric_name TEXT NOT NULL,
+		period_start TEXT NOT NULL,
+		period_end TEXT NOT NULL,
+		used_count INTEGER NOT NULL,
+		limit_count INTEGER NOT NULL,
+		updated_at TEXT NOT NULL,
+		PRIMARY KEY (
+			tenant_id,
+			user_id,
+			profile_id,
+			metric_name,
+			period_start,
+			period_end
+		)
+	)
+	""",
 )
-
