@@ -1,12 +1,14 @@
 # Boss Agent Current Stage
 
-> Last updated: 2026-06-17
+> Last updated: 2026-06-21
 >
 > Scope: 本文档用于说明当前 `BOSS_AGENT` 项目已经推进到什么阶段、哪些链路已经可用、哪些仍然需要真实 Boss 会话验证，以及下一步应该怎么接着做。
 
 ## Executive Summary
 
 当前项目处在 **本地前端模拟器 + Agent workflow 联调完成，真实 Boss 发送预检已接入，但候选人聊天页登录前置态仍未通过** 的阶段。
+
+2026-06-21 新增的商业 profile layer 已完成本地 schema、service、CLI、RAG connector、conversation binding、watcher/outreach gate 和前端 profile console。当前边界是：本地 profile / RAG 上下文 / gate 配置可以完整管理，但不会绕过 Boss 平台 live 预检，也不会默认放开真实发送。
 
 和上一阶段相比，当前结论已经发生了一个关键变化：
 
@@ -18,7 +20,7 @@
 
 - 本地前端 `demo/interview-simulator` 可以通过 `/api/agent/ask` 调用后端 `boss agent ask`。
 - 后端已经不是直接把前端问题当作普通 RAG 问答，而是进入 `BossRagReplyService`，由 Agent workflow 做意图分类、RAG 调用、本地策略回复、候选人口吻改写和草稿持久化。
-- 常见 HR 问法已经有较稳定的候选人回答，包括项目介绍、自我介绍、代表项目、项目难点、系统设计、岗位匹配、协作方式。
+- 候选人个人回答不再依赖本地个人模板；没有 AI 或 bound profile RAG grounding 时会返回 `profile_required`，避免编造固定候选人经历。
 - “发一下简历”会识别为 `resume_share_request`，前端会带 `auto_send_resume: true`，后端会尝试进入真实发送链路。
 - 前端现在会在提问和发送两个入口里自动补齐可用 `security_id`，不再因为“没有手工选目标”就直接失败。
 - 前端和后端都已经改成：**不是只看 CDP 端口通不通，而是预检 Boss 候选人聊天页是否真的可达**。
@@ -61,6 +63,7 @@
 | Resume send switch | enabled | `.env` 中 `BOSS_RAG_SEND_ENABLED=true` |
 | Boss live auth | failed | `boss status --live -> AUTH_EXPIRED` |
 | Boss chat preflight | failed | `/api/agent/health -> preflightStatus=chat_login_redirect` |
+| Commercial profile layer | local-ready | schema/service/CLI/frontend/profile gates 已完成；未做 live Boss delivery 验证 |
 
 ## Architecture Status
 
@@ -74,7 +77,7 @@ demo/interview-simulator
   -> BossRagReplyService
   -> classify_message(...)
   -> Enterprise RAG or local policy
-  -> AgentAnswerAdapter / local template fallback
+  -> AgentAnswerAdapter / profile_required when grounding is missing
   -> draft + thread memory + optional delivery
 ```
 
@@ -127,18 +130,40 @@ Boss inbound message
 - Frontend watcher console 的 running 状态会周期性触发 `POST /api/agent/watcher/run { liveSync: true }`。
 - Bridge/CDP 不可用、`ACCOUNT_RISK`、`AUTH_EXPIRED`、缺少 `security_id` 或空草稿时，全自动链路只写 audit，不发送。
 
+Commercial profile layer 的当前调用链路是：
+
+```text
+demo/interview-simulator Profile Hub
+  -> /api/agent/profiles / /api/agent/profile-binding / /api/agent/usage
+  -> boss agent profile / conversation / usage
+  -> ProfileService + local SQLite
+  -> RagProfileConnector / ProfileRagAuthResolver when asking with bound profile
+```
+
+profile config 现在是以下字段的 source of truth：
+
+- `contact_phone` / `contact_wechat`
+- `interview_windows`
+- `salary_reply_policy`
+- `resume_attachment_path`
+- `reply_auto_send_enabled`
+- `outreach_auto_send_enabled`
+- `proactive_resume_enabled`
+
+缺失联系方式、面试时间、薪资策略或简历路径时，匹配意图会 fail closed；profile 禁用 live reply/outreach 时，watcher、read-no-reply follow-up 和前端 Boss 自动开聊都会在本地 gate 阻断。
+
 ## Completed Work
 
-### Agent Answer Quality
+### Agent Answer Quality And Profile Grounding
 
 已完成：
 
-- 常见 HR 项目问题会生成候选人口吻回答。
-- 当上游 RAG 返回生硬 Markdown、第三人称描述或答案偏长时，会通过 `AgentAnswerAdapter` 做本地改写或模板兜底。
+- grounded RAG answer 仍会通过 `AgentAnswerAdapter` 做候选人口吻改写或规则化 cleanup。
 - 当没有外部 AI 改写服务时，不再错误复用 RAG API key 去调用 DeepSeek。
-- 如果 RAG 问法不稳定或局部失败，典型 HR 问题可以通过本地模板兜底，避免前端出现空回答或 `502`。
+- 没有 AI 且没有 profile-grounded RAG answer 时，个人候选人回答返回 `profile_required`，不再使用本地个人经历模板。
+- 泛化招聘邀约回复模板仍保留，用于无 AI 时回答“是否愿意沟通岗位机会”这类低风险消息。
 
-覆盖的典型问题包括：
+必须有 profile/RAG grounding 的典型问题包括：
 
 - `请你做一个简短的自我介绍，重点说和企业级 RAG 相关的经历。`
 - `请介绍一下你做的企业级 RAG 项目，重点说清楚你的职责、核心技术方案和结果。`
@@ -285,7 +310,13 @@ python scripts/stack_readiness.py --pretty
 | File | Purpose |
 | --- | --- |
 | `demo/interview-simulator/src/App.jsx` | 前端显示 Boss 发送预检状态，并继续保留 `security_id` 自动兜底 |
+| `demo/interview-simulator/src/views/ProfileHub.jsx` | profile 选择、创建、config gate 和 conversation binding 控制台 |
+| `demo/interview-simulator/src/views/ReplyWorkspace.jsx` | Agent ask / send to Boss 工作区 |
+| `demo/interview-simulator/src/views/OutreachWorkspace.jsx` | Boss 自动开聊工作区，商业 profile gate 生效 |
+| `demo/interview-simulator/server/profileBridge.mjs` | 前端本地 profile bridge endpoints |
 | `demo/interview-simulator/vite.config.mjs` | health/send 改成真实 chat page preflight，不再只看 CDP 端口 |
+| `src/boss_agent_cli/rag_reply/profile_service.py` | tenant/user/profile/upload/config/binding/usage 本地服务 |
+| `src/boss_agent_cli/rag_reply/rag_profile_connector.py` | profile-aware Enterprise RAG ask connector |
 | `src/boss_agent_cli/api/browser_client.py` | 复用 CDP context 时不再回灌旧 cookie |
 | `src/boss_agent_cli/api/client.py` | 候选人聊天页跳登录时返回明确 `boss_chat_login_required` 语义 |
 | `src/boss_agent_cli/auth/browser.py` | `login_via_cdp()` 增加登录完成后的稳定等待 |
@@ -310,6 +341,8 @@ python scripts/stack_readiness.py --pretty
 boss status --live -> AUTH_EXPIRED
 /api/agent/health -> browserChannel.preflightStatus = chat_login_redirect
 ```
+
+本次 commercial profile layer 收尾只覆盖本地 profile persistence、profile-aware RAG context、配置 gate、CLI/bridge/frontend 数据面和文档更新；没有执行新的真实 Boss delivery 验证，也没有把 profile gate 视为绕过 live Boss 预检的通道。
 
 因此，当前还不能把失败归因于：
 

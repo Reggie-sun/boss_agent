@@ -674,6 +674,17 @@ V1 边界是 `Boss read-only automation + RAG draft reply + human approval send 
 - `salary_or_offer`、`resume_share_request`、`availability_or_schedule`、`personal_status`、`interview_time`、`resignation_status`、`contact_exchange`、`unsafe_or_unclear` 都会被策略层打上高风险标签。
 - 如果 Enterprise RAG 调用失败，workflow 会 fail closed：保存 `rag_failed` 审计记录，但不会打开任何发送路径。
 
+### Commercial Profile Layer
+
+Commercial profile layer 为 Boss Agent workflow 增加了本地 `tenant / user / profile` 模型，用来把候选人画像、RAG 知识库绑定、对话绑定和自动化边界拆开管理。相关命令集中在 `boss agent profile ...`、`boss agent conversation ...` 和 `boss agent usage ...`；前端模拟器通过本地 bridge 暴露 `/api/agent/profiles`、`/api/agent/profile-binding` 和 `/api/agent/usage`。
+
+- `tenant` 和 `user` 是本地多帐号边界；`profile` 属于某个 tenant/user，并保存展示名称、目标岗位和可选 `knowledge_base_id`。
+- `profile upload` 记录 profile 关联资料的本地上传状态；`profile rag-auth bind` 保存 profile 到 Enterprise RAG 的认证和 knowledge base 绑定。
+- `conversation bind-profile` 把 Boss conversation 绑定到一个 profile，后续 `agent ask`、watcher draft 和 profile-aware RAG connector 都可以复用这个上下文。
+- `profile config` 是联系方式、可面试时间、薪资回复策略、简历路径、`reply_auto_send_enabled`、`outreach_auto_send_enabled` 和 `proactive_resume_enabled` 的 source of truth；缺少对应配置时，相关意图会 fail closed 或进入人工处理。
+- 付款 provider / external customer / subscription 字段已经在本地 schema 中预留并可持久化，但 payment callback、计费同步和外部结算流程不在当前实现范围内。
+- 现有 reply、outreach、watcher、`/api/agent/ask`、`/api/agent/send`、`/api/boss/auto-greet`、附件简历发送开关和 MCP/CLI surface 继续保留；commercial profile layer 只增加本地 profile gate，不默认放开真实平台写操作。
+
 ---
 
 ## 🏗️ 技术架构
