@@ -315,6 +315,7 @@ class BossAutomationAdapter:
 				conversation = self._save_conversation_from_friend_item(raw_item)
 				candidate.update(
 					{
+						"conversation_id": conversation.conversation_id,
 						"gid": str(conversation.state.get("gid") or ""),
 						"friend_id": str(conversation.state.get("friend_id") or ""),
 						"uid": str(conversation.state.get("uid") or ""),

@@ -13,10 +13,18 @@ from boss_agent_cli.rag_reply.models import (
     DraftRecord,
     MessageRecord,
 )
+from boss_agent_cli.rag_reply.profile_models import (
+    ConversationProfileBindingRecord,
+    ProfileConfigRecord,
+    TenantRecord,
+    UserProfileRecord,
+    UserRecord,
+)
+from boss_agent_cli.rag_reply.profile_service import ProfileService
 from boss_agent_cli.rag_reply.service import BossRagReplyService
 from boss_agent_cli.rag_reply.store import RagReplyStore
 from boss_agent_cli.rag_reply.watcher import BossPassiveWatcher
-from boss_agent_cli.rag_reply.watcher_config import WatcherConfig, WatcherConfigError
+from boss_agent_cli.rag_reply.watcher_config import WatcherConfig, WatcherConfigError, with_profile_config
 
 
 DRAFT_TEXT_INTENTS = [
@@ -130,10 +138,51 @@ def test_contact_exchange_uses_fixed_contact_reply(tmp_path):
     assert action.kind == "send_text"
 
 
-def test_salary_or_offer_sends_preset_draft_when_available(tmp_path):
+def test_with_profile_config_overrides_reply_and_resume_gates(tmp_path):
+    base = _config(tmp_path)
+    base.proactive_resume_enabled = True
+    profile_resume = tmp_path / "profile-resume.pdf"
+    profile_resume.write_bytes(b"%PDF-1.4\n")
+
+    effective = with_profile_config(
+        base,
+        ProfileConfigRecord(
+            tenant_id="tenant_001",
+            profile_id="profile_ai",
+            contact_phone="13900139000",
+            contact_wechat="profile-wechat",
+            interview_windows="周三 19:00 后",
+            salary_reply_policy="薪资需要本人确认。",
+            resume_attachment_path=str(profile_resume),
+            reply_auto_send_enabled=False,
+            outreach_auto_send_enabled=False,
+            proactive_resume_enabled=False,
+        ),
+    )
+
+    assert effective.send_enabled is False
+    assert effective.proactive_resume_enabled is False
+    assert effective.contact_phone == "13900139000"
+    assert effective.contact_wechat == "profile-wechat"
+    assert effective.interview_windows == "周三 19:00 后"
+    assert effective.salary_reply_policy == "薪资需要本人确认。"
+    assert effective.resume_attachment_path == str(profile_resume)
+
+
+def test_salary_or_offer_without_policy_blocks_even_with_draft(tmp_path):
+    with pytest.raises(WatcherConfigError, match="boss_rag_salary_reply"):
+        build_action_for_draft(
+            _draft("salary_or_offer", "当前薪资和期望薪资按候选人预设回复。"),
+            _config(tmp_path),
+        )
+
+
+def test_salary_or_offer_sends_draft_when_policy_available(tmp_path):
+    config = _config(tmp_path)
+    config.salary_reply_policy = "薪资需要本人确认。"
     action = build_action_for_draft(
         _draft("salary_or_offer", "当前薪资和期望薪资按候选人预设回复。"),
-        _config(tmp_path),
+        config,
     )
 
     assert action.kind == "send_text"
@@ -141,11 +190,19 @@ def test_salary_or_offer_sends_preset_draft_when_available(tmp_path):
     assert action.status_after_send == "sent"
 
 
-def test_salary_or_offer_sends_handoff_and_blocks_after_send(tmp_path):
-    action = build_action_for_draft(_draft("salary_or_offer", ""), _config(tmp_path))
+def test_salary_or_offer_without_policy_blocks_before_send(tmp_path):
+    with pytest.raises(WatcherConfigError, match="boss_rag_salary_reply"):
+        build_action_for_draft(_draft("salary_or_offer", ""), _config(tmp_path))
 
-    assert "薪资相关问题需要候选人本人确认后回复" in action.message
-    assert action.status_after_send == "blocked_manual_required"
+
+def test_salary_or_offer_uses_configured_policy(tmp_path):
+    config = _config(tmp_path)
+    config.salary_reply_policy = "薪资需要本人确认。"
+    action = build_action_for_draft(_draft("salary_or_offer", ""), config)
+
+    assert action.kind == "send_text"
+    assert action.message == "薪资需要本人确认。"
+    assert action.status_after_send == "sent"
 
 
 def test_unknown_intent_blocks(tmp_path):
@@ -320,6 +377,61 @@ def _service(store):
 
 def _integration_service(store):
     return BossRagReplyService(store=store, rag_adapter=_IntegrationRagAdapter())
+
+
+def _bind_profile_config(
+    store,
+    *,
+    conversation_id="conv_001",
+    reply_auto_send_enabled=True,
+    outreach_auto_send_enabled=True,
+    proactive_resume_enabled=False,
+    resume_attachment_path="",
+):
+    profile_service = ProfileService(store)
+    profile_service.save_tenant(TenantRecord(tenant_id="tenant_001", display_name="Demo"))
+    profile_service.save_user(
+        UserRecord(
+            tenant_id="tenant_001",
+            user_id="user_001",
+            display_name="Reggie",
+            email="r@example.com",
+        )
+    )
+    profile_service.save_profile(
+        UserProfileRecord(
+            tenant_id="tenant_001",
+            user_id="user_001",
+            profile_id="profile_ai",
+            display_name="AI 应用工程师",
+            target_title="AI Application Engineer",
+            knowledge_base_id="kb_ai",
+        )
+    )
+    profile_service.save_profile_config(
+        ProfileConfigRecord(
+            tenant_id="tenant_001",
+            profile_id="profile_ai",
+            contact_phone="13900139000",
+            contact_wechat="profile-wechat",
+            interview_windows="周三 19:00 后",
+            salary_reply_policy="薪资需要本人确认。",
+            resume_attachment_path=resume_attachment_path,
+            reply_auto_send_enabled=reply_auto_send_enabled,
+            outreach_auto_send_enabled=outreach_auto_send_enabled,
+            proactive_resume_enabled=proactive_resume_enabled,
+        )
+    )
+    profile_service.bind_conversation(
+        ConversationProfileBindingRecord(
+            tenant_id="tenant_001",
+            user_id="user_001",
+            conversation_id=conversation_id,
+            profile_id="profile_ai",
+            knowledge_base_id="kb_ai",
+        )
+    )
+    return profile_service
 
 
 def test_run_once_sends_contact_reply_and_writes_audit(tmp_path):
@@ -812,6 +924,55 @@ def test_passive_watcher_resume_share_sends_attachment_resume(tmp_path):
     assert delivery.calls[0]["resume_file"] == config.resume_attachment_path
 
 
+def test_passive_watcher_profile_config_disables_live_reply_send_but_keeps_draft(tmp_path):
+    store = _store(tmp_path)
+    store.save_conversation(
+        ConversationRecord(
+            conversation_id="conv_001",
+            source="boss_sync",
+            state={"security_id": "sec_001"},
+        )
+    )
+    store.save_message(
+        MessageRecord(
+            message_id="msg_001",
+            conversation_id="conv_001",
+            message_text="你好",
+            direction="inbound",
+        )
+    )
+    config = _config(tmp_path)
+    config.live_sync = True
+    profile_service = _bind_profile_config(
+        store,
+        reply_auto_send_enabled=False,
+        resume_attachment_path=config.resume_attachment_path,
+    )
+    delivery = _RecordingDelivery()
+    watcher = BossPassiveWatcher(
+        store=store,
+        service=BossRagReplyService(
+            store=store,
+            rag_adapter=_IntegrationRagAdapter(),
+            profile_service=profile_service,
+            profile_binding_required=False,
+        ),
+        config=config,
+        delivery=delivery,
+        message_syncer=_Syncer(),
+    )
+
+    result = watcher.run_once(live_sync=True)
+
+    assert result.processed == 0
+    assert result.blocked == 1
+    assert result.tasks[0]["status"] == "blocked_manual_required"
+    assert result.tasks[0]["error_message"] == "profile_reply_auto_send_disabled"
+    assert result.tasks[0]["tool_steps"][-2]["error_code"] == "PROFILE_CONFIG_DISABLED"
+    assert store.list_drafts()
+    assert delivery.calls == []
+
+
 def test_passive_watcher_sends_proactive_resume_after_first_boss_reply(tmp_path):
     store = _store(tmp_path)
     store.save_conversation(
@@ -908,6 +1069,54 @@ def test_passive_watcher_processes_read_no_reply_pipeline_candidate(tmp_path):
         "send_read_no_reply_followup_guarded",
         "record_watcher_audit",
     ]
+    assert delivery.calls == []
+
+
+def test_passive_watcher_blocks_read_no_reply_when_profile_send_disabled(tmp_path):
+    store = _store(tmp_path)
+    delivery = _RecordingDelivery()
+    config = _config(tmp_path)
+    config.dry_run = False
+    config.send_enabled = True
+    profile_service = _bind_profile_config(
+        store,
+        conversation_id="conv_read",
+        reply_auto_send_enabled=False,
+        resume_attachment_path=config.resume_attachment_path,
+    )
+    pipeline_provider = _PipelineProvider(
+        [
+            {
+                "stage": "read_no_reply",
+                "conversation_id": "conv_read",
+                "security_id": "sec_read",
+                "company": "测试公司",
+                "title": "AI 工程师",
+            }
+        ]
+    )
+    watcher = BossPassiveWatcher(
+        store=store,
+        service=BossRagReplyService(
+            store=store,
+            rag_adapter=_IntegrationRagAdapter(),
+            profile_service=profile_service,
+            profile_binding_required=False,
+        ),
+        config=config,
+        delivery=delivery,
+        message_syncer=_Syncer(),
+        pipeline_candidate_provider=pipeline_provider,
+    )
+
+    result = watcher.run_once(live_sync=True)
+
+    assert result.processed == 0
+    assert result.blocked == 1
+    assert result.tasks[0]["conversation_id"] == "conv_read"
+    assert result.tasks[0]["status"] == "blocked_manual_required"
+    assert result.tasks[0]["error_message"] == "profile_reply_auto_send_disabled"
+    assert result.tasks[0]["tool_steps"][0]["error_code"] == "PROFILE_CONFIG_DISABLED"
     assert delivery.calls == []
 
 

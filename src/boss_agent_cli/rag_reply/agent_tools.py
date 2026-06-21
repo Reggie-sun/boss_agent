@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -22,7 +22,7 @@ from boss_agent_cli.rag_reply.auto_actions import (
 )
 from boss_agent_cli.rag_reply.models import AuditLogRecord, DraftRecord, MessageRecord
 from boss_agent_cli.rag_reply.store import RagReplyStore
-from boss_agent_cli.rag_reply.watcher_config import WatcherConfig, WatcherConfigError
+from boss_agent_cli.rag_reply.watcher_config import WatcherConfig, WatcherConfigError, with_profile_config
 
 
 class AgentToolDraftService(Protocol):
@@ -146,9 +146,16 @@ class BossAgentToolbox:
                 error_code="DRAFT_NOT_FOUND",
                 error_message=f"unknown_draft:{draft_id}",
             )
+        effective_config, profile_config = self._effective_config_for_conversation(draft.conversation_id)
         try:
-            action = build_action_for_draft(draft, self.context.config)
-            action = self._with_proactive_resume(draft, action)
+            action = build_action_for_draft(draft, effective_config)
+            if profile_config is not None:
+                action = replace(
+                    action,
+                    profile_config_applied=True,
+                    profile_reply_auto_send_enabled=profile_config.reply_auto_send_enabled,
+                )
+            action = self._with_proactive_resume(draft, action, effective_config)
         except WatcherConfigError as exc:
             return _blocked_result(
                 error_code="INVALID_PARAM",
@@ -169,9 +176,9 @@ class BossAgentToolbox:
         )
 
     def _with_proactive_resume(
-        self, draft: DraftRecord, action: AutoReplyAction
+        self, draft: DraftRecord, action: AutoReplyAction, config: WatcherConfig
     ) -> AutoReplyAction:
-        if not self.context.config.proactive_resume_enabled:
+        if not config.proactive_resume_enabled:
             return action
         if action.kind != "send_text" or action.send_attachment_resume:
             return action
@@ -184,9 +191,11 @@ class BossAgentToolbox:
             message=action.message,
             status_after_send=action.status_after_send,
             send_attachment_resume=True,
-            resume_file=require_resume_file(self.context.config.resume_attachment_path),
+            resume_file=require_resume_file(config.resume_attachment_path),
             blocked_reason=action.blocked_reason,
             attachment_required=False,
+            profile_config_applied=action.profile_config_applied,
+            profile_reply_auto_send_enabled=action.profile_reply_auto_send_enabled,
         )
 
     def resolve_boss_target(self, *, conversation_id: str) -> ToolResult:
@@ -213,6 +222,17 @@ class BossAgentToolbox:
         security_id: str,
         target: dict[str, str],
     ) -> ToolResult:
+        if (
+            not self.context.config.dry_run
+            and bool(action.get("profile_config_applied"))
+            and action.get("profile_reply_auto_send_enabled") is False
+        ):
+            return _blocked_result(
+                error_code="PROFILE_CONFIG_DISABLED",
+                error_message="profile_reply_auto_send_disabled",
+                recoverable=True,
+                recovery_action="Enable reply auto-send for the selected profile before live watcher delivery.",
+            )
         if not self.context.config.dry_run and not self.context.config.send_enabled:
             return _blocked_result(
                 error_code="SEND_DISABLED",
@@ -396,17 +416,46 @@ class BossAgentToolbox:
             ),
         )
 
+    def _effective_config_for_conversation(self, conversation_id: str) -> tuple[WatcherConfig, object | None]:
+        profile_service = getattr(self.context.service, "profile_service", None)
+        if profile_service is None:
+            return self.context.config, None
+        binding = profile_service.get_conversation_binding(conversation_id)
+        if binding is None:
+            return self.context.config, None
+        profile_config = profile_service.get_profile_config(binding.profile_id)
+        return with_profile_config(self.context.config, profile_config), profile_config
+
     def send_read_no_reply_followup_guarded(
         self,
         *,
         security_id: str,
         message: str = "",
         target: dict[str, str] | None = None,
+        conversation_id: str = "",
     ) -> ToolResult:
         security_id = security_id.strip()
         if not security_id:
             return _blocked_result(error_message="missing_security_id")
-        if not self.context.config.dry_run and not self.context.config.send_enabled:
+        effective_config = self.context.config
+        profile_config = None
+        conversation_id = conversation_id.strip()
+        if conversation_id:
+            effective_config, profile_config = self._effective_config_for_conversation(
+                conversation_id
+            )
+        if (
+            not effective_config.dry_run
+            and profile_config is not None
+            and not profile_config.reply_auto_send_enabled
+        ):
+            return _blocked_result(
+                error_code="PROFILE_CONFIG_DISABLED",
+                error_message="profile_reply_auto_send_disabled",
+                recoverable=True,
+                recovery_action="Enable reply auto-send for the selected profile before live watcher delivery.",
+            )
+        if not effective_config.dry_run and not effective_config.send_enabled:
             return _blocked_result(
                 error_code="SEND_DISABLED",
                 error_message="boss_rag_send_enabled_disabled",
@@ -423,7 +472,7 @@ class BossAgentToolbox:
                 security_id,
             ),
         )
-        if self.context.config.dry_run:
+        if effective_config.dry_run:
             return ToolResult(
                 ok=True,
                 status="dry_run",
@@ -587,7 +636,7 @@ class BossAgentToolbox:
 
 
 def _action_payload(action: AutoReplyAction) -> dict[str, object]:
-    return {
+    payload: dict[str, object] = {
         "kind": action.kind,
         "message": action.message,
         "status_after_send": action.status_after_send,
@@ -596,6 +645,10 @@ def _action_payload(action: AutoReplyAction) -> dict[str, object]:
         "blocked_reason": action.blocked_reason,
         "attachment_required": action.attachment_required,
     }
+    if action.profile_config_applied:
+        payload["profile_config_applied"] = True
+        payload["profile_reply_auto_send_enabled"] = action.profile_reply_auto_send_enabled
+    return payload
 
 
 def _message_payload(message: MessageRecord) -> dict[str, object]:

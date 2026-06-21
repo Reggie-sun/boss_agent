@@ -12,6 +12,7 @@ from boss_agent_cli.rag_reply.watcher_config import (
     build_contact_reply,
     build_interview_window_reply,
     salary_handoff_reply,
+    salary_preset_reply,
 )
 
 
@@ -36,6 +37,8 @@ class AutoReplyAction:
     resume_file: str = ""
     blocked_reason: str = ""
     attachment_required: bool = False
+    profile_config_applied: bool = False
+    profile_reply_auto_send_enabled: bool = True
 
 
 def build_action_for_draft(
@@ -66,13 +69,14 @@ def build_action_for_draft(
     if intent == "contact_exchange":
         return AutoReplyAction(kind="send_text", message=build_contact_reply(config))
     if intent == "salary_or_offer":
+        preset = salary_preset_reply(config.salary_reply_policy)
+        if preset == salary_handoff_reply():
+            raise WatcherConfigError(
+                "boss_rag_salary_reply is required for automatic salary replies."
+            )
         if draft_text and draft_text != salary_handoff_reply():
             return AutoReplyAction(kind="send_text", message=draft_text)
-        return AutoReplyAction(
-            kind="send_text",
-            message=salary_handoff_reply(),
-            status_after_send="blocked_manual_required",
-        )
+        return AutoReplyAction(kind="send_text", message=preset)
     return AutoReplyAction(
         kind="block",
         status_after_send="blocked_manual_required",

@@ -88,6 +88,25 @@ def test_agent_profile_create_list_config_and_bind(tmp_path: Path):
 	assert _envelope(config.output)["command"] == "agent-profile-config-set"
 	assert _json(config.output)["config"]["reply_auto_send_enabled"] is True
 
+	config_get = runner.invoke(
+		cli,
+		[
+			"--json",
+			"--data-dir",
+			str(tmp_path),
+			"agent",
+			"profile",
+			"config",
+			"get",
+			"--profile-id",
+			profile_id,
+		],
+	)
+	assert config_get.exit_code == 0
+	assert _envelope(config_get.output)["command"] == "agent-profile-config-get"
+	assert _json(config_get.output)["config"]["contact_wechat"] == "reggie-ai"
+	assert _json(config_get.output)["config"]["outreach_auto_send_enabled"] is False
+
 	bind = runner.invoke(
 		cli,
 		[

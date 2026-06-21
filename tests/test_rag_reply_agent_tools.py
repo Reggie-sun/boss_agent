@@ -7,6 +7,14 @@ from boss_agent_cli.rag_reply.models import (
     DraftRecord,
     MessageRecord,
 )
+from boss_agent_cli.rag_reply.profile_models import (
+    ConversationProfileBindingRecord,
+    ProfileConfigRecord,
+    TenantRecord,
+    UserProfileRecord,
+    UserRecord,
+)
+from boss_agent_cli.rag_reply.profile_service import ProfileService
 from boss_agent_cli.rag_reply.service import BossRagReplyService
 from boss_agent_cli.rag_reply.store import RagReplyStore
 from boss_agent_cli.rag_reply.watcher_config import WatcherConfig
@@ -175,6 +183,59 @@ def _toolbox(
     return BossAgentToolbox(context), store, delivery
 
 
+def _bind_profile_config(
+    store,
+    *,
+    conversation_id="conv_001",
+    reply_auto_send_enabled=True,
+    proactive_resume_enabled=False,
+    resume_attachment_path="",
+):
+    profile_service = ProfileService(store)
+    profile_service.save_tenant(TenantRecord(tenant_id="tenant_001", display_name="Demo"))
+    profile_service.save_user(
+        UserRecord(
+            tenant_id="tenant_001",
+            user_id="user_001",
+            display_name="Reggie",
+            email="r@example.com",
+        )
+    )
+    profile_service.save_profile(
+        UserProfileRecord(
+            tenant_id="tenant_001",
+            user_id="user_001",
+            profile_id="profile_ai",
+            display_name="AI 应用工程师",
+            target_title="AI Application Engineer",
+            knowledge_base_id="kb_ai",
+        )
+    )
+    profile_service.save_profile_config(
+        ProfileConfigRecord(
+            tenant_id="tenant_001",
+            profile_id="profile_ai",
+            contact_phone="13900139000",
+            contact_wechat="profile-wechat",
+            interview_windows="周三 19:00 后",
+            salary_reply_policy="薪资需要本人确认。",
+            resume_attachment_path=resume_attachment_path,
+            reply_auto_send_enabled=reply_auto_send_enabled,
+            proactive_resume_enabled=proactive_resume_enabled,
+        )
+    )
+    profile_service.bind_conversation(
+        ConversationProfileBindingRecord(
+            tenant_id="tenant_001",
+            user_id="user_001",
+            conversation_id=conversation_id,
+            profile_id="profile_ai",
+            knowledge_base_id="kb_ai",
+        )
+    )
+    return profile_service
+
+
 def test_sync_boss_messages_records_read_disabled_recovery(tmp_path):
     toolbox, store, delivery = _toolbox(
         tmp_path,
@@ -246,6 +307,25 @@ def test_decide_auto_action_marks_resume_share_as_attachment(tmp_path):
     assert delivery.calls == []
 
 
+def test_decide_auto_action_blocks_salary_without_policy(tmp_path):
+    toolbox, store, delivery = _toolbox(tmp_path)
+    draft = DraftRecord.new(
+        conversation_id="conv_001",
+        source_message_id="msg_001",
+        draft_text="",
+        intent="salary_or_offer",
+    )
+    store.save_draft(draft)
+
+    result = toolbox.decide_auto_action(draft_id=draft.draft_id)
+
+    assert result.ok is False
+    assert result.status == "blocked_manual_required"
+    assert result.error_code == "INVALID_PARAM"
+    assert "boss_rag_salary_reply" in result.error_message
+    assert delivery.calls == []
+
+
 def test_send_boss_reply_guarded_blocks_when_send_disabled(tmp_path):
     toolbox, store, delivery = _toolbox(tmp_path, dry_run=False, send_enabled=False)
 
@@ -269,6 +349,54 @@ def test_send_boss_reply_guarded_blocks_when_send_disabled(tmp_path):
     assert delivery.calls == []
 
 
+def test_profile_config_blocks_live_send_after_action_is_ready(tmp_path):
+    store = _store(tmp_path)
+    config = _config(tmp_path, dry_run=False, send_enabled=True)
+    profile_service = _bind_profile_config(
+        store,
+        reply_auto_send_enabled=False,
+        resume_attachment_path=config.resume_attachment_path,
+    )
+    service = BossRagReplyService(
+        store=store,
+        rag_adapter=_RagAdapter(),
+        profile_service=profile_service,
+        profile_binding_required=False,
+    )
+    delivery = _Delivery()
+    toolbox = BossAgentToolbox(
+        BossAgentToolContext(
+            store=store,
+            service=service,
+            config=config,
+            delivery=delivery,
+            message_syncer=_Syncer({"ok": True, "count": 0}),
+        )
+    )
+    draft = DraftRecord.new(
+        conversation_id="conv_001",
+        source_message_id="msg_001",
+        draft_text="您好，我主要负责企业级 RAG。",
+        intent="general_question",
+    )
+    store.save_draft(draft)
+
+    action_result = toolbox.decide_auto_action(draft_id=draft.draft_id)
+    send_result = toolbox.send_boss_reply_guarded(
+        action=dict(action_result.data["action"]),
+        security_id="sec_001",
+        target={"company": "测试公司"},
+    )
+
+    assert action_result.ok is True
+    assert action_result.data["action"]["profile_config_applied"] is True
+    assert action_result.data["action"]["profile_reply_auto_send_enabled"] is False
+    assert send_result.ok is False
+    assert send_result.error_code == "PROFILE_CONFIG_DISABLED"
+    assert send_result.error_message == "profile_reply_auto_send_disabled"
+    assert delivery.calls == []
+
+
 def test_send_boss_reply_guarded_dry_run_does_not_call_delivery(tmp_path):
     toolbox, store, delivery = _toolbox(tmp_path, dry_run=True, send_enabled=True)
 
@@ -288,6 +416,28 @@ def test_send_boss_reply_guarded_dry_run_does_not_call_delivery(tmp_path):
     assert result.status == "sent"
     assert result.data["delivery"] == {"ok": True, "status": "dry_run"}
     assert store.list_drafts() == []
+    assert delivery.calls == []
+
+
+def test_profile_config_disabled_send_still_allows_dry_run(tmp_path):
+    toolbox, _store, delivery = _toolbox(tmp_path, dry_run=True, send_enabled=True)
+
+    result = toolbox.send_boss_reply_guarded(
+        action={
+            "kind": "send_text",
+            "message": "您好，我主要负责企业级 RAG。",
+            "send_attachment_resume": False,
+            "resume_file": "",
+            "status_after_send": "sent",
+            "profile_config_applied": True,
+            "profile_reply_auto_send_enabled": False,
+        },
+        security_id="sec_001",
+        target={"company": "测试公司"},
+    )
+
+    assert result.ok is True
+    assert result.data["delivery"] == {"ok": True, "status": "dry_run"}
     assert delivery.calls == []
 
 
@@ -396,6 +546,47 @@ def test_send_boss_reply_guarded_sends_text_before_optional_proactive_resume(tmp
     assert result.data["delivery"]["resume_sent"] is False
     assert result.data["delivery"]["attachment_delivery"]["ok"] is False
     assert result.data["delivery"]["attachment_error_message"] == "attachment upload failed"
+
+
+def test_profile_config_disables_proactive_resume_action(tmp_path):
+    store = _store(tmp_path)
+    config = _config(tmp_path, dry_run=False, send_enabled=True)
+    config.proactive_resume_enabled = True
+    profile_service = _bind_profile_config(
+        store,
+        reply_auto_send_enabled=True,
+        proactive_resume_enabled=False,
+        resume_attachment_path=config.resume_attachment_path,
+    )
+    service = BossRagReplyService(
+        store=store,
+        rag_adapter=_RagAdapter(),
+        profile_service=profile_service,
+        profile_binding_required=False,
+    )
+    toolbox = BossAgentToolbox(
+        BossAgentToolContext(
+            store=store,
+            service=service,
+            config=config,
+            delivery=_Delivery(),
+            message_syncer=_Syncer({"ok": True, "count": 0}),
+        )
+    )
+    draft = DraftRecord.new(
+        conversation_id="conv_001",
+        source_message_id="msg_001",
+        draft_text="您好，我主要负责企业级 RAG。",
+        intent="general_question",
+    )
+    store.save_draft(draft)
+
+    result = toolbox.decide_auto_action(draft_id=draft.draft_id)
+
+    assert result.ok is True
+    assert result.data["action"]["profile_config_applied"] is True
+    assert result.data["action"]["send_attachment_resume"] is False
+    assert result.data["action"]["resume_file"] == ""
 
 
 def test_send_boss_reply_guarded_keeps_required_resume_attachment_fail_closed(tmp_path):
@@ -551,6 +742,45 @@ def test_send_read_no_reply_followup_guarded_blocks_live_send_when_disabled(tmp_
     assert result.status == "blocked_manual_required"
     assert result.error_code == "SEND_DISABLED"
     assert result.error_message == "boss_rag_send_enabled_disabled"
+    assert delivery.calls == []
+
+
+def test_send_read_no_reply_followup_guarded_blocks_profile_disabled_send(tmp_path):
+    store = _store(tmp_path)
+    config = _config(tmp_path, dry_run=False, send_enabled=True)
+    profile_service = _bind_profile_config(
+        store,
+        reply_auto_send_enabled=False,
+        resume_attachment_path=config.resume_attachment_path,
+    )
+    delivery = _Delivery()
+    service = BossRagReplyService(
+        store=store,
+        rag_adapter=_RagAdapter(),
+        profile_service=profile_service,
+        profile_binding_required=False,
+    )
+    toolbox = BossAgentToolbox(
+        BossAgentToolContext(
+            store=store,
+            service=service,
+            config=config,
+            delivery=delivery,
+            message_syncer=_Syncer({"ok": True, "count": 0}),
+        )
+    )
+
+    result = toolbox.send_read_no_reply_followup_guarded(
+        security_id="sec_read",
+        message="您好，想跟进一下这个岗位。",
+        target={"company": "测试公司"},
+        conversation_id="conv_001",
+    )
+
+    assert result.ok is False
+    assert result.status == "blocked_manual_required"
+    assert result.error_code == "PROFILE_CONFIG_DISABLED"
+    assert result.error_message == "profile_reply_auto_send_disabled"
     assert delivery.calls == []
 
 

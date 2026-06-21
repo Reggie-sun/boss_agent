@@ -958,6 +958,29 @@ def rag_profile_config_set_cmd(
 	)
 
 
+@rag_profile_config_group.command("get")
+@click.option("--profile-id", required=True)
+@click.pass_context
+def rag_profile_config_get_cmd(ctx: click.Context, profile_id: str) -> None:
+	service = _resolve_profile_service(ctx)
+	config = service.get_profile_config(profile_id)
+	if config is None:
+		handle_error_output(
+			ctx,
+			_workflow_command(ctx, "profile-config-get"),
+			code="PROFILE_CONFIG_NOT_FOUND",
+			message=f"No profile config for profile_id={profile_id}",
+			recoverable=False,
+		)
+		return
+	handle_output(
+		ctx,
+		_workflow_command(ctx, "profile-config-get"),
+		{"config": asdict(config)},
+		render=lambda data: click.echo(f"Loaded config for {data['config']['profile_id']}.", err=True),
+	)
+
+
 @rag_profile_group.command("upload")
 @click.option("--tenant-id", required=True)
 @click.option("--user-id", required=True)

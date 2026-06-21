@@ -346,11 +346,13 @@ class BossPassiveWatcher:
             message_syncer=self.message_syncer,
         )
         security_id = str(candidate.get("security_id") or "").strip()
+        conversation_id = str(candidate.get("conversation_id") or "").strip()
         target = _pipeline_target_payload(candidate)
         result = BossAgentToolbox(context).send_read_no_reply_followup_guarded(
             security_id=security_id,
             message=str(candidate.get("message") or ""),
             target=target,
+            conversation_id=conversation_id,
         )
         tool_steps = [
             _tool_step_payload("send_read_no_reply_followup_guarded", result),
@@ -364,7 +366,7 @@ class BossPassiveWatcher:
         ]
         task = {
             "message_id": "",
-            "conversation_id": "",
+            "conversation_id": conversation_id,
             "draft_id": "",
             "intent": "read_no_reply",
             "stage": "read_no_reply",

@@ -736,6 +736,86 @@ function runBossJsonCommand(config, args, options = {}) {
   });
 }
 
+function bossProfileGateBody(code, message, details = {}) {
+  return {
+    ok: false,
+    errorMessage: message,
+    error: {
+      code,
+      message,
+      recoverable: code !== "PROFILE_CONFIG_DISABLED",
+      recovery_action:
+        code === "PROFILE_CONFIG_DISABLED"
+          ? "Enable outreach auto-send for the selected profile before Boss auto-greet."
+          : "Select a commercial profile before Boss auto-greet.",
+      details,
+    },
+  };
+}
+
+async function ensureAutoGreetProfileGate(bridgeConfig, body) {
+  const profileGateRequested =
+    Object.prototype.hasOwnProperty.call(body, "profile_id") ||
+    body.commercial_profile_required === true;
+  if (!profileGateRequested) {
+    return { ok: true, profileId: "" };
+  }
+  const profileId = String(body.profile_id || "").trim();
+  if (!profileId) {
+    return {
+      ok: false,
+      statusCode: 400,
+      body: bossProfileGateBody(
+        "INVALID_PARAM",
+        "profile_id 不能为空。请选择一个商业 profile 后再自动开聊。",
+      ),
+    };
+  }
+  try {
+    const payload = await runBossJsonCommand(bridgeConfig, [
+      "agent",
+      "profile",
+      "config",
+      "get",
+      "--profile-id",
+      profileId,
+    ]);
+    const config = payload?.data?.config && typeof payload.data.config === "object"
+      ? payload.data.config
+      : {};
+    if (config.outreach_auto_send_enabled !== true) {
+      return {
+        ok: false,
+        statusCode: 400,
+        body: bossProfileGateBody(
+          "PROFILE_CONFIG_DISABLED",
+          "当前 profile 未开启自动开聊。",
+          { profile_id: profileId },
+        ),
+      };
+    }
+  } catch (error) {
+    const p = error?.commandPayload;
+    const errorCode = String(p?.error?.code || "");
+    const statusCode =
+      errorCode === "PROFILE_CONFIG_NOT_FOUND" || errorCode === "INVALID_PARAM"
+        ? 400
+        : p?.error?.recoverable
+          ? 400
+          : 500;
+    return {
+      ok: false,
+      statusCode,
+      body: {
+        ok: false,
+        errorMessage: error instanceof Error ? error.message : "读取 profile 配置失败。",
+        error: p?.error || null,
+      },
+    };
+  }
+  return { ok: true, profileId };
+}
+
 function writeNdjson(res, event) {
   res.write(`${JSON.stringify(event)}\n`);
 }
@@ -1332,6 +1412,13 @@ function createRagBridgePlugin() {
         if (blocked) {
           res.statusCode = blocked.statusCode;
           res.end(JSON.stringify(blocked.body));
+          return true;
+        }
+
+        const profileGate = await ensureAutoGreetProfileGate(bridgeConfig, body);
+        if (!profileGate.ok) {
+          res.statusCode = profileGate.statusCode;
+          res.end(JSON.stringify(profileGate.body));
           return true;
         }
 

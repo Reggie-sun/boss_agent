@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from boss_agent_cli.rag_reply.profile_models import ProfileConfigRecord
+
 
 class WatcherConfigError(ValueError):
     """Raised when watcher configuration is missing or unsafe."""
@@ -17,6 +19,7 @@ class WatcherConfig:
     contact_wechat: str
     interview_windows: str
     resume_attachment_path: str
+    salary_reply_policy: str = ""
     poll_seconds: int = 20
     max_failures_per_conversation: int = 3
     read_no_reply_followup_limit_per_cycle: int = 1
@@ -33,6 +36,7 @@ class WatcherConfig:
             contact_phone=str(values.get("boss_rag_contact_phone") or "").strip(),
             contact_wechat=str(values.get("boss_rag_contact_wechat") or "").strip(),
             interview_windows=str(values.get("boss_rag_interview_windows") or "").strip(),
+            salary_reply_policy=str(values.get("boss_rag_salary_reply") or "").strip(),
             resume_attachment_path=str(
                 values.get("boss_rag_resume_attachment_path") or ""
             ).strip(),
@@ -63,6 +67,30 @@ class WatcherConfig:
                 values.get("boss_rag_proactive_resume_enabled", False)
             ),
         )
+
+
+def with_profile_config(
+    base: WatcherConfig,
+    profile_config: ProfileConfigRecord | None,
+) -> WatcherConfig:
+    if profile_config is None:
+        return base
+    return WatcherConfig(
+        enabled=base.enabled,
+        dry_run=base.dry_run,
+        contact_phone=profile_config.contact_phone,
+        contact_wechat=profile_config.contact_wechat,
+        interview_windows=profile_config.interview_windows,
+        salary_reply_policy=profile_config.salary_reply_policy,
+        resume_attachment_path=profile_config.resume_attachment_path,
+        poll_seconds=base.poll_seconds,
+        max_failures_per_conversation=base.max_failures_per_conversation,
+        read_no_reply_followup_limit_per_cycle=base.read_no_reply_followup_limit_per_cycle,
+        live_sync=base.live_sync,
+        require_send_enabled=base.require_send_enabled,
+        send_enabled=base.send_enabled and profile_config.reply_auto_send_enabled,
+        proactive_resume_enabled=profile_config.proactive_resume_enabled,
+    )
 
 
 def _int_or_default(value: object, default: int) -> int:
