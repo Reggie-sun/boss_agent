@@ -41,7 +41,7 @@ from boss_agent_cli.rag_reply.profile_models import (
 	UserProfileRecord,
 	UserRecord,
 )
-from boss_agent_cli.rag_reply.profile_service import ProfileService
+from boss_agent_cli.rag_reply.profile_service import ConversationBindingScopeError, ProfileService
 from boss_agent_cli.rag_reply.review import draft_to_payload
 from boss_agent_cli.rag_reply.service import BossRagReplyService
 from boss_agent_cli.rag_reply.store import RagReplyStore
@@ -642,6 +642,30 @@ def _profile_or_error(
 	return profile
 
 
+def _emit_conversation_scope_mismatch(
+	ctx: click.Context,
+	*,
+	conversation_id: str,
+	tenant_id: str,
+	user_id: str,
+	current: ConversationProfileBindingRecord,
+) -> None:
+	handle_error_output(
+		ctx,
+		_workflow_command(ctx, "conversation-bind-profile"),
+		code="CONVERSATION_SCOPE_MISMATCH",
+		message=f"conversation_id={conversation_id} is already bound to another tenant/user scope.",
+		recoverable=False,
+		details={
+			"conversation_id": conversation_id,
+			"expected_tenant_id": tenant_id,
+			"expected_user_id": user_id,
+			"actual_tenant_id": current.tenant_id,
+			"actual_user_id": current.user_id,
+		},
+	)
+
+
 def _validate_rag_auth_options(
 	ctx: click.Context,
 	*,
@@ -1075,19 +1099,12 @@ def rag_conversation_bind_profile_cmd(
 		return
 	current = service.get_conversation_binding(conversation_id)
 	if current is not None and (current.tenant_id != tenant_id or current.user_id != user_id):
-		handle_error_output(
+		_emit_conversation_scope_mismatch(
 			ctx,
-			_workflow_command(ctx, "conversation-bind-profile"),
-			code="CONVERSATION_SCOPE_MISMATCH",
-			message=f"conversation_id={conversation_id} is already bound to another tenant/user scope.",
-			recoverable=False,
-			details={
-				"conversation_id": conversation_id,
-				"expected_tenant_id": tenant_id,
-				"expected_user_id": user_id,
-				"actual_tenant_id": current.tenant_id,
-				"actual_user_id": current.user_id,
-			},
+			conversation_id=conversation_id,
+			tenant_id=tenant_id,
+			user_id=user_id,
+			current=current,
 		)
 		return
 	binding = ConversationProfileBindingRecord(
@@ -1098,7 +1115,17 @@ def rag_conversation_bind_profile_cmd(
 		knowledge_base_id=profile.knowledge_base_id,
 		binding_source=binding_source,
 	)
-	service.bind_conversation(binding)
+	try:
+		service.bind_conversation(binding)
+	except ConversationBindingScopeError as exc:
+		_emit_conversation_scope_mismatch(
+			ctx,
+			conversation_id=conversation_id,
+			tenant_id=tenant_id,
+			user_id=user_id,
+			current=exc.existing,
+		)
+		return
 	handle_output(
 		ctx,
 		_workflow_command(ctx, "conversation-bind-profile"),

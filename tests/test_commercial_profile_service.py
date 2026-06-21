@@ -12,7 +12,7 @@ from boss_agent_cli.rag_reply.profile_models import (
 	UserProfileRecord,
 	UserRecord,
 )
-from boss_agent_cli.rag_reply.profile_service import ProfileService
+from boss_agent_cli.rag_reply.profile_service import ConversationBindingScopeError, ProfileService
 from boss_agent_cli.rag_reply.store import RagReplyStore
 
 
@@ -132,6 +132,67 @@ def test_profile_service_tracks_uploads_and_usage(tmp_path: Path):
 	assert service.list_uploads("profile_ai")[0].status == "indexed"
 	assert usage.used_count == 4
 	assert usage.limit_count == 50
+
+
+def test_profile_service_rejects_cross_scope_conversation_overwrite(tmp_path: Path):
+	service = _service(tmp_path)
+	service.bind_conversation(
+		ConversationProfileBindingRecord(
+			tenant_id="tenant_001",
+			user_id="user_001",
+			conversation_id="conv_shared",
+			profile_id="profile_ai",
+			knowledge_base_id="kb_ai",
+		)
+	)
+
+	with pytest.raises(ConversationBindingScopeError) as error:
+		service.bind_conversation(
+			ConversationProfileBindingRecord(
+				tenant_id="tenant_002",
+				user_id="user_002",
+				conversation_id="conv_shared",
+				profile_id="profile_backend",
+				knowledge_base_id="kb_backend",
+			)
+		)
+
+	assert error.value.existing.tenant_id == "tenant_001"
+	assert error.value.existing.user_id == "user_001"
+	stored = service.get_conversation_binding("conv_shared")
+	assert stored.tenant_id == "tenant_001"
+	assert stored.user_id == "user_001"
+	assert stored.profile_id == "profile_ai"
+	assert stored.knowledge_base_id == "kb_ai"
+
+
+def test_profile_service_allows_same_scope_conversation_rebind(tmp_path: Path):
+	service = _service(tmp_path)
+	service.bind_conversation(
+		ConversationProfileBindingRecord(
+			tenant_id="tenant_001",
+			user_id="user_001",
+			conversation_id="conv_shared",
+			profile_id="profile_ai",
+			knowledge_base_id="kb_ai",
+		)
+	)
+
+	service.bind_conversation(
+		ConversationProfileBindingRecord(
+			tenant_id="tenant_001",
+			user_id="user_001",
+			conversation_id="conv_shared",
+			profile_id="profile_backend",
+			knowledge_base_id="kb_backend",
+		)
+	)
+
+	stored = service.get_conversation_binding("conv_shared")
+	assert stored.tenant_id == "tenant_001"
+	assert stored.user_id == "user_001"
+	assert stored.profile_id == "profile_backend"
+	assert stored.knowledge_base_id == "kb_backend"
 
 
 def test_profile_service_increment_usage_creates_missing_counter(tmp_path: Path):

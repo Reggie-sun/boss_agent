@@ -17,6 +17,16 @@ from boss_agent_cli.rag_reply.profile_models import (
 from boss_agent_cli.rag_reply.store import RagReplyStore
 
 
+class ConversationBindingScopeError(ValueError):
+	"""Raised when an existing conversation binding belongs to another tenant/user."""
+
+	def __init__(self, existing: ConversationProfileBindingRecord) -> None:
+		self.existing = existing
+		super().__init__(
+			f"conversation_id={existing.conversation_id} is already bound to another tenant/user scope."
+		)
+
+
 class ProfileService:
 	"""Persist commercial profile state in the Boss RAG SQLite store."""
 
@@ -198,6 +208,15 @@ class ProfileService:
 
 	def bind_conversation(self, record: ConversationProfileBindingRecord) -> None:
 		with self.store.connect() as conn:
+			conn.execute("BEGIN IMMEDIATE")
+			existing_row = conn.execute(
+				"SELECT * FROM conversation_profile_bindings WHERE conversation_id = ?",
+				(record.conversation_id,),
+			).fetchone()
+			if existing_row is not None:
+				existing = self._row_to_conversation_binding(existing_row)
+				if existing.tenant_id != record.tenant_id or existing.user_id != record.user_id:
+					raise ConversationBindingScopeError(existing)
 			conn.execute(
 				"""
 				INSERT OR REPLACE INTO conversation_profile_bindings (
