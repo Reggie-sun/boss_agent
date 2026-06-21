@@ -447,7 +447,7 @@ class BossAutomationAdapter:
 			return None
 
 		body = raw_message.get("body") if isinstance(raw_message.get("body"), dict) else {}
-		message_text = str(raw_message.get("text") or body.get("text") or body.get("content") or "")
+		message_text = self._message_text_from_raw(raw_message, body)
 		if not message_text.strip():
 			return None
 		message_id_suffix = self._message_identity_suffix(raw_message, fallback_index=index)
@@ -478,6 +478,17 @@ class BossAutomationAdapter:
 		payload = json.dumps(raw_message, sort_keys=True, ensure_ascii=False, separators=(",", ":"), default=str)
 		digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
 		return f"{raw_message.get('time') or fallback_index}_{digest}"
+
+	@staticmethod
+	def _message_text_from_raw(raw_message: dict[str, Any], body: dict[str, Any]) -> str:
+		dialog = body.get("dialog") if isinstance(body.get("dialog"), dict) else {}
+		return str(
+			raw_message.get("text")
+			or body.get("text")
+			or body.get("content")
+			or dialog.get("text")
+			or ""
+		)
 
 	def _select_friend_items(self, items: list[dict[str, Any]], conversation_id: str | None) -> list[dict[str, Any]]:
 		if conversation_id is None:
@@ -568,15 +579,16 @@ class BossAutomationAdapter:
 		priority: str,
 	) -> tuple[list[dict[str, Any]], dict[str, Any]]:
 		unique_items = self._dedupe_friend_items(items)
-		if priority != "normal":
-			priority_items = [item for item in unique_items if self._priority_friend_item(item)]
-			if priority_items:
-				return self._select_priority_friend_item_batch(
-					priority_items,
-					page=page,
-					offset=offset,
-					has_more=has_more,
-				)
+		priority_items = [item for item in unique_items if self._priority_friend_item(item)]
+		if priority_items:
+			normal_resume_offset = offset if priority == "normal" else 0
+			return self._select_priority_friend_item_batch(
+				priority_items,
+				page=page,
+				offset=0,
+				has_more=has_more,
+				normal_resume_offset=normal_resume_offset,
+			)
 		safe_offset = max(offset, 0)
 		selected_items = unique_items[safe_offset : safe_offset + _CONVERSATION_SYNC_BATCH_SIZE]
 		next_offset = safe_offset + _CONVERSATION_SYNC_BATCH_SIZE
@@ -616,17 +628,10 @@ class BossAutomationAdapter:
 		page: int,
 		offset: int,
 		has_more: Any,
+		normal_resume_offset: int = 0,
 	) -> tuple[list[dict[str, Any]], dict[str, Any]]:
 		safe_offset = max(offset, 0)
 		selected_items = priority_items[safe_offset : safe_offset + _CONVERSATION_SYNC_BATCH_SIZE]
-		next_offset = safe_offset + _CONVERSATION_SYNC_BATCH_SIZE
-		if next_offset < len(priority_items):
-			next_page = page
-			next_priority = "priority"
-		else:
-			next_page = page
-			next_offset = 0
-			next_priority = "normal"
 		return selected_items, {
 			"sync_cursor": {
 				"page": page,
@@ -638,9 +643,9 @@ class BossAutomationAdapter:
 				"has_more": has_more,
 			},
 			"next_cursor": {
-				"page": next_page,
-				"offset": next_offset,
-				"priority": next_priority,
+				"page": page,
+				"offset": max(normal_resume_offset, 0),
+				"priority": "normal",
 				"priority_version": _SYNC_PRIORITY_VERSION,
 			},
 		}
@@ -689,12 +694,50 @@ class BossAutomationAdapter:
 			return 0
 
 	def _priority_friend_item(self, raw_item: dict[str, Any]) -> bool:
-		if self._unread_count(raw_item) > 0:
+		if self._unread_count(raw_item) > 0 and self._friend_item_last_message_unsynced(raw_item):
 			return True
-		last_msg = str(raw_item.get("lastMsg") or "").strip()
-		if not last_msg:
+		last_msg = self._friend_item_last_message_text(raw_item)
+		if last_msg:
+			return (
+				not self._looks_like_candidate_outbound_last_message(last_msg)
+				and self._friend_item_last_message_unsynced(raw_item)
+			)
+		return (
+			self._friend_item_last_from_recruiter(raw_item)
+			and self._friend_item_last_message_unsynced(raw_item)
+		)
+
+	def _friend_item_last_message_text(self, raw_item: dict[str, Any]) -> str:
+		last_info = raw_item.get("lastMessageInfo") if isinstance(raw_item.get("lastMessageInfo"), dict) else {}
+		return str(raw_item.get("lastMsg") or last_info.get("showText") or "").strip()
+
+	def _friend_item_last_message_unsynced(self, raw_item: dict[str, Any]) -> bool:
+		last_info = raw_item.get("lastMessageInfo") if isinstance(raw_item.get("lastMessageInfo"), dict) else {}
+		message_id = str(last_info.get("msgId") or raw_item.get("msgId") or "").strip()
+		if message_id:
+			conversation_key = self._conversation_id(raw_item).removeprefix("boss_conv_")
+			return self.store.get_message(f"boss_msg_{conversation_key or 'unknown'}_{message_id}") is None
+		last_ts = raw_item.get("lastTS") or last_info.get("msgTime")
+		if isinstance(last_ts, (int, float)):
+			stored = self.store.get_conversation(self._conversation_id(raw_item))
+			if stored is None:
+				return True
+			return stored.last_message_at != self._iso_from_millis(last_ts)
+		return True
+
+	@staticmethod
+	def _friend_item_last_from_recruiter(raw_item: dict[str, Any]) -> bool:
+		last_info = raw_item.get("lastMessageInfo") if isinstance(raw_item.get("lastMessageInfo"), dict) else {}
+		from_id = str(last_info.get("fromId") or "")
+		if not from_id:
 			return False
-		return not self._looks_like_candidate_outbound_last_message(last_msg)
+		recruiter_ids = {
+			str(raw_item.get("uid") or ""),
+			str(raw_item.get("friendId") or ""),
+			str(raw_item.get("friend_id") or ""),
+			str(raw_item.get("encryptUid") or ""),
+		}
+		return from_id in {value for value in recruiter_ids if value}
 
 	@staticmethod
 	def _looks_like_candidate_outbound_last_message(last_msg: str) -> bool:

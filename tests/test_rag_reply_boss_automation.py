@@ -495,6 +495,93 @@ class _RotatingSecurityMessagePlatform:
 		return None
 
 
+class _DialogResumeRequestPlatform:
+	def __init__(self):
+		self.friend_list_pages: list[int] = []
+		self.chat_history_calls: list[tuple[str, str]] = []
+
+	def is_success(self, response):
+		return response.get("code") == 0
+
+	def unwrap_data(self, response):
+		return response.get("zpData")
+
+	def parse_error(self, response):
+		return ("UNKNOWN", response.get("message", ""))
+
+	def friend_list(self, page=1):
+		self.friend_list_pages.append(page)
+		assert page == 1
+		items = [
+			{
+				"securityId": f"sec_{index:03d}",
+				"uid": 10000 + index,
+				"encryptJobId": f"job_{index:03d}",
+				"name": f"HR{index}",
+				"brandName": "TestCo",
+				"title": "HRBP",
+				"lastMsg": "我是候选人的求职助理 Agent，您好，想跟进一下这个岗位目前是否还在招聘？",
+				"lastTS": 1700000000000 + index,
+				"lastMessageInfo": {
+					"msgId": f"m_{index}",
+					"fromId": 99999,
+					"toId": 10000 + index,
+					"showText": "我是候选人的求职助理 Agent，您好，想跟进一下这个岗位目前是否还在招聘？",
+				},
+			}
+			for index in range(100)
+		]
+		items[1] = {
+			"securityId": "sec_dialog",
+			"uid": 564424706,
+			"encryptJobId": "job_dialog",
+			"name": "齐女士",
+			"brandName": "卓越际联科技有限公司",
+			"title": "招聘专员",
+			"lastMsg": "",
+			"lastTS": 1782023873843,
+			"lastMessageInfo": {
+				"msgId": 355879624061954,
+				"fromId": 564424706,
+				"toId": 622581782,
+				"showText": "",
+			},
+		}
+		return {"code": 0, "zpData": {"result": items, "hasMore": False}}
+
+	def chat_history(self, gid, security_id, page=1, count=50):
+		self.chat_history_calls.append((gid, security_id))
+		return {
+			"code": 0,
+			"zpData": {
+				"messages": [
+					{
+						"mid": 355879624061954,
+						"type": 1,
+						"bizType": 13,
+						"time": 1782023873843,
+						"from": {"uid": 564424706, "name": "齐女士"},
+						"body": {
+							"type": 7,
+							"templateId": 1,
+							"dialog": {
+								"text": "我想要一份您的附件简历，您是否同意",
+								"buttons": [
+									{"text": "同意", "url": "bosszp://bosszhipin.app/openwith?type=sendaction&uid=564424706&aid=38&extends={}"},
+									{"text": "拒绝", "url": "bosszp://bosszhipin.app/openwith?type=sendaction&uid=564424706&aid=39&extends={}"},
+								],
+								"operated": False,
+							},
+						},
+					}
+				]
+			},
+		}
+
+	def close(self):
+		return None
+
+
 class _DuplicateRecentTargetPlatform:
 	def is_success(self, response):
 		return response.get("code") == 0
@@ -729,6 +816,38 @@ def test_sync_messages_prioritizes_inbound_last_message_without_unread_count(tmp
 
 	assert platform.chat_history_calls[:1] == [("10006", "sec_006")]
 	assert result.conversation_ids == ["boss_conv_10006"]
+
+
+def test_sync_messages_prioritizes_blank_dialog_resume_request_during_normal_cursor(tmp_path: Path):
+	store = RagReplyStore(tmp_path / "boss-rag.sqlite3")
+	store.initialize()
+	store.append_audit_log(
+		AuditLogRecord.new(
+			event_type="boss_messages_synced",
+			entity_type="sync_batch",
+			entity_id="normal_cursor",
+			payload={
+				"next_cursor": {
+					"page": 1,
+					"offset": 75,
+					"priority": "normal",
+					"priority_version": 2,
+				}
+			},
+		)
+	)
+	platform = _DialogResumeRequestPlatform()
+	adapter = BossAutomationAdapter(platform=platform, store=store)
+
+	result = adapter.sync_messages()
+
+	assert platform.chat_history_calls[:1] == [("564424706", "sec_dialog")]
+	assert result.conversation_ids == ["boss_conv_564424706"]
+	assert result.message_ids == ["boss_msg_564424706_355879624061954"]
+	messages = store.list_messages("boss_conv_564424706")
+	assert len(messages) == 1
+	assert messages[0].message_text == "我想要一份您的附件简历，您是否同意"
+	assert messages[0].message_type == "1"
 
 
 def test_sync_messages_advances_friend_list_pages_in_five_item_batches(tmp_path: Path):
