@@ -102,7 +102,7 @@ def test_agent_answer_adapter_uses_rule_based_rewrite_when_ai_service_missing():
 		job_summary=None,
 		rag_answer="""## 1. 核心结论
 
-我最有代表性的项目是企业级 RAG 知识库与智能问答平台。
+我最有代表性的项目是企业级 RAG 平台。
 
 ### 2.1 项目背景与目标
 该项目旨在解决制造业企业内部制度文档和 SOP 检索、问答及追溯问题。
@@ -112,7 +112,7 @@ def test_agent_answer_adapter_uses_rule_based_rewrite_when_ai_service_missing():
 - 检索与问答：采用混合检索、重排序和多轮问答。
 
 ### 2.3 项目成果
-该项目实现了 89 个 API 路由和 26 个核心 schema 模块。
+该项目形成了检索评测、引用溯源和多轮问答联动的交付闭环。
 
 ## 3. 补充说明
 在该项目中，我主要负责核心架构的设计与落地开发工作。
@@ -121,7 +121,7 @@ def test_agent_answer_adapter_uses_rule_based_rewrite_when_ai_service_missing():
 	)
 
 	assert result.ok is True
-	assert result.answer.startswith("我最有代表性的项目是企业级 RAG 知识库与智能问答平台。")
+	assert result.answer.startswith("我最有代表性的项目是企业级 RAG 平台。")
 	assert "这个项目旨在解决制造业企业内部制度文档和 SOP 检索、问答及追溯问题。" in result.answer
 	assert "在这个项目中，我主要负责核心架构的设计与落地开发工作。" in result.answer
 	assert result.raw_response == {"mode": "rule_based"}
@@ -139,12 +139,12 @@ def test_agent_answer_rule_based_rewrite_filters_unrelated_profile_details():
 	)
 
 	assert result.ok is True
-	assert "我目前在宁波伟立机器人科技股份有限公司做 AI 开发工程师" in result.answer
+	assert "我在企业级 RAG 项目中负责检索链路和问答编排。" in result.answer
 	assert "23岁" not in result.answer
-	assert result.raw_response == {"mode": "local_interview_template"}
+	assert result.raw_response == {"mode": "rule_based"}
 
 
-def test_agent_answer_uses_local_template_for_hr_fit_question():
+def test_agent_answer_requires_profile_grounding_for_hr_fit_without_grounding():
 	adapter = AgentAnswerAdapter(ai_service=None)
 
 	result = adapter.answer(
@@ -155,9 +155,11 @@ def test_agent_answer_uses_local_template_for_hr_fit_question():
 		citations=[],
 	)
 
-	assert result.ok is True
-	assert "我觉得自己比较适合 AI 应用工程师" in result.answer
-	assert result.raw_response == {"mode": "local_interview_template"}
+	assert result.ok is False
+	assert result.answer == ""
+	assert result.audit_status == "agent_answer_failed"
+	assert result.reasoning_summary == {"strategy": "profile_grounding_required"}
+	assert result.raw_response == {"mode": "profile_required"}
 
 
 def test_agent_answer_uses_local_template_for_recruiter_invitation_without_ai():

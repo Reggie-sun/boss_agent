@@ -102,7 +102,7 @@ class AgentAnswerAdapter:
 		rag_answer: str,
 		citations: list[dict[str, Any]] | None = None,
 	) -> AgentAnswerResult:
-		if not (rag_answer or "").strip():
+		if not (rag_answer or "").strip() or self._is_ungrounded_answer(rag_answer):
 			return self._direct_answer(
 				message_text=message_text,
 				intent=intent,
@@ -146,7 +146,15 @@ class AgentAnswerAdapter:
 		job_summary: str | None,
 	) -> AgentAnswerResult:
 		if self.ai_service is None:
-			return self._rule_based_rewrite(message_text=message_text, rag_answer="")
+			recruiter_invitation_answer = self._recruiter_invitation_answer(message_text)
+			if recruiter_invitation_answer:
+				return AgentAnswerResult(
+					ok=True,
+					answer=recruiter_invitation_answer,
+					reasoning_summary={"strategy": "在无可用 AI 服务时，命中本地招聘邀约回复模板"},
+					raw_response={"mode": "local_recruiter_invitation_template"},
+				)
+			return self._profile_required_result()
 		prompt = DIRECT_AGENT_PROMPT.format(
 			message_text=message_text or "（空）",
 			intent=intent or "unknown",
@@ -161,10 +169,18 @@ class AgentAnswerAdapter:
 			)
 			payload = self._parse_json_response(raw)
 		except (AIServiceError, ValueError):
-			return self._rule_based_rewrite(message_text=message_text, rag_answer="")
+			recruiter_invitation_answer = self._recruiter_invitation_answer(message_text)
+			if recruiter_invitation_answer:
+				return AgentAnswerResult(
+					ok=True,
+					answer=recruiter_invitation_answer,
+					reasoning_summary={"strategy": "在无可用 AI 服务时，命中本地招聘邀约回复模板"},
+					raw_response={"mode": "local_recruiter_invitation_template"},
+				)
+			return self._profile_required_result()
 		answer_text = str(payload.get("answer_text") or "").strip()
 		if not answer_text:
-			return self._rule_based_rewrite(message_text=message_text, rag_answer="")
+			return self._profile_required_result()
 		return AgentAnswerResult(
 			ok=True,
 			answer=answer_text,
@@ -183,14 +199,6 @@ class AgentAnswerAdapter:
 				answer=recruiter_invitation_answer,
 				reasoning_summary={"strategy": "在无可用 AI 服务时，命中本地招聘邀约回复模板"},
 				raw_response={"mode": "local_recruiter_invitation_template"},
-			)
-		template_answer = AgentAnswerAdapter._template_answer_for_interview_question(message_text)
-		if template_answer:
-			return AgentAnswerResult(
-				ok=True,
-				answer=template_answer,
-				reasoning_summary={"strategy": "在无可用 AI 改写服务时，命中本地候选人面试回答模板"},
-				raw_response={"mode": "local_interview_template"},
 			)
 		cleaned = AgentAnswerAdapter._clean_markdown(rag_answer)
 		cleaned = AgentAnswerAdapter._normalize_candidate_voice(cleaned)
@@ -231,6 +239,17 @@ class AgentAnswerAdapter:
 			raw_response={"mode": "rule_based"},
 			error_message=None if answer else "Agent answer returned empty answer_text.",
 			audit_status="draft_created" if answer else "agent_answer_failed",
+		)
+
+	@staticmethod
+	def _profile_required_result() -> AgentAnswerResult:
+		return AgentAnswerResult(
+			ok=False,
+			answer="",
+			reasoning_summary={"strategy": "profile_grounding_required"},
+			raw_response={"mode": "profile_required"},
+			error_message="Personal candidate answers require bound profile RAG grounding.",
+			audit_status="agent_answer_failed",
 		)
 
 	@staticmethod
@@ -310,6 +329,18 @@ class AgentAnswerAdapter:
 		return payload
 
 	@staticmethod
+	def _is_ungrounded_answer(text: str) -> bool:
+		normalized = " ".join((text or "").split())
+		if not normalized:
+			return True
+		return normalized in {
+			"资料未明确覆盖。",
+			"资料未明确覆盖",
+			"未明确覆盖。",
+			"未明确覆盖",
+		}
+
+	@staticmethod
 	def _clean_markdown(text: str) -> str:
 		lines: list[str] = []
 		for raw_line in (text or "").splitlines():
@@ -371,46 +402,6 @@ class AgentAnswerAdapter:
 			for sentence in sentences
 			if not any(token in sentence for token in ("岁", "未婚", "籍贯", "出生", "联系方式"))
 		] or sentences
-
-	@staticmethod
-	def _template_answer_for_interview_question(message_text: str) -> str:
-		lower_question = (message_text or "").lower()
-		if any(keyword in lower_question for keyword in ("简短的自我介绍", "自我介绍")):
-			return (
-				"我目前在宁波伟立机器人科技股份有限公司做 AI 开发工程师，主要独立负责一个面向制造业内部制度文档、SOP、设备资料和业务知识问答场景的企业级 RAG 知识库与智能问答平台。"
-				"这个项目覆盖文档入库、OCR/解析、结构化切块、Embedding 索引、混合检索、重排序、权限过滤、引用溯源、多轮问答、SOP 生成、运行观测和检索评测回归，累计实现了 89 个 API 路由和 26 个核心 schema 模块。"
-				"除了这个项目，我还做过 BOSS AGENT 工具层、机器学习预测系统和生成式 AI 图像应用，所以我的优势是能把模型、检索、后端、前端、异步任务、部署和质量评测整合成完整的 AI 应用。"
-			)
-		if any(keyword in lower_question for keyword in ("最有代表性的项目", "企业级 rag 项目", "职责、核心技术方案和结果", "职责、技术方案和结果")):
-			return (
-				"我最有代表性的项目是企业级 RAG 知识库与智能问答平台。这个项目面向制造业内部制度文档、SOP、设备资料和业务知识问答场景，我主要独立负责核心架构和落地开发。"
-				"技术上我把文档入库、OCR/解析、结构化切块、Embedding 索引、Qdrant 向量检索、Elasticsearch BM25、RRF 融合、reranker 重排序、ACL 权限过滤、Citation Pipeline、多轮问答和评测回归串成了完整链路。"
-				"结果上，项目累计实现了 89 个 API 路由、26 个核心 schema 模块，release capability dashboard 里的 12 项 blocking capability 也都通过了。"
-			)
-		if any(keyword in lower_question for keyword in ("最难", "难点", "怎么解决", "如何解决")):
-			return (
-				"这个项目里我觉得最难的不是单个模型效果，而是把噪声文档、结构化切块、混合检索、权限过滤、多轮记忆、引用溯源和评测回归串成一条稳定链路。"
-				"我的做法是先把问题拆到 retrieval、query rewrite、ACL 和 citation pipeline 这些层面，再分别引入 Qdrant 加 BM25 加 RRF 的混合检索、BGE reranker、Memory-Aware Query Rewrite，以及检索阶段 ACL 过滤。"
-				"同时我还维护 frozen 加 rolling 的双轨评测和发布门禁，这样优化一个 case 的时候，不会把别的 case 悄悄改坏。"
-			)
-		if any(keyword in lower_question for keyword in ("怎么设计", "如何设计", "检索", "重排", "引用溯源")):
-			return (
-				"如果让我设计类似系统，我会把链路拆成 query understanding、hybrid retrieval、rerank、citation binding 和 evaluation 五层。"
-				"召回层我会同时做 Qdrant 向量检索和 Elasticsearch BM25 词法检索，再用 RRF 融合、BGE reranker 重排序；多轮追问场景会在进入 retrieval 前做 Memory-Aware Query Rewrite。"
-				"引用溯源上，我会让答案和 chunk 级证据绑定，保留来源文档、页码、片段和原文跳转，同时在检索阶段注入 ACL 过滤，确保回答既能追溯也不会越权。"
-			)
-		if any(keyword in lower_question for keyword in ("适合这个岗位", "为什么觉得自己适合", "为什么适合", "胜任")):
-			return (
-				"我觉得自己比较适合 AI 应用工程师、RAG 或 Agent 相关岗位，因为我的经验不是停留在模型 API 调用，而是完整做过企业级 RAG 系统落地。"
-				"我实际负责过文档摄取、OCR、结构化切块、混合检索、重排序、权限过滤、引用溯源、多轮问答和评测回归，也做过 FastAPI、React、Celery、Docker 这套工程化链路。"
-				"所以我既能关注效果，也能把系统稳定性、可追溯性和最终交付一起做好。"
-			)
-		if any(keyword in lower_question for keyword in ("协作", "产品", "算法", "后端", "跨团队")):
-			return (
-				"我平时会把协作拆成业务场景、检索策略和工程交付三个层面。和产品对齐的是用户问题、引用展示和操作流程；和算法或模型侧主要讨论 embedding、rerank、query rewrite 这些效果相关策略；和后端、前端则围绕 API 契约、数据结构、traces、snapshots 和页面交互做联调。"
-				"因为这个项目本身覆盖问答、文档中心、SOP、评测和运维，所以我的协作重点不是只把单个模块做完，而是确保方案从效果验证到上线运行能形成闭环。"
-			)
-		return ""
 
 	@staticmethod
 	def _extract_sentences(text: str) -> list[str]:
