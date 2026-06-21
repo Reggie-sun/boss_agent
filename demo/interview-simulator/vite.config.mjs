@@ -3,6 +3,7 @@ import path from "node:path";
 import { spawn } from "node:child_process";
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
+import { createProfileBridgeHandlers } from "./server/profileBridge.mjs";
 
 const BOSS_GEEK_CHAT_URL = "https://www.zhipin.com/web/geek/chat";
 const CDP_REQUIRED_FOR_BOSS_DELIVERY_MESSAGE =
@@ -957,9 +958,15 @@ function runBossJsonCommandStream(config, args, res, options = {}) {
 
 function createRagBridgePlugin() {
   const bridgeConfig = loadBridgeConfig();
+  const handleProfileBridge = createProfileBridgeHandlers({
+    bridgeConfig,
+    runBossJsonCommand,
+    readBody,
+  });
 
   async function handler(req, res) {
     if (!req.url) return false;
+    if (await handleProfileBridge(req, res)) return true;
     const isAgentHealth = req.url === "/api/agent/health" || req.url === "/api/rag/health";
     const isAgentThread = req.url.startsWith("/api/agent/thread") || req.url.startsWith("/api/rag/thread");
     const isAgentTargets = req.url.startsWith("/api/agent/targets") || req.url.startsWith("/api/rag/targets");

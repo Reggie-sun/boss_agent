@@ -29,3 +29,23 @@ def test_interview_simulator_auto_greet_requires_profile_gate():
 	assert "PROFILE_CONFIG_DISABLED" in vite
 	assert "PROFILE_CONFIG_NOT_FOUND" in vite
 	assert '"profile",\n      "config",\n      "get"' in vite
+
+
+def test_interview_simulator_exposes_profile_bridge_without_removing_existing_flows():
+	repo_root = Path(__file__).resolve().parents[1]
+	vite = (repo_root / "demo" / "interview-simulator" / "vite.config.mjs").read_text(encoding="utf-8")
+	profile_bridge = (
+		repo_root / "demo" / "interview-simulator" / "server" / "profileBridge.mjs"
+	).read_text(encoding="utf-8")
+	app = (repo_root / "demo" / "interview-simulator" / "src" / "App.jsx").read_text(encoding="utf-8")
+
+	for token in ("/api/agent/profiles", "/api/agent/profile-binding", "/api/agent/usage"):
+		assert token in profile_bridge
+	for existing in (
+		"/api/agent/ask",
+		"/api/agent/send",
+		"/api/boss/auto-greet",
+		"Boss 自动开聊",
+		"Agent 全自动",
+	):
+		assert existing in vite or existing in app
