@@ -85,6 +85,7 @@ class BossRagReplyService:
 		agent_answer_adapter: AgentAnswerAdapterProtocol | None = None,
 		profile_service: object | None = None,
 		profile_rag_connector: object | None = None,
+		profile_binding_required: bool = True,
 		salary_reply: str = "",
 		interview_windows: str = "",
 	) -> None:
@@ -94,6 +95,7 @@ class BossRagReplyService:
 		self.agent_answer_adapter = agent_answer_adapter
 		self.profile_service: Any = profile_service
 		self.profile_rag_connector: Any = profile_rag_connector
+		self.profile_binding_required = profile_binding_required
 		self.salary_reply = salary_reply.strip()
 		self.interview_windows = interview_windows.strip()
 
@@ -195,7 +197,7 @@ class BossRagReplyService:
 		profile_context = None
 		if self.profile_service is not None:
 			profile_context = self._resolve_profile_context(message)
-			if profile_context is None:
+			if profile_context is None and self.profile_binding_required:
 				return DraftRecord.new(
 					conversation_id=message.conversation_id,
 					source_message_id=message.message_id,
@@ -208,7 +210,7 @@ class BossRagReplyService:
 					audit_status="profile_binding_required",
 					rag_session_id=rag_session_id,
 				)
-			if self.profile_rag_connector is None:
+			if profile_context is not None and self.profile_rag_connector is None:
 				return DraftRecord.new(
 					conversation_id=message.conversation_id,
 					source_message_id=message.message_id,

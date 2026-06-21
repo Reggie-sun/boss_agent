@@ -11,6 +11,13 @@ from boss_agent_cli.ai.config import AIConfigStore
 from boss_agent_cli.main import cli
 from boss_agent_cli.rag_reply.adapters.boss_automation import SyncJobsResult, SyncMessagesResult
 from boss_agent_cli.rag_reply.models import AuditLogRecord, ConversationRecord, DraftRecord, MessageRecord, RecruiterRecord
+from boss_agent_cli.rag_reply.profile_models import (
+	ConversationProfileBindingRecord,
+	TenantRecord,
+	UserProfileRecord,
+	UserRecord,
+)
+from boss_agent_cli.rag_reply.profile_service import ProfileService
 from boss_agent_cli.rag_reply.service import BossRagReplyService
 from boss_agent_cli.rag_reply.store import RagReplyStore
 from boss_agent_cli.rag_reply.watcher_config import WatcherConfig
@@ -190,6 +197,64 @@ def test_rag_ask_persists_frontend_turn_and_returns_thread(monkeypatch, tmp_path
 	assert store.list_messages("demo-session-001")[-1].source == "rag_draft_memory"
 
 
+def test_rag_ask_without_profile_binding_keeps_legacy_rag_adapter(monkeypatch, tmp_path: Path):
+	captured = {}
+
+	class _FakeRagHttpAdapter:
+		def __init__(self, *, base_url, timeout_seconds, api_key=None, auth_mode="none"):
+			captured["base_url"] = base_url
+			captured["timeout_seconds"] = timeout_seconds
+			captured["api_key"] = api_key
+			captured["auth_mode"] = auth_mode
+
+		def answer(self, **kwargs):
+			captured["answer_kwargs"] = kwargs
+			return SimpleNamespace(
+				ok=True,
+				answer="legacy RAG 仍可回答未绑定对话。",
+				citations=[{"id": "legacy-citation"}],
+				reasoning_summary={"confidence": "high"},
+				raw_response={"answer": "legacy RAG 仍可回答未绑定对话。"},
+				error_message=None,
+				audit_status="draft_created",
+				send_allowed=False,
+				approval_required=True,
+			)
+
+	monkeypatch.setattr(rag_commands, "RagHttpAdapter", _FakeRagHttpAdapter)
+	runner = CliRunner()
+
+	result = runner.invoke(
+		cli,
+		[
+			"--json",
+			"--data-dir",
+			str(tmp_path),
+			"rag",
+			"ask",
+			"--conversation-id",
+			"legacy-conv",
+			"--question",
+			"介绍一下你的 RAG 项目。",
+		],
+	)
+
+	assert result.exit_code == 0
+	parsed = json.loads(result.output)
+	assert parsed["ok"] is True
+	assert parsed["command"] == "rag-ask"
+	assert parsed["data"]["answer"] == "legacy RAG 仍可回答未绑定对话。"
+	assert parsed["data"]["answer_source"] in {"enterprise_rag", "boss_agent_ai"}
+	assert parsed["data"]["audit_status"] == "draft_created"
+	evidence = parsed["data"]["draft"]["evidence"]
+	assert evidence["citations"] == [{"id": "legacy-citation"}]
+	assert evidence.get("upstream_source", "enterprise_rag") == "enterprise_rag"
+	assert "profile_context" not in evidence
+	assert captured["answer_kwargs"]["session_id"].startswith("boss-rag-")
+	assert "profile_id" not in captured["answer_kwargs"]
+	assert "metadata" not in captured["answer_kwargs"]
+
+
 def test_agent_ask_uses_agent_command_name(monkeypatch, tmp_path: Path):
 	store = RagReplyStore(tmp_path / "boss-rag.sqlite3")
 	store.initialize()
@@ -231,6 +296,91 @@ def test_agent_ask_uses_agent_command_name(monkeypatch, tmp_path: Path):
 	parsed = json.loads(result.output)
 	assert parsed["ok"] is True
 	assert parsed["command"] == "agent-ask"
+
+
+def test_agent_ask_uses_bound_profile_rag_connector(monkeypatch, tmp_path: Path):
+	store = RagReplyStore(tmp_path / "boss-rag.sqlite3")
+	store.initialize()
+	profile_service = ProfileService(store)
+	profile_service.save_tenant(TenantRecord(tenant_id="tenant_001", display_name="Demo"))
+	profile_service.save_user(
+		UserRecord(
+			tenant_id="tenant_001",
+			user_id="user_001",
+			display_name="Reggie",
+			email="r@example.com",
+		)
+	)
+	profile_service.save_profile(
+		UserProfileRecord(
+			tenant_id="tenant_001",
+			user_id="user_001",
+			profile_id="profile_ai",
+			display_name="AI 应用工程师",
+			target_title="AI Application Engineer",
+			knowledge_base_id="kb_ai",
+		)
+	)
+	profile_service.bind_conversation(
+		ConversationProfileBindingRecord(
+			tenant_id="tenant_001",
+			user_id="user_001",
+			conversation_id="demo-session-001",
+			profile_id="profile_ai",
+			knowledge_base_id="kb_ai",
+		)
+	)
+	captured: dict[str, object] = {}
+
+	def fake_ask_profile(self, **kwargs):
+		captured.update(kwargs)
+		return SimpleNamespace(
+			ok=True,
+			answer="我负责企业级 RAG 项目。",
+			citations=[{"id": "c1"}],
+			profile_context={
+				"tenant_id": kwargs["tenant_id"],
+				"user_id": kwargs["user_id"],
+				"profile_id": kwargs["profile_id"],
+				"knowledge_base_id": kwargs["knowledge_base_id"],
+			},
+			reasoning_summary={"confidence": "high"},
+			raw_response={"answer": "我负责企业级 RAG 项目。"},
+			error_message=None,
+			audit_status="draft_created",
+			send_allowed=False,
+			approval_required=True,
+		)
+
+	monkeypatch.setattr(
+		"boss_agent_cli.rag_reply.adapters.rag_profile.RagProfileConnector.ask_profile",
+		fake_ask_profile,
+	)
+	runner = CliRunner()
+
+	result = runner.invoke(
+		cli,
+		[
+			"--json",
+			"--data-dir",
+			str(tmp_path),
+			"agent",
+			"ask",
+			"--conversation-id",
+			"demo-session-001",
+			"--question",
+			"介绍一下你的 RAG 项目。",
+		],
+	)
+
+	assert result.exit_code == 0
+	parsed = json.loads(result.output)
+	assert parsed["ok"] is True
+	assert parsed["command"] == "agent-ask"
+	assert captured["profile_id"] == "profile_ai"
+	assert captured["knowledge_base_id"] == "kb_ai"
+	assert parsed["data"]["draft"]["evidence"]["profile_context"]["profile_id"] == "profile_ai"
+	assert parsed["data"]["draft"]["evidence"]["profile_context"]["knowledge_base_id"] == "kb_ai"
 
 
 def test_agent_send_uses_agent_command_name(monkeypatch, tmp_path: Path):

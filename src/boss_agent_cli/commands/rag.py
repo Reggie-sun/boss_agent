@@ -26,7 +26,9 @@ from boss_agent_cli.rag_reply.adapters.boss_automation import (
 )
 from boss_agent_cli.rag_reply.adapters.manual_import import import_messages
 from boss_agent_cli.rag_reply.adapters.mock_envelope import load_and_ingest_mock_envelope
+from boss_agent_cli.rag_reply.adapters.profile_rag_auth import ProfileRagAuthResolver
 from boss_agent_cli.rag_reply.adapters.rag_http import RagHttpAdapter
+from boss_agent_cli.rag_reply.adapters.rag_profile import RagProfileConnector
 from boss_agent_cli.rag_reply.langchain_memory import build_thread_payload
 from boss_agent_cli.rag_reply.models import AuditLogRecord, ConversationRecord, MessageRecord, new_id
 from boss_agent_cli.rag_reply.profile_models import (
@@ -145,11 +147,12 @@ def _workflow_name(ctx: click.Context) -> str:
 	"""Return the active workflow surface name."""
 	current: click.Context | None = ctx
 	while current is not None:
-		if current.info_name == "agent":
+		info_name = getattr(current, "info_name", "")
+		if info_name == "agent":
 			return "agent"
-		if current.info_name == "rag":
+		if info_name == "rag":
 			return "rag"
-		current = current.parent
+		current = getattr(current, "parent", None)
 	return "rag"
 
 
@@ -212,17 +215,29 @@ def _build_agent_answer_adapter(ctx: click.Context) -> AgentAnswerAdapter | None
 def _build_service(ctx: click.Context) -> BossRagReplyService:
 	"""Construct the Boss RAG workflow service."""
 	config = ctx.obj.get("config", {}) if ctx and ctx.obj else {}
+	store = _resolve_store(ctx)
+	rag_timeout_seconds = int(config.get("boss_rag_rag_timeout_seconds", 20))
 	rag_adapter = RagHttpAdapter(
 		base_url=config.get("boss_rag_rag_base_url"),
-		timeout_seconds=int(config.get("boss_rag_rag_timeout_seconds", 20)),
+		timeout_seconds=rag_timeout_seconds,
 		api_key=config.get("boss_rag_rag_api_key"),
 		auth_mode=str(config.get("boss_rag_rag_auth_mode", "none")),
 	)
+	profile_rag_auth_resolver = ProfileRagAuthResolver(
+		config=config,
+		default_base_url=config.get("boss_rag_rag_base_url"),
+		default_timeout_seconds=rag_timeout_seconds,
+		default_api_key=config.get("boss_rag_rag_api_key"),
+		default_auth_mode=str(config.get("boss_rag_rag_auth_mode", "none")),
+	)
 	return BossRagReplyService(
-		store=_resolve_store(ctx),
+		store=store,
 		rag_adapter=rag_adapter,
 		fallback_adapter=_build_ai_fallback_adapter(ctx),
 		agent_answer_adapter=_build_agent_answer_adapter(ctx),
+		profile_service=ProfileService(store),
+		profile_rag_connector=RagProfileConnector(rag_auth_resolver=profile_rag_auth_resolver),
+		profile_binding_required=_workflow_name(ctx) == "agent",
 		salary_reply=str(config.get("boss_rag_salary_reply") or ""),
 		interview_windows=str(config.get("boss_rag_interview_windows") or ""),
 	)
