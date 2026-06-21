@@ -1,4 +1,5 @@
 import json
+import sqlite3
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -800,6 +801,33 @@ def test_agent_watcher_run_once_enabled_returns_run_counts(monkeypatch, tmp_path
 	assert payload["data"]["tasks"] == [{"message_id": "msg_001", "status": "sent"}]
 
 
+def test_agent_watcher_run_once_reports_local_store_lock(monkeypatch, tmp_path: Path):
+	(tmp_path / "config.json").write_text(
+		json.dumps({"boss_rag_watcher_enabled": True}),
+		encoding="utf-8",
+	)
+
+	class _LockedWatcher:
+		def run_once(self, *, live_sync=None):
+			raise sqlite3.OperationalError("database is locked")
+
+	monkeypatch.setattr(rag_commands, "_build_passive_watcher", lambda ctx: _LockedWatcher())
+	runner = CliRunner()
+
+	result = runner.invoke(
+		cli,
+		["--json", "--data-dir", str(tmp_path), "agent", "watcher-run", "--once"],
+	)
+
+	assert result.exit_code == 1
+	payload = json.loads(result.output)
+	assert payload["ok"] is False
+	assert payload["command"] == "agent-watcher-run"
+	assert payload["error"]["code"] == "LOCAL_STORE_LOCKED"
+	assert payload["error"]["recoverable"] is True
+	assert "database is locked" in payload["error"]["message"]
+
+
 def test_agent_watcher_run_once_keeps_last_twenty_tasks(monkeypatch, tmp_path: Path):
 	(tmp_path / "config.json").write_text(
 		json.dumps({"boss_rag_watcher_enabled": True}),
@@ -1168,6 +1196,45 @@ def test_agent_watcher_run_loop_stops_at_max_cycles(monkeypatch, tmp_path: Path)
 	assert payload["data"]["status"] == "completed"
 	assert payload["data"]["cycles"] == 2
 	assert payload["data"]["processed"] == 2
+
+
+def test_agent_watcher_run_loop_reports_local_store_lock(monkeypatch, tmp_path: Path):
+	(tmp_path / "config.json").write_text(
+		json.dumps({"boss_rag_watcher_enabled": True}),
+		encoding="utf-8",
+	)
+	calls = {"run_once": 0, "sleep": []}
+
+	class _LockedWatcher:
+		def run_once(self, *, live_sync=None):
+			calls["run_once"] += 1
+			raise sqlite3.OperationalError("database is locked")
+
+	monkeypatch.setattr(rag_commands, "_build_passive_watcher", lambda ctx: _LockedWatcher())
+	monkeypatch.setattr(rag_commands.time, "sleep", lambda seconds: calls["sleep"].append(seconds))
+	runner = CliRunner()
+
+	result = runner.invoke(
+		cli,
+		[
+			"--json",
+			"--data-dir",
+			str(tmp_path),
+			"agent",
+			"watcher-run",
+			"--loop",
+			"--max-cycles",
+			"2",
+		],
+	)
+
+	assert result.exit_code == 1
+	assert calls["run_once"] == 1
+	assert calls["sleep"] == []
+	payload = json.loads(result.output)
+	assert payload["ok"] is False
+	assert payload["error"]["code"] == "LOCAL_STORE_LOCKED"
+	assert payload["error"]["recoverable"] is True
 
 
 def test_agent_watcher_run_loop_emits_per_cycle_progress(monkeypatch, tmp_path: Path):

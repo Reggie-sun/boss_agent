@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sqlite3
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -240,6 +241,30 @@ def _emit_watcher_cycle_progress(cycle: int, result: WatcherRunResult) -> None:
 			f"skipped {result.skipped}, blocked {result.blocked}."
 		),
 		err=True,
+	)
+
+
+def _is_local_store_locked_error(exc: BaseException) -> bool:
+	return isinstance(exc, sqlite3.OperationalError) and "database is locked" in str(exc).lower()
+
+
+def _handle_local_store_locked_error(ctx: click.Context, exc: sqlite3.OperationalError) -> None:
+	config = ctx.obj.get("config", {}) if ctx and ctx.obj else {}
+	data_dir = Path(ctx.obj["data_dir"])
+	configured = config.get("boss_rag_db_path")
+	db_path = Path(str(configured)).expanduser() if configured else data_dir / "boss-rag.sqlite3"
+	handle_error_output(
+		ctx,
+		_workflow_command(ctx, "watcher-run"),
+		code="LOCAL_STORE_LOCKED",
+		message=f"Boss Agent local store is locked: {exc}",
+		recoverable=True,
+		recovery_action=(
+			"Stop duplicate Boss Agent watcher/frontend commands holding boss-rag.sqlite3, "
+			"then retry make agent-auto-reply."
+		),
+		details={"db_path": str(db_path), "error_message": str(exc)},
+		hints={"manual_action_required": True},
 	)
 
 
@@ -1109,34 +1134,40 @@ def rag_watcher_run_cmd(
 			)
 			return
 	watcher = _build_passive_watcher(ctx)
-	if once:
-		payload = _watcher_result_payload(watcher.run_once(live_sync=effective_live_sync))
-	else:
-		cycles = 0
-		processed = 0
-		skipped = 0
-		blocked = 0
-		tasks: list[dict[str, object]] = []
-		while max_cycles is None or cycles < max_cycles:
-			result = watcher.run_once(live_sync=effective_live_sync)
-			cycles += 1
-			processed += result.processed
-			skipped += result.skipped
-			blocked += result.blocked
-			tasks.extend(result.tasks)
-			if not bool(ctx.obj.get("json_output", False)):
-				_emit_watcher_cycle_progress(cycles, result)
-			if max_cycles is not None and cycles >= max_cycles:
-				break
-			time.sleep(config.poll_seconds)
-		payload = {
-			"status": "completed",
-			"cycles": cycles,
-			"processed": processed,
-			"skipped": skipped,
-			"blocked": blocked,
-			"tasks": tasks[-20:],
-		}
+	try:
+		if once:
+			payload = _watcher_result_payload(watcher.run_once(live_sync=effective_live_sync))
+		else:
+			cycles = 0
+			processed = 0
+			skipped = 0
+			blocked = 0
+			tasks: list[dict[str, object]] = []
+			while max_cycles is None or cycles < max_cycles:
+				result = watcher.run_once(live_sync=effective_live_sync)
+				cycles += 1
+				processed += result.processed
+				skipped += result.skipped
+				blocked += result.blocked
+				tasks.extend(result.tasks)
+				if not bool(ctx.obj.get("json_output", False)):
+					_emit_watcher_cycle_progress(cycles, result)
+				if max_cycles is not None and cycles >= max_cycles:
+					break
+				time.sleep(config.poll_seconds)
+			payload = {
+				"status": "completed",
+				"cycles": cycles,
+				"processed": processed,
+				"skipped": skipped,
+				"blocked": blocked,
+				"tasks": tasks[-20:],
+			}
+	except sqlite3.OperationalError as exc:
+		if _is_local_store_locked_error(exc):
+			_handle_local_store_locked_error(ctx, exc)
+			return
+		raise
 	if chat_page:
 		payload["chat_page"] = chat_page
 	handle_output(
