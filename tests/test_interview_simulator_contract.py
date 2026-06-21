@@ -80,6 +80,23 @@ def test_interview_simulator_profile_refactor_wires_local_profile_workflows():
 		assert visible in combined
 
 
+def test_interview_simulator_profile_hub_hides_manual_kb_and_tracks_uploads():
+	repo_root = Path(__file__).resolve().parents[1]
+	client = (repo_root / "demo" / "interview-simulator" / "src" / "api" / "agentClient.js").read_text(encoding="utf-8")
+	profile_hub = (repo_root / "demo" / "interview-simulator" / "src" / "views" / "ProfileHub.jsx").read_text(encoding="utf-8")
+	profile_bridge = (
+		repo_root / "demo" / "interview-simulator" / "server" / "profileBridge.mjs"
+	).read_text(encoding="utf-8")
+
+	assert 'placeholder="knowledge_base_id"' not in profile_hub
+	assert "knowledge_base_id: newProfile.knowledge_base_id" not in profile_hub
+	assert 'appendTextOption(args, "--knowledge-base-id"' not in profile_bridge
+	assert "fetchProfileUploads" in profile_hub
+	assert "uploadProfileDocument" in client
+	assert "uploadProfileDocument" in profile_hub
+	assert "/uploads" in profile_bridge
+
+
 def test_interview_simulator_profile_binding_uses_cli_supported_source():
 	repo_root = Path(__file__).resolve().parents[1]
 	profile_hub = (repo_root / "demo" / "interview-simulator" / "src" / "views" / "ProfileHub.jsx").read_text(encoding="utf-8")

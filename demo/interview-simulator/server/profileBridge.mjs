@@ -70,7 +70,6 @@ export function createProfileBridgeHandlers({
           "--target-title",
           String(body.target_title || ""),
         ];
-        appendTextOption(args, "--knowledge-base-id", body.knowledge_base_id);
         const payload = await runBossJsonCommand(bridgeConfig, args);
         sendJson(res, 200, { ok: true, data: responseData(payload) });
         return true;

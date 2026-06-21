@@ -4,8 +4,10 @@ import {
   bindConversationProfile,
   createProfile,
   fetchProfileConfig,
+  fetchProfileUploads,
   fetchProfiles,
   fetchUsage,
+  uploadProfileDocument,
   updateProfileConfig,
 } from "../api/agentClient.js";
 import { ProfileConfigPanel } from "../components/profile/ProfileConfigPanel.jsx";
@@ -33,14 +35,19 @@ export function ProfileHub({
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [binding, setBinding] = useState(false);
+  const [uploading, setUploading] = useState(false);
   const [errorMessage, setErrorMessage] = useState("");
   const [statusMessage, setStatusMessage] = useState("");
   const [configDraft, setConfigDraft] = useState(emptyConfig);
+  const [uploads, setUploads] = useState([]);
   const [usageSummary, setUsageSummary] = useState([]);
   const [newProfile, setNewProfile] = useState({
     name: "AI 应用工程师",
     target_title: "AI Application Engineer",
-    knowledge_base_id: "",
+  });
+  const [uploadDraft, setUploadDraft] = useState({
+    source_type: "resume",
+    file_path: "",
   });
 
   const selectedProfile = useMemo(
@@ -72,20 +79,23 @@ export function ProfileHub({
     if (!profileId) {
       setConfigDraft(emptyConfig);
       setUsageSummary([]);
+      setUploads([]);
       return;
     }
     try {
-      const [configData, usageData] = await Promise.all([
+      const [configData, usageData, uploadData] = await Promise.all([
         fetchProfileConfig(profileId).catch(() => ({ config: emptyConfig })),
         fetchUsage({ tenant_id: tenantId, user_id: userId, profile_id: profileId }).catch(() => ({
           usage: [],
         })),
+        fetchProfileUploads(profileId).catch(() => ({ uploads: [] })),
       ]);
       setConfigDraft({
         ...emptyConfig,
         ...(configData.config || {}),
       });
       setUsageSummary(Array.isArray(usageData.usage) ? usageData.usage : []);
+      setUploads(Array.isArray(uploadData.uploads) ? uploadData.uploads : []);
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : "读取 profile 配置失败。");
     }
@@ -102,7 +112,6 @@ export function ProfileHub({
         user_id: userId,
         name: newProfile.name,
         target_title: newProfile.target_title,
-        knowledge_base_id: newProfile.knowledge_base_id,
       });
       await loadProfiles();
       const profileId = String(data.profile?.profile_id || "");
@@ -134,6 +143,29 @@ export function ProfileHub({
       setErrorMessage(error instanceof Error ? error.message : "保存 profile gate 失败。");
     } finally {
       setSaving(false);
+    }
+  }
+
+  async function handleUploadProfileDocument() {
+    const filePath = uploadDraft.file_path.trim();
+    if (!selectedProfileId || !filePath || uploading) return;
+    setUploading(true);
+    setErrorMessage("");
+    setStatusMessage("");
+    try {
+      const data = await uploadProfileDocument(selectedProfileId, {
+        tenant_id: tenantId,
+        user_id: userId,
+        source_type: uploadDraft.source_type || "other",
+        file_path: filePath,
+      });
+      setUploads((current) => [...current, data.upload].filter(Boolean));
+      setUploadDraft((current) => ({ ...current, file_path: "" }));
+      setStatusMessage("Profile 资料已记录。");
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : "记录 profile 资料失败。");
+    } finally {
+      setUploading(false);
     }
   }
 
@@ -201,16 +233,6 @@ export function ProfileHub({
           }
           placeholder="目标岗位"
         />
-        <input
-          value={newProfile.knowledge_base_id}
-          onChange={(event) =>
-            setNewProfile((current) => ({
-              ...current,
-              knowledge_base_id: event.target.value,
-            }))
-          }
-          placeholder="knowledge_base_id"
-        />
         <button
           type="button"
           className="inline-action"
@@ -231,6 +253,59 @@ export function ProfileHub({
         onChange={setConfigDraft}
         onSave={handleSaveConfig}
       />
+
+      <div className="profile-upload-panel">
+        <div className="profile-section-head">
+          <span>PROFILE FILES</span>
+          <strong>{uploads.length ? `${uploads.length} 份资料` : "暂无资料"}</strong>
+        </div>
+        <div className="profile-upload-row">
+          <input
+            value={uploadDraft.source_type}
+            onChange={(event) =>
+              setUploadDraft((current) => ({
+                ...current,
+                source_type: event.target.value,
+              }))
+            }
+            placeholder="资料类型"
+            disabled={!selectedProfileId}
+          />
+          <input
+            value={uploadDraft.file_path}
+            onChange={(event) =>
+              setUploadDraft((current) => ({
+                ...current,
+                file_path: event.target.value,
+              }))
+            }
+            placeholder="文件路径"
+            disabled={!selectedProfileId}
+          />
+          <button
+            type="button"
+            className="inline-action"
+            onClick={handleUploadProfileDocument}
+            disabled={uploading || !selectedProfileId || !uploadDraft.file_path.trim()}
+          >
+            <PlusCircle size={16} />
+            {uploading ? "记录中..." : "添加资料"}
+          </button>
+        </div>
+        {uploads.length ? (
+          <div className="profile-upload-list">
+            {uploads.map((upload) => (
+              <div className="profile-upload-item" key={upload.upload_id}>
+                <strong>{upload.source_filename || upload.upload_id}</strong>
+                <span>{upload.source_type || "other"}</span>
+                <em>{upload.status || "queued"}</em>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <p className="profile-empty">暂无资料。</p>
+        )}
+      </div>
 
       <div className="profile-bridge-actions">
         <button

@@ -24,6 +24,11 @@ METRIC_OUTREACH_AUTO_GREET = "outreach_auto_greet"
 METRIC_ATTACHMENT_RESUME_SEND = "attachment_resume_send"
 
 
+def personal_knowledge_base_id(profile_id: str) -> str:
+	profile_id = profile_id.strip()
+	return f"kb_{profile_id}" if profile_id else ""
+
+
 @dataclass(slots=True)
 class TenantRecord:
 	tenant_id: str
@@ -62,6 +67,11 @@ class UserProfileRecord:
 	created_at: str = field(default_factory=utc_now_iso)
 	updated_at: str = field(default_factory=utc_now_iso)
 
+	def __post_init__(self) -> None:
+		self.knowledge_base_id = self.knowledge_base_id.strip() or personal_knowledge_base_id(
+			self.profile_id
+		)
+
 	@classmethod
 	def new(
 		cls,
@@ -72,13 +82,14 @@ class UserProfileRecord:
 		target_title: str,
 		knowledge_base_id: str = "",
 	) -> "UserProfileRecord":
+		profile_id = new_id("profile")
 		return cls(
 			tenant_id=tenant_id,
 			user_id=user_id,
-			profile_id=new_id("profile"),
+			profile_id=profile_id,
 			display_name=display_name,
 			target_title=target_title,
-			knowledge_base_id=knowledge_base_id,
+			knowledge_base_id=knowledge_base_id or personal_knowledge_base_id(profile_id),
 		)
 
 
@@ -123,6 +134,11 @@ class ConversationProfileBindingRecord:
 	binding_source: str = "manual"
 	created_at: str = field(default_factory=utc_now_iso)
 	updated_at: str = field(default_factory=utc_now_iso)
+
+	def __post_init__(self) -> None:
+		self.knowledge_base_id = self.knowledge_base_id.strip() or personal_knowledge_base_id(
+			self.profile_id
+		)
 
 
 @dataclass(slots=True)

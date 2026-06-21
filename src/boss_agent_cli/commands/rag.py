@@ -806,7 +806,7 @@ def rag_usage_group() -> None:
 @click.option("--user-id", required=True)
 @click.option("--name", "display_name", required=True)
 @click.option("--target-title", required=True)
-@click.option("--knowledge-base-id", default="")
+@click.option("--knowledge-base-id", default="", hidden=True)
 @click.pass_context
 def rag_profile_create_cmd(
 	ctx: click.Context,

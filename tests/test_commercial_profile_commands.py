@@ -35,13 +35,13 @@ def test_agent_profile_create_list_config_and_bind(tmp_path: Path):
 			"AI 应用工程师",
 			"--target-title",
 			"AI Application Engineer",
-			"--knowledge-base-id",
-			"kb_ai",
 		],
 	)
 	assert create.exit_code == 0
 	assert _envelope(create.output)["command"] == "agent-profile-create"
-	profile_id = _json(create.output)["profile"]["profile_id"]
+	profile = _json(create.output)["profile"]
+	profile_id = profile["profile_id"]
+	assert profile["knowledge_base_id"] == f"kb_{profile_id}"
 
 	list_result = runner.invoke(
 		cli,
@@ -128,7 +128,7 @@ def test_agent_profile_create_list_config_and_bind(tmp_path: Path):
 	)
 	assert bind.exit_code == 0
 	assert _envelope(bind.output)["command"] == "agent-conversation-bind-profile"
-	assert _json(bind.output)["binding"]["knowledge_base_id"] == "kb_ai"
+	assert _json(bind.output)["binding"]["knowledge_base_id"] == f"kb_{profile_id}"
 
 	current = runner.invoke(
 		cli,
@@ -167,12 +167,12 @@ def test_agent_conversation_bind_profile_rejects_cross_scope_profile(tmp_path: P
 			"AI 应用工程师",
 			"--target-title",
 			"AI Application Engineer",
-			"--knowledge-base-id",
-			"kb_ai",
 		],
 	)
 	assert create.exit_code == 0
-	profile_id = _json(create.output)["profile"]["profile_id"]
+	profile = _json(create.output)["profile"]
+	profile_id = profile["profile_id"]
+	assert profile["knowledge_base_id"] == f"kb_{profile_id}"
 
 	bind = runner.invoke(
 		cli,
@@ -202,6 +202,34 @@ def test_agent_conversation_bind_profile_rejects_cross_scope_profile(tmp_path: P
 	store = RagReplyStore(tmp_path / "boss-rag.sqlite3")
 	store.initialize()
 	assert ProfileService(store).get_conversation_binding("conv_cross_scope") is None
+
+
+def test_agent_profile_create_accepts_system_generated_knowledge_base_id(tmp_path: Path):
+	runner = CliRunner()
+
+	result = runner.invoke(
+		cli,
+		[
+			"--json",
+			"--data-dir",
+			str(tmp_path),
+			"agent",
+			"profile",
+			"create",
+			"--tenant-id",
+			"tenant_001",
+			"--user-id",
+			"user_001",
+			"--name",
+			"AI 应用工程师",
+			"--target-title",
+			"AI Application Engineer",
+		],
+	)
+
+	assert result.exit_code == 0
+	profile = _json(result.output)["profile"]
+	assert profile["knowledge_base_id"] == f"kb_{profile['profile_id']}"
 
 
 def test_agent_conversation_bind_profile_rejects_cross_scope_overwrite(tmp_path: Path):
@@ -431,6 +459,8 @@ def test_agent_profile_rag_auth_rejects_missing_profile_credential_ref(tmp_path:
 def test_agent_profile_upload_and_status_round_trip_source_file(tmp_path: Path):
 	source = tmp_path / "resume.md"
 	source.write_text("profile notes", encoding="utf-8")
+	portfolio = tmp_path / "portfolio.md"
+	portfolio.write_text("project portfolio", encoding="utf-8")
 	runner = CliRunner()
 	create = runner.invoke(
 		cli,
@@ -482,6 +512,33 @@ def test_agent_profile_upload_and_status_round_trip_source_file(tmp_path: Path):
 	assert upload_record["source_size_bytes"] == source.stat().st_size
 	assert upload_record["rag_document_id"] == ""
 
+	second_upload = runner.invoke(
+		cli,
+		[
+			"--json",
+			"--data-dir",
+			str(tmp_path),
+			"agent",
+			"profile",
+			"upload",
+			"--tenant-id",
+			"tenant_001",
+			"--user-id",
+			"user_001",
+			"--profile-id",
+			profile_id,
+			"--type",
+			"portfolio",
+			"--file",
+			str(portfolio),
+		],
+	)
+	assert second_upload.exit_code == 0
+	second_upload_record = _json(second_upload.output)["upload"]
+	assert second_upload_record["source_filename"] == "portfolio.md"
+	assert second_upload_record["source_type"] == "portfolio"
+	assert second_upload_record["profile_id"] == profile_id
+
 	status = runner.invoke(
 		cli,
 		[
@@ -497,8 +554,10 @@ def test_agent_profile_upload_and_status_round_trip_source_file(tmp_path: Path):
 	)
 	assert status.exit_code == 0
 	uploads = _json(status.output)["uploads"]
+	assert [upload["source_filename"] for upload in uploads] == ["resume.md", "portfolio.md"]
+	assert {upload["profile_id"] for upload in uploads} == {profile_id}
 	assert uploads[0]["upload_id"] == upload_record["upload_id"]
-	assert uploads[0]["source_filename"] == "resume.md"
+	assert uploads[1]["upload_id"] == second_upload_record["upload_id"]
 
 
 def test_agent_usage_summary_returns_stable_json_object(tmp_path: Path):

@@ -2001,13 +2001,15 @@ button {
 }
 
 .profile-create-row,
-.profile-config-grid {
+.profile-config-grid,
+.profile-upload-row {
   display: grid;
   gap: 8px;
 }
 
 .profile-create-row input,
-.profile-config-grid input {
+.profile-config-grid input,
+.profile-upload-row input {
   width: 100%;
   min-width: 0;
   padding: 10px 11px;
@@ -2015,6 +2017,53 @@ button {
   border-radius: 10px;
   background: var(--surface-strong);
   color: var(--text);
+}
+
+.profile-upload-panel {
+  display: grid;
+  gap: 10px;
+}
+
+.profile-upload-row {
+  grid-template-columns: 1fr;
+  align-items: center;
+}
+
+.profile-upload-list {
+  display: grid;
+  gap: 6px;
+}
+
+.profile-upload-item {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  gap: 8px;
+  align-items: center;
+  padding: 8px 0;
+  border-top: 1px solid var(--line);
+}
+
+.profile-upload-item strong,
+.profile-upload-item span,
+.profile-upload-item em {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.profile-upload-item strong {
+  font-size: 0.84rem;
+}
+
+.profile-upload-item span,
+.profile-upload-item em {
+  color: var(--muted);
+  font-size: 0.74rem;
+}
+
+.profile-upload-item em {
+  font-style: normal;
 }
 
 .profile-config-grid {
@@ -2158,7 +2207,8 @@ button {
     overflow-wrap: anywhere;
   }
 
-  .profile-config-grid {
+  .profile-config-grid,
+  .profile-upload-row {
     grid-template-columns: 1fr;
   }
 

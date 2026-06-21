@@ -52,6 +52,13 @@ export async function fetchProfileUploads(profileId) {
   );
 }
 
+export async function uploadProfileDocument(profileId, payload) {
+  return requestJson(
+    `/api/agent/profiles/${encodeURIComponent(profileId)}/uploads`,
+    { method: "POST", body: payload },
+  );
+}
+
 export async function bindConversationProfile(payload) {
   return requestJson("/api/agent/profile-binding", {
     method: "POST",

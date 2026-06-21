@@ -82,3 +82,27 @@ def test_profile_model_defaults_are_safe():
 	assert rag_auth.scope_type == "none"
 	assert usage.used_count == 0
 	assert usage.limit_count == -1
+
+
+def test_profile_new_generates_personal_knowledge_base_id():
+	profile = UserProfileRecord.new(
+		tenant_id="tenant_001",
+		user_id="user_001",
+		display_name="AI 应用工程师",
+		target_title="AI Application Engineer",
+	)
+
+	assert profile.profile_id.startswith("profile_")
+	assert profile.knowledge_base_id == f"kb_{profile.profile_id}"
+
+
+def test_conversation_binding_generates_personal_knowledge_base_id():
+	binding = ConversationProfileBindingRecord(
+		tenant_id="tenant_001",
+		conversation_id="conv_001",
+		user_id="user_001",
+		profile_id="profile_ai",
+		knowledge_base_id="",
+	)
+
+	assert binding.knowledge_base_id == "kb_profile_ai"
