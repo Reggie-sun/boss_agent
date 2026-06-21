@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import sqlite3
 import time
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from pathlib import Path
 
 import click
@@ -29,6 +29,19 @@ from boss_agent_cli.rag_reply.adapters.mock_envelope import load_and_ingest_mock
 from boss_agent_cli.rag_reply.adapters.rag_http import RagHttpAdapter
 from boss_agent_cli.rag_reply.langchain_memory import build_thread_payload
 from boss_agent_cli.rag_reply.models import AuditLogRecord, ConversationRecord, MessageRecord, new_id
+from boss_agent_cli.rag_reply.profile_models import (
+	BINDING_SOURCES,
+	RAG_AUTH_MODES,
+	RAG_SCOPE_TYPES,
+	ConversationProfileBindingRecord,
+	ProfileConfigRecord,
+	ProfileRagAuthBindingRecord,
+	ProfileUploadRecord,
+	TenantRecord,
+	UserProfileRecord,
+	UserRecord,
+)
+from boss_agent_cli.rag_reply.profile_service import ProfileService
 from boss_agent_cli.rag_reply.review import draft_to_payload
 from boss_agent_cli.rag_reply.service import BossRagReplyService
 from boss_agent_cli.rag_reply.store import RagReplyStore
@@ -130,8 +143,14 @@ class _CliWatcherMessageSyncer:
 
 def _workflow_name(ctx: click.Context) -> str:
 	"""Return the active workflow surface name."""
-	parent = ctx.parent.info_name if ctx.parent else ""
-	return "agent" if parent == "agent" else "rag"
+	current: click.Context | None = ctx
+	while current is not None:
+		if current.info_name == "agent":
+			return "agent"
+		if current.info_name == "rag":
+			return "rag"
+		current = current.parent
+	return "rag"
 
 
 def _workflow_command(ctx: click.Context, action: str) -> str:
@@ -148,6 +167,12 @@ def _resolve_store(ctx: click.Context) -> RagReplyStore:
 	store = RagReplyStore(db_path)
 	store.initialize()
 	return store
+
+
+def _resolve_profile_service(ctx: click.Context) -> ProfileService:
+	store = _resolve_store(ctx)
+	store.initialize()
+	return ProfileService(store)
 
 
 def _build_shared_ai_service(ctx: click.Context) -> AIService | None:
@@ -577,11 +602,565 @@ def _not_implemented(ctx: click.Context, command: str) -> None:
 	)
 
 
+def _profile_or_error(
+	ctx: click.Context,
+	service: ProfileService,
+	*,
+	profile_id: str,
+	action: str,
+	tenant_id: str | None = None,
+	user_id: str | None = None,
+) -> UserProfileRecord | None:
+	profile = service.get_profile(profile_id)
+	if profile is None:
+		handle_error_output(
+			ctx,
+			_workflow_command(ctx, action),
+			code="PROFILE_NOT_FOUND",
+			message=f"Unknown profile_id={profile_id}",
+			recoverable=False,
+		)
+		return None
+	if (tenant_id is not None and profile.tenant_id != tenant_id) or (
+		user_id is not None and profile.user_id != user_id
+	):
+		handle_error_output(
+			ctx,
+			_workflow_command(ctx, action),
+			code="PROFILE_SCOPE_MISMATCH",
+			message=f"profile_id={profile_id} does not belong to the requested tenant/user scope.",
+			recoverable=False,
+			details={
+				"profile_id": profile_id,
+				"expected_tenant_id": tenant_id or "",
+				"expected_user_id": user_id or "",
+				"actual_tenant_id": profile.tenant_id,
+				"actual_user_id": profile.user_id,
+			},
+		)
+		return None
+	return profile
+
+
+def _validate_rag_auth_options(
+	ctx: click.Context,
+	*,
+	action: str,
+	auth_mode: str,
+	credential_ref: str,
+	scope_type: str,
+	scope_id: str,
+) -> bool:
+	if auth_mode in {"x_api_key", "bearer"} and not credential_ref.strip():
+		handle_error_output(
+			ctx,
+			_workflow_command(ctx, action),
+			code="RAG_AUTH_CREDENTIAL_REF_REQUIRED",
+			message="credential_ref is required for x_api_key or bearer profile RAG auth.",
+			recoverable=True,
+			recovery_action="Pass --credential-ref with a config or environment key name.",
+		)
+		return False
+	if credential_ref.strip() and auth_mode not in {"x_api_key", "bearer"}:
+		handle_error_output(
+			ctx,
+			_workflow_command(ctx, action),
+			code="RAG_AUTH_CREDENTIAL_REF_UNSUPPORTED",
+			message="credential_ref is only valid with x_api_key or bearer profile RAG auth.",
+			recoverable=True,
+			recovery_action="Use --auth-mode x_api_key or bearer, or remove --credential-ref.",
+		)
+		return False
+	if scope_type == "none" and scope_id.strip():
+		handle_error_output(
+			ctx,
+			_workflow_command(ctx, action),
+			code="RAG_AUTH_SCOPE_ID_UNSUPPORTED",
+			message="scope_id requires scope_type document_id or category_id.",
+			recoverable=True,
+			recovery_action="Set --scope-type document_id/category_id or remove --scope-id.",
+		)
+		return False
+	if scope_type in {"document_id", "category_id"} and not scope_id.strip():
+		handle_error_output(
+			ctx,
+			_workflow_command(ctx, action),
+			code="RAG_AUTH_SCOPE_ID_REQUIRED",
+			message="scope_id is required for document_id or category_id profile RAG scope.",
+			recoverable=True,
+			recovery_action="Pass --scope-id with the RAG document/category identifier.",
+		)
+		return False
+	return True
+
+
+def _optional_text(value: str | None, fallback: str) -> str:
+	return fallback if value is None else value
+
+
+def _optional_bool(value: bool | None, fallback: bool) -> bool:
+	return fallback if value is None else value
+
+
+def _usage_counter_payloads(
+	service: ProfileService,
+	*,
+	tenant_id: str,
+	user_id: str | None = None,
+	profile_id: str | None = None,
+) -> list[dict[str, object]]:
+	clauses = ["tenant_id = ?"]
+	params: list[str] = [tenant_id]
+	if user_id:
+		clauses.append("user_id = ?")
+		params.append(user_id)
+	if profile_id:
+		clauses.append("profile_id = ?")
+		params.append(profile_id)
+	query = f"""
+		SELECT * FROM usage_counters
+		WHERE {' AND '.join(clauses)}
+		ORDER BY user_id, profile_id, metric_name, period_start, period_end
+	"""
+	with service.store.connect() as conn:
+		rows = conn.execute(query, params).fetchall()
+	return [
+		{
+			"tenant_id": str(row["tenant_id"]),
+			"user_id": str(row["user_id"]),
+			"profile_id": str(row["profile_id"]),
+			"metric_name": str(row["metric_name"]),
+			"period_start": str(row["period_start"]),
+			"period_end": str(row["period_end"]),
+			"used_count": int(row["used_count"]),
+			"limit_count": int(row["limit_count"]),
+			"updated_at": str(row["updated_at"]),
+		}
+		for row in rows
+	]
+
+
 @click.group("rag")
 @click.pass_context
 def rag_group(ctx: click.Context) -> None:
 	"""Boss Agent workflow commands. Legacy alias: rag."""
 	ctx.ensure_object(dict)
+
+
+@rag_group.group("profile")
+def rag_profile_group() -> None:
+	"""Manage commercial profiles."""
+
+
+@rag_group.group("conversation")
+def rag_conversation_group() -> None:
+	"""Manage conversation profile bindings."""
+
+
+@rag_group.group("usage")
+def rag_usage_group() -> None:
+	"""Inspect commercial usage counters."""
+
+
+@rag_profile_group.command("create")
+@click.option("--tenant-id", required=True)
+@click.option("--user-id", required=True)
+@click.option("--name", "display_name", required=True)
+@click.option("--target-title", required=True)
+@click.option("--knowledge-base-id", default="")
+@click.pass_context
+def rag_profile_create_cmd(
+	ctx: click.Context,
+	tenant_id: str,
+	user_id: str,
+	display_name: str,
+	target_title: str,
+	knowledge_base_id: str,
+) -> None:
+	service = _resolve_profile_service(ctx)
+	tenant = service.get_tenant(tenant_id) or TenantRecord(
+		tenant_id=tenant_id,
+		display_name=tenant_id,
+	)
+	current_user = service.get_user(user_id)
+	if current_user is not None and current_user.tenant_id != tenant_id:
+		handle_error_output(
+			ctx,
+			_workflow_command(ctx, "profile-create"),
+			code="USER_SCOPE_MISMATCH",
+			message=f"user_id={user_id} does not belong to tenant_id={tenant_id}.",
+			recoverable=False,
+			details={
+				"user_id": user_id,
+				"expected_tenant_id": tenant_id,
+				"actual_tenant_id": current_user.tenant_id,
+			},
+		)
+		return
+	user = current_user or UserRecord(
+		tenant_id=tenant_id,
+		user_id=user_id,
+		display_name=user_id,
+		email="",
+	)
+	profile = UserProfileRecord.new(
+		tenant_id=tenant_id,
+		user_id=user_id,
+		display_name=display_name,
+		target_title=target_title,
+		knowledge_base_id=knowledge_base_id,
+	)
+	service.save_tenant(tenant)
+	service.save_user(user)
+	service.save_profile(profile)
+	handle_output(
+		ctx,
+		_workflow_command(ctx, "profile-create"),
+		{"tenant": asdict(tenant), "user": asdict(user), "profile": asdict(profile)},
+		render=lambda data: click.echo(f"Created profile {data['profile']['profile_id']}.", err=True),
+	)
+
+
+@rag_profile_group.command("list")
+@click.option("--tenant-id", required=True)
+@click.option("--user-id", required=True)
+@click.pass_context
+def rag_profile_list_cmd(ctx: click.Context, tenant_id: str, user_id: str) -> None:
+	service = _resolve_profile_service(ctx)
+	profiles = service.list_profiles(tenant_id, user_id)
+	handle_output(
+		ctx,
+		_workflow_command(ctx, "profile-list"),
+		{
+			"tenant_id": tenant_id,
+			"user_id": user_id,
+			"profiles": [asdict(profile) for profile in profiles],
+		},
+		render=lambda data: click.echo(f"Found {len(data['profiles'])} profile(s).", err=True),
+	)
+
+
+@rag_profile_group.group("config")
+def rag_profile_config_group() -> None:
+	"""Manage commercial profile configuration."""
+
+
+@rag_profile_config_group.command("set")
+@click.option("--tenant-id", required=True)
+@click.option("--profile-id", required=True)
+@click.option("--contact-phone", default=None)
+@click.option("--contact-wechat", default=None)
+@click.option("--interview-windows", default=None)
+@click.option("--salary-reply-policy", default=None)
+@click.option("--resume-attachment-path", default=None)
+@click.option("--reply-auto-send-enabled/--no-reply-auto-send-enabled", default=None)
+@click.option("--outreach-auto-send-enabled/--no-outreach-auto-send-enabled", default=None)
+@click.option("--proactive-resume-enabled/--no-proactive-resume-enabled", default=None)
+@click.pass_context
+def rag_profile_config_set_cmd(
+	ctx: click.Context,
+	tenant_id: str,
+	profile_id: str,
+	contact_phone: str | None,
+	contact_wechat: str | None,
+	interview_windows: str | None,
+	salary_reply_policy: str | None,
+	resume_attachment_path: str | None,
+	reply_auto_send_enabled: bool | None,
+	outreach_auto_send_enabled: bool | None,
+	proactive_resume_enabled: bool | None,
+) -> None:
+	service = _resolve_profile_service(ctx)
+	if (
+		_profile_or_error(
+			ctx,
+			service,
+			profile_id=profile_id,
+			action="profile-config-set",
+			tenant_id=tenant_id,
+		)
+		is None
+	):
+		return
+	current = service.get_profile_config(profile_id)
+	config = ProfileConfigRecord(
+		tenant_id=tenant_id,
+		profile_id=profile_id,
+		contact_phone=_optional_text(contact_phone, current.contact_phone if current else ""),
+		contact_wechat=_optional_text(contact_wechat, current.contact_wechat if current else ""),
+		interview_windows=_optional_text(interview_windows, current.interview_windows if current else ""),
+		salary_reply_policy=_optional_text(
+			salary_reply_policy,
+			current.salary_reply_policy if current else "",
+		),
+		resume_attachment_path=_optional_text(
+			resume_attachment_path,
+			current.resume_attachment_path if current else "",
+		),
+		reply_auto_send_enabled=_optional_bool(
+			reply_auto_send_enabled,
+			current.reply_auto_send_enabled if current else False,
+		),
+		outreach_auto_send_enabled=_optional_bool(
+			outreach_auto_send_enabled,
+			current.outreach_auto_send_enabled if current else False,
+		),
+		proactive_resume_enabled=_optional_bool(
+			proactive_resume_enabled,
+			current.proactive_resume_enabled if current else False,
+		),
+	)
+	service.save_profile_config(config)
+	handle_output(
+		ctx,
+		_workflow_command(ctx, "profile-config-set"),
+		{"config": asdict(config)},
+		render=lambda data: click.echo(f"Saved config for {data['config']['profile_id']}.", err=True),
+	)
+
+
+@rag_profile_group.command("upload")
+@click.option("--tenant-id", required=True)
+@click.option("--user-id", required=True)
+@click.option("--profile-id", required=True)
+@click.option("--type", "source_type", required=True)
+@click.option("--file", "file_path", required=True)
+@click.pass_context
+def rag_profile_upload_cmd(
+	ctx: click.Context,
+	tenant_id: str,
+	user_id: str,
+	profile_id: str,
+	source_type: str,
+	file_path: str,
+) -> None:
+	service = _resolve_profile_service(ctx)
+	if (
+		_profile_or_error(
+			ctx,
+			service,
+			profile_id=profile_id,
+			action="profile-upload",
+			tenant_id=tenant_id,
+			user_id=user_id,
+		)
+		is None
+	):
+		return
+	source = Path(file_path).expanduser()
+	source_size = source.stat().st_size if source.is_file() else 0
+	upload = ProfileUploadRecord(
+		tenant_id=tenant_id,
+		user_id=user_id,
+		profile_id=profile_id,
+		upload_id=new_id("upload"),
+		source_filename=source.name,
+		source_type=source_type,
+		source_size_bytes=source_size,
+		rag_document_id="",
+		status="uploaded" if source.is_file() else "queued",
+	)
+	service.save_upload(upload)
+	handle_output(
+		ctx,
+		_workflow_command(ctx, "profile-upload"),
+		{"upload": asdict(upload)},
+		render=lambda data: click.echo(f"Recorded upload {data['upload']['upload_id']}.", err=True),
+	)
+
+
+@rag_profile_group.command("upload-status")
+@click.option("--profile-id", required=True)
+@click.pass_context
+def rag_profile_upload_status_cmd(ctx: click.Context, profile_id: str) -> None:
+	service = _resolve_profile_service(ctx)
+	uploads = service.list_uploads(profile_id)
+	handle_output(
+		ctx,
+		_workflow_command(ctx, "profile-upload-status"),
+		{"profile_id": profile_id, "uploads": [asdict(upload) for upload in uploads]},
+		render=lambda data: click.echo(f"Found {len(data['uploads'])} upload(s).", err=True),
+	)
+
+
+@rag_profile_group.group("rag-auth")
+def rag_profile_rag_auth_group() -> None:
+	"""Manage profile RAG auth references."""
+
+
+@rag_profile_rag_auth_group.command("set")
+@click.option("--tenant-id", required=True)
+@click.option("--user-id", required=True)
+@click.option("--profile-id", required=True)
+@click.option("--auth-mode", required=True, type=click.Choice(sorted(RAG_AUTH_MODES)))
+@click.option("--credential-ref", default="")
+@click.option("--scope-type", default="none", type=click.Choice(sorted(RAG_SCOPE_TYPES)))
+@click.option("--scope-id", default="")
+@click.pass_context
+def rag_profile_rag_auth_set_cmd(
+	ctx: click.Context,
+	tenant_id: str,
+	user_id: str,
+	profile_id: str,
+	auth_mode: str,
+	credential_ref: str,
+	scope_type: str,
+	scope_id: str,
+) -> None:
+	service = _resolve_profile_service(ctx)
+	if (
+		_profile_or_error(
+			ctx,
+			service,
+			profile_id=profile_id,
+			action="profile-rag-auth-set",
+			tenant_id=tenant_id,
+			user_id=user_id,
+		)
+		is None
+	):
+		return
+	if not _validate_rag_auth_options(
+		ctx,
+		action="profile-rag-auth-set",
+		auth_mode=auth_mode,
+		credential_ref=credential_ref,
+		scope_type=scope_type,
+		scope_id=scope_id,
+	):
+		return
+	binding = ProfileRagAuthBindingRecord(
+		tenant_id=tenant_id,
+		user_id=user_id,
+		profile_id=profile_id,
+		auth_mode=auth_mode,
+		credential_ref=credential_ref,
+		scope_type=scope_type,
+		scope_id=scope_id,
+	)
+	service.save_profile_rag_auth_binding(binding)
+	handle_output(
+		ctx,
+		_workflow_command(ctx, "profile-rag-auth-set"),
+		{"binding": asdict(binding)},
+		render=lambda data: click.echo(f"Saved RAG auth for {data['binding']['profile_id']}.", err=True),
+	)
+
+
+@rag_conversation_group.command("bind-profile")
+@click.option("--conversation-id", required=True)
+@click.option("--tenant-id", required=True)
+@click.option("--user-id", required=True)
+@click.option("--profile-id", required=True)
+@click.option("--binding-source", default="manual", type=click.Choice(sorted(BINDING_SOURCES)))
+@click.pass_context
+def rag_conversation_bind_profile_cmd(
+	ctx: click.Context,
+	conversation_id: str,
+	tenant_id: str,
+	user_id: str,
+	profile_id: str,
+	binding_source: str,
+) -> None:
+	service = _resolve_profile_service(ctx)
+	profile = _profile_or_error(
+		ctx,
+		service,
+		profile_id=profile_id,
+		action="conversation-bind-profile",
+		tenant_id=tenant_id,
+		user_id=user_id,
+	)
+	if profile is None:
+		return
+	current = service.get_conversation_binding(conversation_id)
+	if current is not None and (current.tenant_id != tenant_id or current.user_id != user_id):
+		handle_error_output(
+			ctx,
+			_workflow_command(ctx, "conversation-bind-profile"),
+			code="CONVERSATION_SCOPE_MISMATCH",
+			message=f"conversation_id={conversation_id} is already bound to another tenant/user scope.",
+			recoverable=False,
+			details={
+				"conversation_id": conversation_id,
+				"expected_tenant_id": tenant_id,
+				"expected_user_id": user_id,
+				"actual_tenant_id": current.tenant_id,
+				"actual_user_id": current.user_id,
+			},
+		)
+		return
+	binding = ConversationProfileBindingRecord(
+		tenant_id=tenant_id,
+		conversation_id=conversation_id,
+		user_id=user_id,
+		profile_id=profile_id,
+		knowledge_base_id=profile.knowledge_base_id,
+		binding_source=binding_source,
+	)
+	service.bind_conversation(binding)
+	handle_output(
+		ctx,
+		_workflow_command(ctx, "conversation-bind-profile"),
+		{"binding": asdict(binding)},
+		render=lambda data: click.echo(
+			f"Bound {data['binding']['conversation_id']} to {data['binding']['profile_id']}.",
+			err=True,
+		),
+	)
+
+
+@rag_conversation_group.command("profile")
+@click.option("--conversation-id", required=True)
+@click.pass_context
+def rag_conversation_profile_cmd(ctx: click.Context, conversation_id: str) -> None:
+	service = _resolve_profile_service(ctx)
+	binding = service.get_conversation_binding(conversation_id)
+	if binding is None:
+		handle_error_output(
+			ctx,
+			_workflow_command(ctx, "conversation-profile"),
+			code="PROFILE_BINDING_NOT_FOUND",
+			message=f"No profile binding for conversation_id={conversation_id}",
+			recoverable=False,
+		)
+		return
+	handle_output(
+		ctx,
+		_workflow_command(ctx, "conversation-profile"),
+		{"binding": asdict(binding)},
+		render=lambda data: click.echo(f"Loaded binding for {data['binding']['conversation_id']}.", err=True),
+	)
+
+
+@rag_usage_group.command("summary")
+@click.option("--tenant-id", required=True)
+@click.option("--user-id", default=None)
+@click.option("--profile-id", default=None)
+@click.pass_context
+def rag_usage_summary_cmd(
+	ctx: click.Context,
+	tenant_id: str,
+	user_id: str | None,
+	profile_id: str | None,
+) -> None:
+	service = _resolve_profile_service(ctx)
+	handle_output(
+		ctx,
+		_workflow_command(ctx, "usage-summary"),
+		{
+			"tenant_id": tenant_id,
+			"user_id": user_id or "",
+			"profile_id": profile_id or "",
+			"counters": _usage_counter_payloads(
+				service,
+				tenant_id=tenant_id,
+				user_id=user_id,
+				profile_id=profile_id,
+			),
+		},
+		render=lambda data: click.echo(f"Found {len(data['counters'])} usage counter(s).", err=True),
+	)
 
 
 @rag_group.command("init")
