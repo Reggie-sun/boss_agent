@@ -239,9 +239,13 @@ class AgentAnswerAdapter:
 		invitation_tokens = (
 			"招聘",
 			"急招",
+			"诚聘",
+			"招贤",
+			"纳士",
 			"岗位",
 			"职位",
 			"工作机会",
+			"新的机会",
 			"看工作",
 			"在看机会",
 		)
@@ -249,6 +253,7 @@ class AgentAnswerAdapter:
 			"沟通",
 			"聊",
 			"兴趣",
+			"考虑",
 			"有时间",
 			"方便",
 			"机会",

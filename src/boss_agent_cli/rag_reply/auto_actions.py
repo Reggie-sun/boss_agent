@@ -35,6 +35,7 @@ class AutoReplyAction:
     send_attachment_resume: bool = False
     resume_file: str = ""
     blocked_reason: str = ""
+    attachment_required: bool = False
 
 
 def build_action_for_draft(
@@ -56,6 +57,7 @@ def build_action_for_draft(
             message=message,
             send_attachment_resume=True,
             resume_file=resume_file,
+            attachment_required=True,
         )
     if intent in {"interview_time", "availability_or_schedule"}:
         return AutoReplyAction(

@@ -60,6 +60,68 @@ class _Delivery:
         }
 
 
+class _FailingDelivery:
+    def __init__(self, error):
+        self.error = error
+        self.calls = []
+
+    def send(
+        self,
+        *,
+        security_id,
+        message,
+        send_attachment_resume=False,
+        resume_file="",
+        target=None,
+    ):
+        self.calls.append(
+            {
+                "security_id": security_id,
+                "message": message,
+                "send_attachment_resume": send_attachment_resume,
+                "resume_file": resume_file,
+                "target": target or {},
+            }
+        )
+        raise self.error
+
+
+class _TextThenFailingAttachmentDelivery(_Delivery):
+    def send(
+        self,
+        *,
+        security_id,
+        message,
+        send_attachment_resume=False,
+        resume_file="",
+        target=None,
+    ):
+        self.calls.append(
+            {
+                "security_id": security_id,
+                "message": message,
+                "send_attachment_resume": send_attachment_resume,
+                "resume_file": resume_file,
+                "target": target or {},
+            }
+        )
+        if send_attachment_resume:
+            return {
+                "ok": False,
+                "status": "send_failed",
+                "message_sent": False,
+                "resume_sent": False,
+                "error_message": "attachment upload failed",
+            }
+        return {
+            "ok": True,
+            "status": "sent",
+            "message_sent": True,
+            "resume_sent": False,
+            "error_message": "",
+        }
+
+
 class _Syncer:
     def __init__(self, result):
         self.result = result
@@ -92,10 +154,17 @@ def _config(tmp_path, *, dry_run=False, send_enabled=True):
     )
 
 
-def _toolbox(tmp_path, *, dry_run=False, send_enabled=True, sync_result=None):
+def _toolbox(
+    tmp_path,
+    *,
+    dry_run=False,
+    send_enabled=True,
+    sync_result=None,
+    delivery=None,
+):
     store = _store(tmp_path)
     service = BossRagReplyService(store=store, rag_adapter=_RagAdapter())
-    delivery = _Delivery()
+    delivery = delivery or _Delivery()
     context = BossAgentToolContext(
         store=store,
         service=service,
@@ -222,6 +291,36 @@ def test_send_boss_reply_guarded_dry_run_does_not_call_delivery(tmp_path):
     assert delivery.calls == []
 
 
+def test_send_boss_reply_guarded_fails_closed_when_delivery_raises(tmp_path):
+    delivery = _FailingDelivery(RuntimeError("browser unavailable"))
+    toolbox, store, _delivery = _toolbox(
+        tmp_path,
+        dry_run=False,
+        send_enabled=True,
+        delivery=delivery,
+    )
+
+    result = toolbox.send_boss_reply_guarded(
+        action={
+            "kind": "send_text",
+            "message": "您好，我主要负责企业级 RAG。",
+            "send_attachment_resume": False,
+            "resume_file": "",
+            "status_after_send": "sent",
+        },
+        security_id="sec_001",
+        target={"company": "测试公司"},
+    )
+
+    assert result.ok is False
+    assert result.status == "send_failed"
+    assert result.error_message == "browser unavailable"
+    assert result.data["delivery"]["ok"] is False
+    assert result.data["delivery"]["status"] == "send_failed"
+    assert len(delivery.calls) == 1
+    assert store.list_drafts() == []
+
+
 def test_send_boss_reply_guarded_routes_resume_action_to_attachment_tool(tmp_path):
     toolbox, _store, delivery = _toolbox(tmp_path, dry_run=False, send_enabled=True)
     resume_file = Path(toolbox.context.config.resume_attachment_path)
@@ -240,6 +339,90 @@ def test_send_boss_reply_guarded_routes_resume_action_to_attachment_tool(tmp_pat
 
     assert result.ok is True
     assert result.status == "sent"
+    assert delivery.calls == [
+        {
+            "security_id": "sec_001",
+            "message": "可以的，我这边通过 BOSS 直聘发送附件简历给您。",
+            "send_attachment_resume": True,
+            "resume_file": str(resume_file),
+            "target": {"company": "测试公司"},
+        }
+    ]
+
+
+def test_send_boss_reply_guarded_sends_text_before_optional_proactive_resume(tmp_path):
+    delivery = _TextThenFailingAttachmentDelivery()
+    toolbox, _store, _delivery = _toolbox(
+        tmp_path,
+        dry_run=False,
+        send_enabled=True,
+        delivery=delivery,
+    )
+    resume_file = Path(toolbox.context.config.resume_attachment_path)
+
+    result = toolbox.send_boss_reply_guarded(
+        action={
+            "kind": "send_text",
+            "message": "您好，工作还在看的，方便的话可以继续沟通。",
+            "send_attachment_resume": True,
+            "attachment_required": False,
+            "resume_file": str(resume_file),
+            "status_after_send": "sent",
+        },
+        security_id="sec_001",
+        target={"company": "测试公司"},
+    )
+
+    assert result.ok is True
+    assert result.status == "sent"
+    assert result.error_message == ""
+    assert delivery.calls == [
+        {
+            "security_id": "sec_001",
+            "message": "您好，工作还在看的，方便的话可以继续沟通。",
+            "send_attachment_resume": False,
+            "resume_file": "",
+            "target": {"company": "测试公司"},
+        },
+        {
+            "security_id": "sec_001",
+            "message": "您好，工作还在看的，方便的话可以继续沟通。",
+            "send_attachment_resume": True,
+            "resume_file": str(resume_file),
+            "target": {"company": "测试公司"},
+        },
+    ]
+    assert result.data["delivery"]["message_sent"] is True
+    assert result.data["delivery"]["resume_sent"] is False
+    assert result.data["delivery"]["attachment_delivery"]["ok"] is False
+    assert result.data["delivery"]["attachment_error_message"] == "attachment upload failed"
+
+
+def test_send_boss_reply_guarded_keeps_required_resume_attachment_fail_closed(tmp_path):
+    delivery = _TextThenFailingAttachmentDelivery()
+    toolbox, _store, _delivery = _toolbox(
+        tmp_path,
+        dry_run=False,
+        send_enabled=True,
+        delivery=delivery,
+    )
+    resume_file = Path(toolbox.context.config.resume_attachment_path)
+
+    result = toolbox.send_boss_reply_guarded(
+        action={
+            "kind": "send_text",
+            "message": "可以的，我这边通过 BOSS 直聘发送附件简历给您。",
+            "send_attachment_resume": True,
+            "attachment_required": True,
+            "resume_file": str(resume_file),
+            "status_after_send": "sent",
+        },
+        security_id="sec_001",
+        target={"company": "测试公司"},
+    )
+
+    assert result.ok is False
+    assert result.status == "attachment_failed"
     assert delivery.calls == [
         {
             "security_id": "sec_001",
@@ -310,6 +493,31 @@ def test_send_attachment_resume_guarded_fails_closed_for_missing_security_id(tmp
     assert delivery.calls == []
 
 
+def test_send_attachment_resume_guarded_fails_closed_when_delivery_raises(tmp_path):
+    delivery = _FailingDelivery(RuntimeError("browser unavailable"))
+    toolbox, _store, _delivery = _toolbox(
+        tmp_path,
+        dry_run=False,
+        send_enabled=True,
+        delivery=delivery,
+    )
+
+    result = toolbox.send_attachment_resume_guarded(
+        message="可以的，我这边通过 BOSS 直聘发送附件简历给您。",
+        security_id="sec_001",
+        resume_file=toolbox.context.config.resume_attachment_path,
+        target={"company": "测试公司"},
+    )
+
+    assert result.ok is False
+    assert result.status == "attachment_failed"
+    assert result.error_message == "browser unavailable"
+    assert result.data["delivery"]["ok"] is False
+    assert result.data["delivery"]["status"] == "attachment_failed"
+    assert result.data["delivery"]["send_attachment_resume"] is True
+    assert len(delivery.calls) == 1
+
+
 def test_send_read_no_reply_followup_guarded_dry_run_uses_existing_disclosure(tmp_path):
     toolbox, store, delivery = _toolbox(tmp_path, dry_run=True, send_enabled=True)
 
@@ -372,6 +580,31 @@ def test_send_read_no_reply_followup_guarded_sends_and_records_audit(tmp_path):
     assert audit.payload["agent_disclosed"] is True
 
 
+def test_send_read_no_reply_followup_guarded_fails_closed_when_delivery_raises(tmp_path):
+    delivery = _FailingDelivery(RuntimeError("browser unavailable"))
+    toolbox, store, _delivery = _toolbox(
+        tmp_path,
+        dry_run=False,
+        send_enabled=True,
+        delivery=delivery,
+    )
+
+    result = toolbox.send_read_no_reply_followup_guarded(
+        security_id="sec_read",
+        message="您好，想跟进一下这个岗位。",
+        target={"company": "测试公司"},
+    )
+
+    assert result.ok is False
+    assert result.status == "send_failed"
+    assert result.error_message == "browser unavailable"
+    assert result.data["delivery"]["ok"] is False
+    assert result.data["delivery"]["status"] == "send_failed"
+    assert result.data["message_sent"] is False
+    assert len(delivery.calls) == 1
+    assert store.list_audit_logs("sec_read") == []
+
+
 def test_send_read_no_reply_followup_guarded_does_not_repeat_disclosure(tmp_path):
     toolbox, store, delivery = _toolbox(tmp_path, dry_run=False, send_enabled=True)
     store.append_audit_log(
@@ -396,3 +629,35 @@ def test_send_read_no_reply_followup_guarded_does_not_repeat_disclosure(tmp_path
     assert result.ok is True
     assert result.status == "sent"
     assert delivery.calls[0]["message"] == "您好，想跟进一下这个岗位。"
+
+
+def test_decide_auto_action_retries_proactive_resume_after_text_only_send(tmp_path):
+    toolbox, store, delivery = _toolbox(tmp_path)
+    toolbox.context.config.proactive_resume_enabled = True
+    store.append_audit_log(
+        AuditLogRecord.new(
+            event_type="watcher_task",
+            entity_type="conversation",
+            entity_id="conv_001",
+            payload={
+                "conversation_id": "conv_001",
+                "status": "sent",
+                "action": {"send_attachment_resume": True},
+                "delivery": {"ok": True, "message_sent": True, "resume_sent": False},
+            },
+        )
+    )
+    draft = DraftRecord.new(
+        conversation_id="conv_001",
+        source_message_id="msg_001",
+        draft_text="您好，工作还在看的，方便的话可以继续沟通。",
+        intent="smalltalk",
+    )
+    store.save_draft(draft)
+
+    result = toolbox.decide_auto_action(draft_id=draft.draft_id)
+
+    assert result.ok is True
+    assert result.data["action"]["send_attachment_resume"] is True
+    assert result.data["action"]["attachment_required"] is False
+    assert delivery.calls == []

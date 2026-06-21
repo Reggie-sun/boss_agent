@@ -221,6 +221,26 @@ class _RecordingDelivery:
         }
 
 
+class _FailingDelivery(_RecordingDelivery):
+    def send(
+        self,
+        *,
+        security_id,
+        message,
+        send_attachment_resume=False,
+        resume_file="",
+        target=None,
+    ):
+        super().send(
+            security_id=security_id,
+            message=message,
+            send_attachment_resume=send_attachment_resume,
+            resume_file=resume_file,
+            target=target,
+        )
+        raise RuntimeError("browser unavailable")
+
+
 class _Syncer:
     def __init__(self, store=None):
         self.calls = 0
@@ -714,6 +734,47 @@ def test_passive_watcher_tool_graph_blocks_missing_security_id(tmp_path):
     assert delivery.calls == []
 
 
+def test_passive_watcher_records_send_failure_when_delivery_raises(tmp_path):
+    store = _store(tmp_path)
+    store.save_conversation(
+        ConversationRecord(
+            conversation_id="conv_001",
+            source="boss_sync",
+            state={"security_id": "sec_001"},
+        )
+    )
+    store.save_message(
+        MessageRecord(
+            message_id="msg_001",
+            conversation_id="conv_001",
+            message_text="介绍下你的 RAG 项目",
+            direction="inbound",
+        )
+    )
+    delivery = _FailingDelivery()
+    config = _config(tmp_path)
+    config.live_sync = True
+    watcher = BossPassiveWatcher(
+        store=store,
+        service=_integration_service(store),
+        config=config,
+        delivery=delivery,
+        message_syncer=_Syncer(),
+    )
+
+    result = watcher.run_once(live_sync=True)
+
+    assert result.processed == 1
+    assert result.blocked == 0
+    assert result.tasks[0]["status"] == "send_failed"
+    assert result.tasks[0]["error_message"] == "browser unavailable"
+    assert result.tasks[0]["delivery"]["ok"] is False
+    assert result.tasks[0]["tool_steps"][-1]["tool"] == "record_watcher_audit"
+    audit = store.list_audit_logs("conv_001")[-1]
+    assert audit.event_type == "watcher_task"
+    assert audit.payload["status"] == "send_failed"
+
+
 def test_passive_watcher_resume_share_sends_attachment_resume(tmp_path):
     store = _store(tmp_path)
     store.save_conversation(
@@ -785,8 +846,10 @@ def test_passive_watcher_sends_proactive_resume_after_first_boss_reply(tmp_path)
 
     assert first.processed == 1
     assert first.tasks[0]["action"]["send_attachment_resume"] is True
-    assert delivery.calls[0]["send_attachment_resume"] is True
-    assert delivery.calls[0]["resume_file"] == config.resume_attachment_path
+    assert first.tasks[0]["action"]["attachment_required"] is False
+    assert delivery.calls[0]["send_attachment_resume"] is False
+    assert delivery.calls[1]["send_attachment_resume"] is True
+    assert delivery.calls[1]["resume_file"] == config.resume_attachment_path
 
     store.save_message(
         MessageRecord(
@@ -802,8 +865,8 @@ def test_passive_watcher_sends_proactive_resume_after_first_boss_reply(tmp_path)
 
     assert second.processed == 1
     assert second.tasks[0]["action"]["send_attachment_resume"] is False
-    assert len(delivery.calls) == 2
-    assert delivery.calls[1]["send_attachment_resume"] is False
+    assert len(delivery.calls) == 3
+    assert delivery.calls[2]["send_attachment_resume"] is False
 
 
 def test_passive_watcher_processes_read_no_reply_pipeline_candidate(tmp_path):
@@ -1219,6 +1282,70 @@ def test_passive_watcher_stops_retrying_unsent_rag_failure_at_failure_limit(tmp_
         }
     ]
     assert delivery.calls == []
+
+
+@pytest.mark.parametrize(
+    ("failure_status", "message_text", "expects_attachment"),
+    [
+        ("send_failed", "介绍下你的 RAG 项目", False),
+        ("attachment_failed", "可以发我一份简历吗", True),
+    ],
+)
+def test_passive_watcher_retries_unsent_delivery_failures(
+    tmp_path, failure_status, message_text, expects_attachment
+):
+    store = _store(tmp_path)
+    store.save_conversation(
+        ConversationRecord(
+            conversation_id="conv_001",
+            source="boss_sync",
+            state={"security_id": "sec_001"},
+        )
+    )
+    store.save_message(
+        MessageRecord(
+            message_id="msg_001",
+            conversation_id="conv_001",
+            message_text=message_text,
+            direction="inbound",
+        )
+    )
+    store.append_audit_log(
+        AuditLogRecord.new(
+            event_type="watcher_task",
+            entity_type="conversation",
+            entity_id="conv_001",
+            payload={
+                "message_id": "msg_001",
+                "status": failure_status,
+                "error_message": "browser unavailable",
+                "action": {"kind": "send_text"},
+                "delivery": {
+                    "ok": False,
+                    "message_sent": False,
+                    "resume_sent": False,
+                },
+            },
+        )
+    )
+    delivery = _RecordingDelivery()
+    config = _config(tmp_path)
+    config.live_sync = True
+    watcher = BossPassiveWatcher(
+        store=store,
+        service=_integration_service(store),
+        config=config,
+        delivery=delivery,
+        message_syncer=_Syncer(),
+    )
+
+    result = watcher.run_once(live_sync=True)
+
+    assert result.processed == 1
+    assert result.skipped == 0
+    assert result.tasks[0]["message_id"] == "msg_001"
+    assert result.tasks[0]["status"] == "sent"
+    assert delivery.calls[0]["send_attachment_resume"] is expects_attachment
 
 
 def test_passive_watcher_blocks_live_sync_without_syncer(tmp_path):

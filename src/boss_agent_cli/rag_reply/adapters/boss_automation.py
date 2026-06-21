@@ -27,6 +27,16 @@ from boss_agent_cli.rag_reply.store import RagReplyStore
 _RECENT_FRIEND_LIST_PAGES = 1
 _RECENT_CONVERSATION_LIMIT = 5
 _CONVERSATION_SYNC_BATCH_SIZE = 5
+_SYNC_PRIORITY_VERSION = 2
+_CANDIDATE_OUTBOUND_LAST_MESSAGE_PREFIXES = (
+	"我是候选人的求职助理 Agent",
+	"您好，我是候选人的agent",
+	"您好，我是候选人的 Agent",
+	"您好，我对这份工作非常感兴趣",
+	"您好，我对这个岗位比较感兴趣",
+	"可以的，我这边通过 BOSS 直聘发送附件简历给您",
+	"您的附件简历",
+)
 
 
 class BossPlatformProtocol(Protocol):
@@ -161,61 +171,75 @@ class BossAutomationAdapter:
 		)
 
 	def sync_messages(self, *, conversation_id: str | None = None) -> SyncMessagesResult:
-		items, error = collect_friend_list_items(self.platform, max_pages=MAX_FRIEND_LIST_PAGES)
-		if error is not None:
-			self._raise_platform_error(error, fallback_message="沟通列表获取失败")
-
 		import_batch_id = new_id("bosssync")
 		conversation_ids: list[str] = []
 		message_ids: list[str] = []
 		seen_message_ids: set[str] = set()
-		selected_items = self._select_friend_items(items, conversation_id)
+		cursor_payload: dict[str, Any] = {}
 		if conversation_id is None:
-			selected_items = self._dedupe_friend_items(selected_items)
+			page, offset, priority = self._message_sync_cursor()
+			items, error, page_payload = self._load_friend_list_page(page)
+			if error is not None:
+				self._raise_platform_error(error, fallback_message="沟通列表获取失败")
+			selected_items, cursor_payload = self._select_friend_item_batch(
+				items,
+				page=page,
+				offset=offset,
+				has_more=page_payload.get("has_more"),
+				priority=priority,
+			)
+		else:
+			items, error = collect_friend_list_items(self.platform, max_pages=MAX_FRIEND_LIST_PAGES)
+			if error is not None:
+				self._raise_platform_error(error, fallback_message="沟通列表获取失败")
+			selected_items = self._select_friend_items(items, conversation_id)
 
-		for batch in self._friend_item_batches(selected_items, size=_CONVERSATION_SYNC_BATCH_SIZE):
-			for raw_item in batch:
-				if not isinstance(raw_item, dict):
+		for raw_item in selected_items:
+			if not isinstance(raw_item, dict):
+				continue
+			conversation = self._save_conversation_from_friend_item(raw_item)
+			if conversation.conversation_id not in conversation_ids:
+				conversation_ids.append(conversation.conversation_id)
+
+			gid = str(conversation.state.get("gid", ""))
+			security_id = str(conversation.state.get("security_id", ""))
+			if not gid or not security_id:
+				continue
+
+			raw_history = self.platform.chat_history(gid, security_id, page=1, count=50)
+			history = self._unwrap_or_raise(raw_history, fallback_message="聊天记录获取失败")
+			messages = history.get("messages") or history.get("historyMsgList") or []
+			for index, raw_message in enumerate(messages):
+				record = self._message_record_from_raw(
+					raw_message,
+					conversation=conversation,
+					gid=gid,
+					import_batch_id=import_batch_id,
+					index=index,
+				)
+				if record is None:
 					continue
-				conversation = self._save_conversation_from_friend_item(raw_item)
-				if conversation.conversation_id not in conversation_ids:
-					conversation_ids.append(conversation.conversation_id)
-
-				gid = str(conversation.state.get("gid", ""))
-				security_id = str(conversation.state.get("security_id", ""))
-				if not gid or not security_id:
+				if record.message_id in seen_message_ids:
 					continue
+				seen_message_ids.add(record.message_id)
+				self.store.save_message(record)
+				message_ids.append(record.message_id)
 
-				raw_history = self.platform.chat_history(gid, security_id, page=1, count=50)
-				history = self._unwrap_or_raise(raw_history, fallback_message="聊天记录获取失败")
-				messages = history.get("messages") or history.get("historyMsgList") or []
-				for index, raw_message in enumerate(messages):
-					record = self._message_record_from_raw(
-						raw_message,
-						conversation=conversation,
-						gid=gid,
-						import_batch_id=import_batch_id,
-						index=index,
-					)
-					if record is None:
-						continue
-					if record.message_id in seen_message_ids:
-						continue
-					seen_message_ids.add(record.message_id)
-					self.store.save_message(record)
-					message_ids.append(record.message_id)
+		payload: dict[str, Any] = {
+			"source": "boss_sync",
+			"conversation_ids": conversation_ids,
+			"message_ids": message_ids,
+			"count": len(message_ids),
+		}
+		if cursor_payload:
+			payload.update(cursor_payload)
 
 		self.store.append_audit_log(
 			AuditLogRecord.new(
 				event_type="boss_messages_synced",
 				entity_type="sync_batch",
 				entity_id=import_batch_id,
-				payload={
-					"source": "boss_sync",
-					"conversation_ids": conversation_ids,
-					"message_ids": message_ids,
-					"count": len(message_ids),
-				},
+				payload=payload,
 			)
 		)
 		return SyncMessagesResult(
@@ -497,11 +521,129 @@ class BossAutomationAdapter:
 
 		return selected
 
-	@staticmethod
-	def _friend_item_batches(items: list[dict[str, Any]], *, size: int) -> list[list[dict[str, Any]]]:
-		if size <= 0:
-			return [items]
-		return [items[index : index + size] for index in range(0, len(items), size)]
+	def _load_friend_list_page(
+		self,
+		page: int,
+	) -> tuple[list[dict[str, Any]], dict[str, Any] | None, dict[str, Any]]:
+		raw = self.platform.friend_list(page=page)
+		if not self.platform.is_success(raw):
+			return [], raw, {}
+		data = self.platform.unwrap_data(raw) or {}
+		if not isinstance(data, dict):
+			return [], None, {"page": page, "has_more": False, "page_count": 0}
+		raw_items = data.get("result") or data.get("friendList") or []
+		items = [item for item in raw_items if isinstance(item, dict)]
+		return items, None, {
+			"page": page,
+			"has_more": data.get("hasMore"),
+			"page_count": len(items),
+		}
+
+	def _message_sync_cursor(self) -> tuple[int, int, str]:
+		for entry in reversed(self.store.list_audit_logs()):
+			if entry.event_type != "boss_messages_synced":
+				continue
+			cursor = entry.payload.get("next_cursor")
+			if not isinstance(cursor, dict):
+				continue
+			page = self._positive_int(cursor.get("page"), default=1)
+			if cursor.get("priority_version") != _SYNC_PRIORITY_VERSION:
+				offset = 0
+				priority = "priority"
+			else:
+				offset = self._non_negative_int(cursor.get("offset"), default=0)
+				priority = str(cursor.get("priority") or "priority")
+			if page > MAX_FRIEND_LIST_PAGES:
+				return 1, 0, "priority"
+			return page, offset, priority
+		return 1, 0, "priority"
+
+	def _select_friend_item_batch(
+		self,
+		items: list[dict[str, Any]],
+		*,
+		page: int,
+		offset: int,
+		has_more: Any,
+		priority: str,
+	) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+		unique_items = self._dedupe_friend_items(items)
+		if priority != "normal":
+			priority_items = [item for item in unique_items if self._priority_friend_item(item)]
+			if priority_items:
+				return self._select_priority_friend_item_batch(
+					priority_items,
+					page=page,
+					offset=offset,
+					has_more=has_more,
+				)
+		safe_offset = max(offset, 0)
+		selected_items = unique_items[safe_offset : safe_offset + _CONVERSATION_SYNC_BATCH_SIZE]
+		next_offset = safe_offset + _CONVERSATION_SYNC_BATCH_SIZE
+		next_priority = "normal"
+		if next_offset < len(unique_items):
+			next_page = page
+		elif has_more is not False and page < MAX_FRIEND_LIST_PAGES:
+			next_page = page + 1
+			next_offset = 0
+			next_priority = "priority"
+		else:
+			next_page = 1
+			next_offset = 0
+			next_priority = "priority"
+		return selected_items, {
+			"sync_cursor": {
+				"page": page,
+				"offset": safe_offset,
+				"priority": "normal",
+				"priority_version": _SYNC_PRIORITY_VERSION,
+				"batch_size": _CONVERSATION_SYNC_BATCH_SIZE,
+				"page_count": len(unique_items),
+				"has_more": has_more,
+			},
+			"next_cursor": {
+				"page": next_page,
+				"offset": next_offset,
+				"priority": next_priority,
+				"priority_version": _SYNC_PRIORITY_VERSION,
+			},
+		}
+
+	def _select_priority_friend_item_batch(
+		self,
+		priority_items: list[dict[str, Any]],
+		*,
+		page: int,
+		offset: int,
+		has_more: Any,
+	) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+		safe_offset = max(offset, 0)
+		selected_items = priority_items[safe_offset : safe_offset + _CONVERSATION_SYNC_BATCH_SIZE]
+		next_offset = safe_offset + _CONVERSATION_SYNC_BATCH_SIZE
+		if next_offset < len(priority_items):
+			next_page = page
+			next_priority = "priority"
+		else:
+			next_page = page
+			next_offset = 0
+			next_priority = "normal"
+		return selected_items, {
+			"sync_cursor": {
+				"page": page,
+				"offset": safe_offset,
+				"priority": "priority",
+				"priority_version": _SYNC_PRIORITY_VERSION,
+				"batch_size": _CONVERSATION_SYNC_BATCH_SIZE,
+				"page_count": len(priority_items),
+				"has_more": has_more,
+			},
+			"next_cursor": {
+				"page": next_page,
+				"offset": next_offset,
+				"priority": next_priority,
+				"priority_version": _SYNC_PRIORITY_VERSION,
+			},
+		}
 
 	def _unwrap_or_raise(self, response: dict[str, Any], *, fallback_message: str) -> dict[str, Any]:
 		if not self.platform.is_success(response):
@@ -538,6 +680,44 @@ class BossAutomationAdapter:
 		gid = str(raw_item.get("uid") or raw_item.get("encryptUid") or "")
 		security_id = str(raw_item.get("securityId") or "")
 		return f"boss_recruiter_{gid or security_id or 'unknown'}"
+
+	@staticmethod
+	def _unread_count(raw_item: dict[str, Any]) -> int:
+		try:
+			return int(raw_item.get("unreadMsgCount") or 0)
+		except (TypeError, ValueError):
+			return 0
+
+	def _priority_friend_item(self, raw_item: dict[str, Any]) -> bool:
+		if self._unread_count(raw_item) > 0:
+			return True
+		last_msg = str(raw_item.get("lastMsg") or "").strip()
+		if not last_msg:
+			return False
+		return not self._looks_like_candidate_outbound_last_message(last_msg)
+
+	@staticmethod
+	def _looks_like_candidate_outbound_last_message(last_msg: str) -> bool:
+		return any(
+			last_msg.startswith(prefix)
+			for prefix in _CANDIDATE_OUTBOUND_LAST_MESSAGE_PREFIXES
+		)
+
+	@staticmethod
+	def _positive_int(value: Any, *, default: int) -> int:
+		try:
+			parsed = int(value)
+		except (TypeError, ValueError):
+			return default
+		return parsed if parsed > 0 else default
+
+	@staticmethod
+	def _non_negative_int(value: Any, *, default: int) -> int:
+		try:
+			parsed = int(value)
+		except (TypeError, ValueError):
+			return default
+		return parsed if parsed >= 0 else default
 
 	@staticmethod
 	def _build_job_summary(title: str, company: str, salary: str, city: str, description: str) -> str:

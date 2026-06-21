@@ -186,6 +186,7 @@ class BossAgentToolbox:
             send_attachment_resume=True,
             resume_file=require_resume_file(self.context.config.resume_attachment_path),
             blocked_reason=action.blocked_reason,
+            attachment_required=False,
         )
 
     def resolve_boss_target(self, *, conversation_id: str) -> ToolResult:
@@ -229,6 +230,15 @@ class BossAgentToolbox:
 
         status_after_send = str(action.get("status_after_send") or "sent")
         if bool(action.get("send_attachment_resume")):
+            attachment_required = bool(action.get("attachment_required", True))
+            if not attachment_required:
+                return self._send_text_with_optional_attachment_resume(
+                    message=message,
+                    security_id=security_id,
+                    resume_file=str(action.get("resume_file") or ""),
+                    target=target,
+                    status_after_send=status_after_send,
+                )
             return self.send_attachment_resume_guarded(
                 message=message,
                 security_id=security_id,
@@ -236,6 +246,61 @@ class BossAgentToolbox:
                 target=target,
                 status_after_send=status_after_send,
             )
+        return self._send_text_reply_guarded(
+            message=message,
+            security_id=security_id,
+            target=target,
+            status_after_send=status_after_send,
+        )
+
+    def _send_text_with_optional_attachment_resume(
+        self,
+        *,
+        message: str,
+        security_id: str,
+        resume_file: str,
+        target: dict[str, str],
+        status_after_send: str,
+    ) -> ToolResult:
+        text_result = self._send_text_reply_guarded(
+            message=message,
+            security_id=security_id,
+            target=target,
+            status_after_send=status_after_send,
+        )
+        if not text_result.ok:
+            return text_result
+        attachment_result = self.send_attachment_resume_guarded(
+            message=message,
+            security_id=security_id,
+            resume_file=resume_file,
+            target=target,
+            status_after_send=status_after_send,
+        )
+        delivery = dict(text_result.data.get("delivery") or {})
+        if attachment_result.ok:
+            attachment_delivery = dict(attachment_result.data.get("delivery") or {})
+            delivery["resume_sent"] = bool(attachment_delivery.get("resume_sent", True))
+            delivery["attachment_delivery"] = attachment_delivery
+        else:
+            attachment_delivery = dict(attachment_result.data.get("delivery") or {})
+            delivery["resume_sent"] = False
+            delivery["attachment_delivery"] = attachment_delivery
+            delivery["attachment_error_message"] = attachment_result.error_message
+        return ToolResult(
+            ok=True,
+            status=status_after_send,
+            data={"delivery": delivery},
+        )
+
+    def _send_text_reply_guarded(
+        self,
+        *,
+        message: str,
+        security_id: str,
+        target: dict[str, str],
+        status_after_send: str,
+    ) -> ToolResult:
         if self.context.config.dry_run:
             return ToolResult(
                 ok=True,
@@ -243,13 +308,16 @@ class BossAgentToolbox:
                 data={"delivery": {"ok": True, "status": "dry_run"}},
             )
 
-        delivery = self.context.delivery.send(
-            security_id=security_id,
-            message=message,
-            send_attachment_resume=False,
-            resume_file="",
-            target=target,
-        )
+        try:
+            delivery = self.context.delivery.send(
+                security_id=security_id,
+                message=message,
+                send_attachment_resume=False,
+                resume_file="",
+                target=target,
+            )
+        except Exception as exc:
+            return _delivery_error_result(exc, status="send_failed")
         ok = bool(delivery.get("ok"))
         return ToolResult(
             ok=ok,
@@ -303,13 +371,21 @@ class BossAgentToolbox:
                 },
             )
 
-        delivery = self.context.delivery.send(
-            security_id=security_id,
-            message=message,
-            send_attachment_resume=True,
-            resume_file=resolved_resume_file,
-            target=target,
-        )
+        try:
+            delivery = self.context.delivery.send(
+                security_id=security_id,
+                message=message,
+                send_attachment_resume=True,
+                resume_file=resolved_resume_file,
+                target=target,
+            )
+        except Exception as exc:
+            return _delivery_error_result(
+                exc,
+                status="attachment_failed",
+                send_attachment_resume=True,
+                resume_file=resolved_resume_file,
+            )
         ok = bool(delivery.get("ok"))
         return ToolResult(
             ok=ok,
@@ -359,13 +435,24 @@ class BossAgentToolbox:
                 },
             )
 
-        delivery = self.context.delivery.send(
-            security_id=security_id,
-            message=final_message,
-            send_attachment_resume=False,
-            resume_file="",
-            target=target or {},
-        )
+        try:
+            delivery = self.context.delivery.send(
+                security_id=security_id,
+                message=final_message,
+                send_attachment_resume=False,
+                resume_file="",
+                target=target or {},
+            )
+        except Exception as exc:
+            return _delivery_error_result(
+                exc,
+                status="send_failed",
+                data={
+                    "stage": "read_no_reply",
+                    "message": final_message,
+                    "message_sent": False,
+                },
+            )
         ok = bool(delivery.get("ok"))
         status = "sent" if ok else "send_failed"
         if ok:
@@ -456,6 +543,8 @@ class BossAgentToolbox:
             delivery = payload.get("delivery") if isinstance(payload, dict) else {}
             if isinstance(delivery, dict) and bool(delivery.get("resume_sent")):
                 return True
+            if isinstance(delivery, dict) and delivery.get("resume_sent") is False:
+                continue
             action = payload.get("action") if isinstance(payload, dict) else {}
             if not isinstance(action, dict):
                 continue
@@ -505,6 +594,7 @@ def _action_payload(action: AutoReplyAction) -> dict[str, object]:
         "send_attachment_resume": action.send_attachment_resume,
         "resume_file": action.resume_file,
         "blocked_reason": action.blocked_reason,
+        "attachment_required": action.attachment_required,
     }
 
 
@@ -546,6 +636,36 @@ def _blocked_result(
         recoverable=recoverable,
         recovery_action=str(recovery_action or ""),
         hints=dict(hints or {}),
+    )
+
+
+def _delivery_error_result(
+    error: Exception,
+    *,
+    status: str,
+    data: dict[str, Any] | None = None,
+    send_attachment_resume: bool = False,
+    resume_file: str = "",
+) -> ToolResult:
+    metadata = _error_metadata(error)
+    delivery = {
+        "ok": False,
+        "status": status,
+        "error_code": metadata["error_code"],
+        "error_message": metadata["error_message"],
+        "recoverable": metadata["recoverable"],
+        "recovery_action": metadata["recovery_action"],
+    }
+    if send_attachment_resume:
+        delivery["send_attachment_resume"] = True
+        delivery["resume_file"] = resume_file
+    payload = dict(data or {})
+    payload["delivery"] = delivery
+    return ToolResult(
+        ok=False,
+        status=status,
+        data=payload,
+        **metadata,
     )
 
 

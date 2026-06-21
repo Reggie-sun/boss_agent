@@ -1,6 +1,7 @@
 from pathlib import Path
 
 from boss_agent_cli.rag_reply.adapters.boss_automation import BossAutomationAdapter
+from boss_agent_cli.rag_reply.models import AuditLogRecord
 from boss_agent_cli.rag_reply.store import RagReplyStore
 
 
@@ -199,7 +200,7 @@ class _RecentOnlyMessagePlatform:
 						"name": f"HR{index}",
 						"brandName": "TestCo",
 						"title": "HRBP",
-						"lastMsg": "你好",
+						"lastMsg": "我是候选人的求职助理 Agent，您好，想跟进一下这个岗位目前是否还在招聘？",
 						"lastTS": 1700000000000 + index,
 					}
 					for index in range(25)
@@ -257,7 +258,11 @@ class _UnreadBeyondRecentLimitPlatform:
 						"name": f"HR{index}",
 						"brandName": "TestCo",
 						"title": "HRBP",
-						"lastMsg": "第七个未读" if index == 6 else "你好",
+						"lastMsg": (
+							"第七个未读"
+							if index == 6
+							else "我是候选人的求职助理 Agent，您好，想跟进一下这个岗位目前是否还在招聘？"
+						),
 						"lastTS": 1700000000000 + index,
 						"unreadMsgCount": 1 if index == 6 else 0,
 					}
@@ -286,6 +291,14 @@ class _UnreadBeyondRecentLimitPlatform:
 
 	def close(self):
 		return None
+
+
+class _InboundBeyondRecentLimitPlatform(_UnreadBeyondRecentLimitPlatform):
+	def friend_list(self, page=1):
+		response = super().friend_list(page=page)
+		for item in response["zpData"]["result"]:
+			item["unreadMsgCount"] = 0
+		return response
 
 
 class _PagedMessagePlatform:
@@ -347,7 +360,7 @@ class _PagedMessagePlatform:
 				"name": f"HR{index}",
 				"brandName": "TestCo",
 				"title": "HRBP",
-				"lastMsg": "你好",
+				"lastMsg": "我是候选人的求职助理 Agent，您好，想跟进一下这个岗位目前是否还在招聘？",
 				"lastTS": 1700000000000 + index,
 			}
 			for index in range(start, start + count)
@@ -609,48 +622,131 @@ def test_list_pipeline_candidates_returns_read_no_reply_targets(tmp_path: Path):
 	assert candidate["recruiter_id"] == "boss_recruiter_12345"
 
 
-def test_sync_messages_scans_full_current_page_when_list_is_done(tmp_path: Path):
+def test_sync_messages_advances_current_page_in_five_item_batches(tmp_path: Path):
 	store = RagReplyStore(tmp_path / "boss-rag.sqlite3")
 	store.initialize()
 	platform = _RecentOnlyMessagePlatform()
-	adapter = BossAutomationAdapter(platform=platform, store=store)
+	first_adapter = BossAutomationAdapter(platform=platform, store=store)
+	second_adapter = BossAutomationAdapter(platform=platform, store=store)
 
-	result = adapter.sync_messages()
+	first = first_adapter.sync_messages()
+	second = second_adapter.sync_messages()
 
-	assert platform.friend_list_pages == [1]
-	assert len(platform.chat_history_calls) == 25
-	assert result.count == 25
-	assert len(result.conversation_ids) == 25
-	assert len(result.message_ids) == 25
+	assert platform.friend_list_pages == [1, 1]
+	assert platform.chat_history_calls[:5] == [
+		("10000", "sec_000"),
+		("10001", "sec_001"),
+		("10002", "sec_002"),
+		("10003", "sec_003"),
+		("10004", "sec_004"),
+	]
+	assert platform.chat_history_calls[5:10] == [
+		("10005", "sec_005"),
+		("10006", "sec_006"),
+		("10007", "sec_007"),
+		("10008", "sec_008"),
+		("10009", "sec_009"),
+	]
+	assert first.count == 5
+	assert len(first.conversation_ids) == 5
+	assert second.count == 5
+	assert len(second.conversation_ids) == 5
 
 
-def test_sync_messages_includes_all_current_page_conversations(tmp_path: Path):
+def test_sync_messages_prioritizes_unread_conversations_on_current_page(tmp_path: Path):
 	store = RagReplyStore(tmp_path / "boss-rag.sqlite3")
 	store.initialize()
 	platform = _UnreadBeyondRecentLimitPlatform()
-	adapter = BossAutomationAdapter(platform=platform, store=store)
+	first_adapter = BossAutomationAdapter(platform=platform, store=store)
+	second_adapter = BossAutomationAdapter(platform=platform, store=store)
 
-	result = adapter.sync_messages()
+	first = first_adapter.sync_messages()
+	second = second_adapter.sync_messages()
 
-	assert platform.friend_list_pages == [1]
-	assert len(platform.chat_history_calls) == 8
-	assert ("10006", "sec_006") in platform.chat_history_calls
-	assert "boss_conv_10006" in result.conversation_ids
+	assert platform.friend_list_pages == [1, 1]
+	assert platform.chat_history_calls[:1] == [("10006", "sec_006")]
+	assert platform.chat_history_calls[1:6] == [
+		("10000", "sec_000"),
+		("10001", "sec_001"),
+		("10002", "sec_002"),
+		("10003", "sec_003"),
+		("10004", "sec_004"),
+	]
+	assert "boss_conv_10006" in first.conversation_ids
+	assert "boss_conv_10006" not in second.conversation_ids
 	messages = store.list_messages("boss_conv_10006")
 	assert len(messages) == 1
 	assert messages[0].message_text == "第七个未读"
 
 
-def test_sync_messages_scans_all_friend_list_pages_in_batches(tmp_path: Path):
+def test_sync_messages_resets_legacy_cursor_to_unread_priority(tmp_path: Path):
 	store = RagReplyStore(tmp_path / "boss-rag.sqlite3")
 	store.initialize()
-	platform = _PagedMessagePlatform()
+	store.append_audit_log(
+		AuditLogRecord.new(
+			event_type="boss_messages_synced",
+			entity_type="sync_batch",
+			entity_id="legacy_cursor",
+			payload={"next_cursor": {"page": 1, "offset": 5}},
+		)
+	)
+	platform = _UnreadBeyondRecentLimitPlatform()
 	adapter = BossAutomationAdapter(platform=platform, store=store)
 
 	result = adapter.sync_messages()
 
-	assert platform.friend_list_pages == [1, 2, 3]
-	assert len(platform.chat_history_calls) == 12
+	assert platform.chat_history_calls[:1] == [("10006", "sec_006")]
+	assert result.conversation_ids == ["boss_conv_10006"]
+
+
+def test_sync_messages_resets_unversioned_priority_cursor(tmp_path: Path):
+	store = RagReplyStore(tmp_path / "boss-rag.sqlite3")
+	store.initialize()
+	store.append_audit_log(
+		AuditLogRecord.new(
+			event_type="boss_messages_synced",
+			entity_type="sync_batch",
+			entity_id="legacy_priority_cursor",
+			payload={"next_cursor": {"page": 1, "offset": 5, "priority": "normal"}},
+		)
+	)
+	platform = _InboundBeyondRecentLimitPlatform()
+	adapter = BossAutomationAdapter(platform=platform, store=store)
+
+	result = adapter.sync_messages()
+
+	assert platform.chat_history_calls[:1] == [("10006", "sec_006")]
+	assert result.conversation_ids == ["boss_conv_10006"]
+
+
+def test_sync_messages_prioritizes_inbound_last_message_without_unread_count(tmp_path: Path):
+	store = RagReplyStore(tmp_path / "boss-rag.sqlite3")
+	store.initialize()
+	platform = _InboundBeyondRecentLimitPlatform()
+	adapter = BossAutomationAdapter(platform=platform, store=store)
+
+	result = adapter.sync_messages()
+
+	assert platform.chat_history_calls[:1] == [("10006", "sec_006")]
+	assert result.conversation_ids == ["boss_conv_10006"]
+
+
+def test_sync_messages_advances_friend_list_pages_in_five_item_batches(tmp_path: Path):
+	store = RagReplyStore(tmp_path / "boss-rag.sqlite3")
+	store.initialize()
+	platform = _PagedMessagePlatform()
+	first_adapter = BossAutomationAdapter(platform=platform, store=store)
+	second_adapter = BossAutomationAdapter(platform=platform, store=store)
+	third_adapter = BossAutomationAdapter(platform=platform, store=store)
+	fourth_adapter = BossAutomationAdapter(platform=platform, store=store)
+
+	first = first_adapter.sync_messages()
+	second = second_adapter.sync_messages()
+	third = third_adapter.sync_messages()
+	fourth = fourth_adapter.sync_messages()
+
+	assert platform.friend_list_pages == [1, 2, 3, 1]
+	assert len(platform.chat_history_calls) == 17
 	assert platform.chat_history_calls[0:5] == [
 		("10000", "sec_000"),
 		("10001", "sec_001"),
@@ -665,9 +761,15 @@ def test_sync_messages_scans_all_friend_list_pages_in_batches(tmp_path: Path):
 		("10008", "sec_008"),
 		("10009", "sec_009"),
 	]
-	assert result.count == 12
-	assert len(result.conversation_ids) == 12
-	assert len(result.message_ids) == 12
+	assert platform.chat_history_calls[10:12] == [
+		("10010", "sec_010"),
+		("10011", "sec_011"),
+	]
+	assert platform.chat_history_calls[12:17] == platform.chat_history_calls[0:5]
+	assert first.count == 5
+	assert second.count == 5
+	assert third.count == 2
+	assert fourth.count == 5
 	assert store.get_conversation("boss_conv_10011") is not None
 
 

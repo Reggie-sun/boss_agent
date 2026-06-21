@@ -561,7 +561,11 @@ def _tool_step_payload(tool_name: str, result: ToolResult) -> dict[str, object]:
 
 
 def _is_retryable_unsent_failure(payload: dict[str, object]) -> bool:
-    if payload.get("status") != "rag_failed":
+    if payload.get("status") not in {
+        "rag_failed",
+        "send_failed",
+        "attachment_failed",
+    }:
         return False
     delivery = payload.get("delivery") if isinstance(payload.get("delivery"), dict) else {}
     if any(

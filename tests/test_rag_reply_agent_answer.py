@@ -175,3 +175,23 @@ def test_agent_answer_uses_local_template_for_recruiter_invitation_without_ai():
 	assert "我对这个岗位比较感兴趣" in result.answer
 	assert "可以进一步沟通" in result.answer
 	assert result.raw_response == {"mode": "local_recruiter_invitation_template"}
+
+
+def test_agent_answer_uses_local_template_for_recruiter_invitation_synonyms():
+	adapter = AgentAnswerAdapter(ai_service=None)
+
+	for message_text in (
+		"我公司正在招贤纳士，可否邀你聊聊呢？",
+		"你好，还考虑新的机会吗？",
+	):
+		result = adapter.answer(
+			message_text=message_text,
+			intent="general_question",
+			job_summary=None,
+			rag_answer="",
+			citations=[],
+		)
+
+		assert result.ok is True
+		assert "我对这个岗位比较感兴趣" in result.answer
+		assert result.raw_response == {"mode": "local_recruiter_invitation_template"}
