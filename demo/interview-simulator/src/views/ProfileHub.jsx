@@ -149,7 +149,7 @@ export function ProfileHub({
         user_id: userId,
         conversation_id: conversationId,
         profile_id: selectedProfileId,
-        binding_source: "frontend_profile_hub",
+        binding_source: "manual",
       });
       setStatusMessage("当前 Boss 对话已绑定 profile。");
     } catch (error) {

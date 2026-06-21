@@ -20,6 +20,13 @@ function appendBooleanOption(args, enabledFlag, disabledFlag, value) {
   if (value === false) args.push(disabledFlag);
 }
 
+function normalizeBindingSource(value) {
+  const normalized = String(value || "").trim();
+  return ["default", "imported", "manual"].includes(normalized)
+    ? normalized
+    : "manual";
+}
+
 function profileIdFromPath(pathname, suffix) {
   return decodeURIComponent(
     pathname.slice("/api/agent/profiles/".length, -suffix.length),
@@ -194,7 +201,7 @@ export function createProfileBridgeHandlers({
           "--profile-id",
           String(body.profile_id || ""),
         ];
-        appendTextOption(args, "--binding-source", body.binding_source);
+        appendTextOption(args, "--binding-source", normalizeBindingSource(body.binding_source));
         const payload = await runBossJsonCommand(bridgeConfig, args);
         sendJson(res, 200, { ok: true, data: responseData(payload) });
         return true;

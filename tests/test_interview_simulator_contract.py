@@ -78,3 +78,16 @@ def test_interview_simulator_profile_refactor_wires_local_profile_workflows():
 		assert token in combined
 	for visible in ("发送到 Boss", "发送附件简历 PDF", "watcher", "Boss 自动开聊", "Agent 全自动"):
 		assert visible in combined
+
+
+def test_interview_simulator_profile_binding_uses_cli_supported_source():
+	repo_root = Path(__file__).resolve().parents[1]
+	profile_hub = (repo_root / "demo" / "interview-simulator" / "src" / "views" / "ProfileHub.jsx").read_text(encoding="utf-8")
+	profile_bridge = (
+		repo_root / "demo" / "interview-simulator" / "server" / "profileBridge.mjs"
+	).read_text(encoding="utf-8")
+
+	assert 'binding_source: "frontend_profile_hub"' not in profile_hub
+	assert 'binding_source: "manual"' in profile_hub
+	assert "normalizeBindingSource" in profile_bridge
+	assert '"manual"' in profile_bridge
