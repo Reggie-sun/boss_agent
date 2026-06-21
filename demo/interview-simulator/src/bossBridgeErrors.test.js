@@ -8,6 +8,7 @@ import {
   bossBridgeErrorMessage,
   inferBossBridgeErrorCodeFromMessage,
   isBossAccountRiskMessage,
+  watcherRiskHint,
 } from "./bossBridgeErrors.js";
 
 test("inferBossBridgeErrorCodeFromMessage treats 环境存在异常 as token refresh failure", () => {
@@ -75,4 +76,42 @@ test("bossBridgeErrorMessage keeps auth-expired responses out of the risk bucket
   assert.equal(bossBridgeErrorCode(error), "AUTH_EXPIRED");
   assert.match(bossBridgeErrorMessage(error, "BOSS 搜索失败。"), /已失效|token 刷新失败/);
   assert.doesNotMatch(bossBridgeErrorMessage(error, "BOSS 搜索失败。"), /风控|安全验证/);
+});
+
+test("watcherRiskHint ignores stale account risk audit entries", () => {
+  const staleRiskMessage = "您的账户存在异常行为，已暂时被禁止使用.";
+  const state = {
+    tasks: [
+      {
+        created_at: "2026-06-19T15:01:25.038016+00:00",
+        error_message: staleRiskMessage,
+      },
+    ],
+  };
+
+  assert.equal(
+    watcherRiskHint(state, {
+      nowMs: Date.parse("2026-06-21T15:01:25.038016+00:00"),
+    }),
+    "",
+  );
+});
+
+test("watcherRiskHint keeps fresh account risk responses locked", () => {
+  const riskMessage = "您的账户存在异常行为，已暂时被禁止使用.";
+  const state = {
+    tasks: [
+      {
+        created_at: "2026-06-21T15:00:25.038016+00:00",
+        error_message: riskMessage,
+      },
+    ],
+  };
+
+  assert.equal(
+    watcherRiskHint(state, {
+      nowMs: Date.parse("2026-06-21T15:01:25.038016+00:00"),
+    }),
+    riskMessage,
+  );
 });

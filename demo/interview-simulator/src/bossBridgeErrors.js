@@ -1,4 +1,5 @@
 export const bossAccountRiskCode = "ACCOUNT_RISK";
+export const watcherRiskLockWindowMs = 10 * 60 * 1000;
 
 const bossLoginRefreshMessage =
   "Boss 登录状态已失效或 token 刷新失败。请回到 BOSS 官方页面确认已登录，再刷新本页面后重试。";
@@ -96,4 +97,42 @@ export function bossBridgeErrorMessage(error, fallback) {
     return "本地 Vite bridge 无响应。请刷新页面，或确认当前页面打开的是正在运行的 demo/interview-simulator dev server。";
   }
   return message || fallback;
+}
+
+function taskRiskMessage(task) {
+  return String(task?.error_message || task?.action?.message || "").trim();
+}
+
+function isFreshWatcherTask(task, nowMs, riskWindowMs) {
+  const createdAt = Date.parse(String(task?.created_at || ""));
+  if (!Number.isFinite(createdAt)) return true;
+  return nowMs - createdAt <= riskWindowMs;
+}
+
+export function watcherRiskHint(watcherState, options = {}) {
+  const directMessage = String(watcherState?.errorMessage || "").trim();
+  if (directMessage && isBossAccountRiskMessage(directMessage)) {
+    return directMessage;
+  }
+
+  const nowMs = Number.isFinite(options.nowMs) ? options.nowMs : Date.now();
+  const riskWindowMs = Number.isFinite(options.riskWindowMs)
+    ? options.riskWindowMs
+    : watcherRiskLockWindowMs;
+  const tasks = Array.isArray(watcherState?.tasks) ? watcherState.tasks.slice().reverse() : [];
+  const riskyTask = tasks.find((task) => {
+    const detail = taskRiskMessage(task);
+    return (
+      Boolean(detail) &&
+      isBossAccountRiskMessage(detail) &&
+      isFreshWatcherTask(task, nowMs, riskWindowMs)
+    );
+  });
+  return riskyTask ? taskRiskMessage(riskyTask) : "";
+}
+
+export function bossWatcherRiskLockMessage(watcherRiskStatusMessage) {
+  return watcherRiskStatusMessage
+    ? `Boss 账号当前已被平台限制访问。${watcherRiskStatusMessage} 请回到 BOSS 官方页面手动处理或等待恢复后刷新重试。`
+    : "";
 }

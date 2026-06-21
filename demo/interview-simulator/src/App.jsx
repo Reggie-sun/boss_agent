@@ -20,7 +20,9 @@ import {
   bossBridgeErrorCode,
   bossBridgeErrorFromPayload,
   bossBridgeErrorMessage,
+  bossWatcherRiskLockMessage,
   isBossAccountRiskMessage,
+  watcherRiskHint,
 } from "./bossBridgeErrors.js";
 import { ProfileHub } from "./views/ProfileHub.jsx";
 import { ReplyWorkspace } from "./views/ReplyWorkspace.jsx";
@@ -168,27 +170,6 @@ function normalizeBossJob(item) {
     city: String(item?.city || item?.cityName || ""),
     experience: String(item?.experience || item?.jobExperience || ""),
   };
-}
-
-function watcherRiskHint(watcherState) {
-  const directMessage = String(watcherState?.errorMessage || "").trim();
-  if (directMessage && isBossAccountRiskMessage(directMessage)) {
-    return directMessage;
-  }
-
-  const tasks = Array.isArray(watcherState?.tasks) ? watcherState.tasks.slice().reverse() : [];
-  const riskyTask = tasks.find((task) => {
-    const detail = String(task?.error_message || task?.action?.message || "").trim();
-    return Boolean(detail) && isBossAccountRiskMessage(detail);
-  });
-  if (!riskyTask) return "";
-  return String(riskyTask.error_message || riskyTask.action?.message || "").trim();
-}
-
-function bossWatcherRiskLockMessage(watcherRiskStatusMessage) {
-  return watcherRiskStatusMessage
-    ? `Boss 账号当前已被平台限制访问。${watcherRiskStatusMessage} 请回到 BOSS 官方页面手动处理或等待恢复后刷新重试。`
-    : "";
 }
 
 function resolveSecurityId({ manualSecurityId = "", selectedChatTarget = null, chatTargets = [] }) {
