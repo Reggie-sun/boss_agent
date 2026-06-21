@@ -1,82 +1,378 @@
 # Boss Commercial Profile RAG Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use `superpowers:subagent-driven-development` (recommended) or `superpowers:executing-plans` to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Build a commercial-ready self-hosted profile layer for `BOSS_AGENT` while preserving current reply, watcher, auto-greet, auto-resume, CLI, MCP, Docker, and frontend demo capabilities.
+**Goal:** 在保留当前 `BOSS_AGENT` reply、watcher、Boss 自动开聊、自动投简历、CLI、MCP、Docker 和 demo conversation 的前提下，新增 commercial-ready 的 tenant/user/profile/RAG 资料层、会话 profile binding、真实 usage/quota gate，以及可被 Product Design 插件重构的前端数据面。
 
-**Architecture:** Add a profile hub beside the existing `rag_reply` workflow: profile data and commercial state live in the local Boss Agent SQLite store, RAG documents stay in the external RAG service behind a thin connector, and existing reply/outreach flows receive `tenant_id/user_id/profile_id/knowledge_base_id` context through explicit bindings. The first implementation keeps payments as stored metadata only, but makes quota and usage gates real.
+**Architecture:** `BOSS_AGENT` 继续拥有业务状态和安全 gate：tenant、user、profile、upload、binding、usage、audit、reply/outreach policy 都落在本地 SQLite。外部 Enterprise RAG 继续负责检索和回答；新增 `RagProfileConnector` 作为薄适配层，暴露 profile-aware contract，但当前 `/api/v1/chat/ask` fallback 不发送上游 schema 不支持的 `metadata` 字段。前端先稳定 bridge/API contract，再通过 Product Design workflow 做视觉和交互重构。
 
-**Tech Stack:** Python 3.10+, Click, sqlite3, httpx, dataclasses, pytest, React/Vite, existing Boss Agent bridge, existing CDP fail-closed delivery helpers.
+**Tech Stack:** Python 3.10+, Click, sqlite3, dataclasses, httpx, pytest, React 19, Vite 6, existing Boss bridge/CDP delivery helpers, Product Design plugin.
 
 ---
 
 ## Scope Check
 
-The approved spec spans multiple surfaces: local persistence, RAG request context, reply generation, outreach, frontend, and commercial usage gates. This plan keeps it one MVP because each task produces a working slice and preserves the old product at every step. Payment callbacks, multi-provider RAG migration, and organization-scale candidate pools remain out of scope.
+这份 spec 横跨 persistence、RAG contract、reply path、outreach path、frontend 和 commercial gates。实现时仍保持一个 MVP，因为每个 task 都能产生可测试的工作切片，且旧能力不被删除。
+
+必须保留的现有能力：
+
+- `demo/interview-simulator` 的前端测试对话和 demo conversation。
+- `/api/agent/ask`、`/api/agent/send`、watcher status/run/control。
+- `Boss 自动开聊`、搜索预览、目标选择、`Agent 全自动`。
+- 自动投简历、附件 PDF 简历发送，以及官方 Boss UI/CDP fail-closed 约束。
+- `boss agent` / `boss rag` alias、MCP server、Docker 启动方式。
+
+第一版明确不做：
+
+- Stripe、微信、支付宝等真实支付回调。
+- 在 `BOSS_AGENT` 内实现向量检索。
+- 绕过 Boss 登录、风控、官方 UI 或附件上传路径。
+- 把 Boss 原始对话、招聘者完整信息或职位完整详情批量上传到 RAG。
+
+## Current Code Map
+
+当前代码现状决定了实现边界：
+
+- `src/boss_agent_cli/rag_reply/schema.py` 只有 `jobs/recruiters/conversations/messages/drafts/approval_events/audit_logs/rag_calls`。
+- `src/boss_agent_cli/rag_reply/store.py` 已提供 `RagReplyStore.connect()`、JSON encode/decode 和现有 record CRUD，适合复用同一个 SQLite 文件。
+- `src/boss_agent_cli/rag_reply/service.py` 负责 message -> classify -> RAG/direct -> draft -> audit，目前用 per-conversation `rag_session_id`。
+- `src/boss_agent_cli/rag_reply/adapters/rag_http.py` 只调用 `POST /api/v1/chat/ask`，现有测试断言 payload 没有 `metadata`。
+- `src/boss_agent_cli/rag_reply/adapters/agent_answer.py` 仍有本地候选人事实模板，后期必须收缩成通用 answer shaping。
+- `src/boss_agent_cli/rag_reply/watcher_config.py`、`auto_actions.py`、`agent_tools.py` 承担 watcher 自动回复、联系方式、面试时间、附件简历 gate。
+- `src/boss_agent_cli/commands/rag.py` 是 `agent`/`rag` CLI 中心，也负责构造 service、watcher 和真实发送。
+- `demo/interview-simulator/vite.config.mjs` 已经很大，内含本地 bridge endpoints；新增 profile API 时要优先抽小模块，避免继续膨胀。
+- `demo/interview-simulator/src/App.jsx` 已经接近 2000 行；Product Design 前端重构应拆 view/component/api，而不是继续堆在单文件。
+
+## Product Design Handoff
+
+已按 `product-design:index` 和 `product-design:get-context` 处理本次插件调用。当前不是 UI build 阶段，所以不运行 ideation/prototype/image-to-code；计划中只锁定后续前端重构的 Product Design gate。
+
+前端重构 brief playback：
+
+- Product: `BOSS_AGENT` commercial console。
+- Workflows: `/agent/reply` 管会话回复、draft、evidence、watcher、profile binding；`/agent/outreach` 管搜索、预览、自动开聊、自动投简历。
+- Visual source: 现有 `demo/interview-simulator`、当前 design tokens/styles，以及后续 Product Design 生成或选定的 visual target。
+- Interactivity: full interactivity，本地 bridge controls 必须可用，profile/create/upload/bind/usage/watcher/outreach 状态都要真实接 API。
+
+后续开始视觉重构前，必须重新运行 `product-design:get-context` playback。如果没有现成截图、Figma、URL 或选定 mock，先走 `product-design:ideate` 产出 3 个 visual options，等用户选定后再进入 `prototype` 或 `image-to-code`。
 
 ## File Structure
 
 - Create `src/boss_agent_cli/rag_reply/profile_models.py`  
-  Owns commercial/profile dataclasses, status constants, and feature names.
+  commercial/profile dataclasses、status constants、metric names。
 
 - Create `src/boss_agent_cli/rag_reply/profile_service.py`  
-  Owns profile/tenant/user/upload/binding/usage SQLite read-write helpers using the existing `RagReplyStore` connection.
+  使用现有 `RagReplyStore` SQLite connection 管 tenant、user、profile、config、upload、binding、usage。
 
 - Create `src/boss_agent_cli/rag_reply/profile_policy.py`  
-  Owns license/subscription/quota gate decisions and usage consume helpers.
+  license/subscription/quota/profile config gate 决策，不做外部支付。
 
 - Create `src/boss_agent_cli/rag_reply/adapters/rag_profile.py`  
-  Owns thin profile-aware RAG connector methods for knowledge base creation, upload, status, and ask.
+  profile-aware RAG connector。当前 chat/ask fallback 不发送 unsupported `metadata`；profile identity 写入本地 `rag_calls` 和 connector result。
 
 - Modify `src/boss_agent_cli/rag_reply/schema.py`  
-  Adds commercial/profile tables without changing existing table names or deleting data.
+  追加 profile/commercial tables，不改旧表名，不迁移删除旧数据。
 
 - Modify `src/boss_agent_cli/rag_reply/service.py`  
-  Resolves conversation profile bindings for fact questions and records profile context in RAG requests/evidence.
-
-- Modify `src/boss_agent_cli/rag_reply/adapters/rag_http.py`  
-  Accepts optional profile context metadata while preserving existing `/api/v1/chat/ask` behavior.
+  支持可选 `ProfileService` 和 `RagProfileConnector`，事实类问题要求 conversation binding，draft evidence 写入 `profile_context`。
 
 - Modify `src/boss_agent_cli/rag_reply/question_builder.py`  
-  Keeps question text minimal and adds profile context as structured metadata instead of prompt stuffing.
+  保持 prompt 最小化，只接受 HR 问题、岗位摘要、objective；不把 tenant/user/profile 当自然语言 stuffing。
 
-- Modify `src/boss_agent_cli/rag_reply/adapters/agent_answer.py`  
-  Removes hardcoded personal candidate templates; keeps only generic answer shaping and conservative fallback.
+- Modify `src/boss_agent_cli/rag_reply/adapters/rag_http.py`
+  保持 `/api/v1/chat/ask` contract 稳定；不能为了 profile context 添加 `metadata` payload。
 
-- Modify `src/boss_agent_cli/rag_reply/watcher_config.py`, `src/boss_agent_cli/rag_reply/agent_tools.py`, and `src/boss_agent_cli/rag_reply/auto_actions.py`  
-  Uses profile config for high-risk fields and separates reply/outreach auto-send gates.
+- Modify `src/boss_agent_cli/rag_reply/watcher_config.py`, `auto_actions.py`, `agent_tools.py`
+  从 `ProfileConfig` 生成 effective watcher config，并将 reply/outreach/proactive resume gates 分开。
 
 - Modify `src/boss_agent_cli/commands/rag.py`  
-  Adds profile, binding, upload, usage, and gate commands under the existing `agent`/`rag` workflow alias.
+  增加 profile/upload/binding/usage commands，并在 `_build_service()` 注入 profile 层。
 
-- Modify `demo/interview-simulator/vite.config.mjs`  
-  Adds local profile/usage API bridge endpoints and forwards profile context to existing ask/send/outreach endpoints.
+- Create `demo/interview-simulator/server/profileBridge.mjs`
+  从巨大的 `vite.config.mjs` 抽出 profile/usage/binding bridge handlers。
 
-- Modify `demo/interview-simulator/src/App.jsx` and `demo/interview-simulator/src/styles.css`  
-  Adds a small profile console and route/tab split while preserving the existing test conversation and Boss auto-greet panel.
+- Modify `demo/interview-simulator/vite.config.mjs`
+  注册 profile bridge handlers，保留现有 ask/send/watcher/auto-greet endpoints。
 
-- Add tests:
-  - `tests/test_commercial_profile_store.py`
-  - `tests/test_commercial_profile_policy.py`
-  - `tests/test_rag_profile_connector.py`
-  - `tests/test_rag_reply_profile_binding.py`
-  - `tests/test_commercial_profile_commands.py`
-  - `tests/test_agent_answer_no_personal_templates.py`
-  - Extend `tests/test_rag_reply_commands.py`, `tests/test_passive_watcher.py`, `tests/test_rag_reply_agent_tools.py`, and `tests/test_rag_reply_rag_http.py`.
+- Product Design frontend refactor files:
+  - Create `demo/interview-simulator/src/api/agentClient.js`
+  - Create `demo/interview-simulator/src/views/ReplyWorkspace.jsx`
+  - Create `demo/interview-simulator/src/views/OutreachWorkspace.jsx`
+  - Create `demo/interview-simulator/src/views/ProfileHub.jsx`
+  - Create `demo/interview-simulator/src/components/profile/ProfileSelector.jsx`
+  - Create `demo/interview-simulator/src/components/profile/ProfileConfigPanel.jsx`
+  - Modify `demo/interview-simulator/src/App.jsx`
+  - Modify `demo/interview-simulator/src/styles.css`
 
----
-
-### Task 1: Commercial Profile Persistence
+## Task 1: Commercial Schema And Models
 
 **Files:**
 - Create: `src/boss_agent_cli/rag_reply/profile_models.py`
-- Create: `src/boss_agent_cli/rag_reply/profile_service.py`
 - Modify: `src/boss_agent_cli/rag_reply/schema.py`
-- Test: `tests/test_commercial_profile_store.py`
+- Test: `tests/test_commercial_profile_schema.py`
 
-- [ ] **Step 1: Write failing profile persistence tests**
+- [ ] **Step 1: Write failing schema/model tests**
 
-Create `tests/test_commercial_profile_store.py`:
+Create `tests/test_commercial_profile_schema.py`:
+
+```python
+from pathlib import Path
+
+from boss_agent_cli.rag_reply.profile_models import (
+    ConversationProfileBindingRecord,
+    ProfileConfigRecord,
+    ProfileUploadRecord,
+    TenantRecord,
+    UsageCounterRecord,
+    UserProfileRecord,
+    UserRecord,
+)
+from boss_agent_cli.rag_reply.store import RagReplyStore
+
+
+def test_commercial_profile_tables_are_created(tmp_path: Path):
+    store = RagReplyStore(tmp_path / "boss-rag.sqlite3")
+    store.initialize()
+
+    assert {
+        "tenants",
+        "users",
+        "user_profiles",
+        "profile_configs",
+        "profile_uploads",
+        "conversation_profile_bindings",
+        "usage_counters",
+    }.issubset(set(store.list_tables()))
+
+
+def test_profile_model_defaults_are_safe():
+    tenant = TenantRecord(tenant_id="tenant_001", display_name="Demo Tenant")
+    user = UserRecord(tenant_id="tenant_001", user_id="user_001", display_name="Reggie", email="r@example.com")
+    profile = UserProfileRecord(
+        tenant_id="tenant_001",
+        user_id="user_001",
+        profile_id="profile_ai",
+        display_name="AI 应用工程师",
+        target_title="AI Application Engineer",
+    )
+    config = ProfileConfigRecord(tenant_id="tenant_001", profile_id="profile_ai")
+    upload = ProfileUploadRecord(
+        tenant_id="tenant_001",
+        user_id="user_001",
+        profile_id="profile_ai",
+        upload_id="upload_001",
+        source_filename="resume.pdf",
+        source_type="resume",
+    )
+    binding = ConversationProfileBindingRecord(
+        tenant_id="tenant_001",
+        conversation_id="conv_001",
+        user_id="user_001",
+        profile_id="profile_ai",
+        knowledge_base_id="kb_ai",
+    )
+    usage = UsageCounterRecord(
+        tenant_id="tenant_001",
+        user_id="user_001",
+        profile_id="profile_ai",
+        metric_name="rag_calls",
+        period_start="2026-06-01",
+        period_end="2026-07-01",
+    )
+
+    assert tenant.plan_code == "free"
+    assert tenant.subscription_status == "trial"
+    assert user.role == "owner"
+    assert profile.status == "active"
+    assert config.reply_auto_send_enabled is False
+    assert config.outreach_auto_send_enabled is False
+    assert config.proactive_resume_enabled is False
+    assert upload.status == "queued"
+    assert binding.binding_source == "manual"
+    assert usage.used_count == 0
+    assert usage.limit_count == -1
+```
+
+- [ ] **Step 2: Run failing test**
+
+Run:
+
+```bash
+pytest tests/test_commercial_profile_schema.py -v
+```
+
+Expected: FAIL with `ModuleNotFoundError` for `boss_agent_cli.rag_reply.profile_models`.
+
+- [ ] **Step 3: Add dataclasses**
+
+Create `src/boss_agent_cli/rag_reply/profile_models.py` with these records:
+
+```python
+"""Commercial profile domain models for Boss Agent."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+
+from boss_agent_cli.rag_reply.models import new_id, utc_now_iso
+
+
+PLAN_CODES = {"free", "pro", "team", "enterprise"}
+SUBSCRIPTION_STATUSES = {"trial", "active", "past_due", "suspended", "canceled"}
+PROFILE_STATUSES = {"active", "archived"}
+UPLOAD_STATUSES = {"queued", "uploaded", "indexed", "failed"}
+BINDING_SOURCES = {"manual", "default", "imported"}
+
+METRIC_PROFILE_COUNT = "profile_count"
+METRIC_UPLOAD_COUNT = "profile_upload_count"
+METRIC_UPLOAD_BYTES = "profile_upload_bytes"
+METRIC_RAG_CALLS = "rag_calls"
+METRIC_REPLY_AUTO_SEND = "reply_auto_send"
+METRIC_OUTREACH_AUTO_GREET = "outreach_auto_greet"
+METRIC_ATTACHMENT_RESUME_SEND = "attachment_resume_send"
+
+
+@dataclass(slots=True)
+class TenantRecord:
+    tenant_id: str
+    display_name: str
+    plan_code: str = "free"
+    subscription_status: str = "trial"
+    license_key_hash: str = ""
+    payment_provider: str = ""
+    provider_customer_id: str = ""
+    provider_subscription_id: str = ""
+    created_at: str = field(default_factory=utc_now_iso)
+    updated_at: str = field(default_factory=utc_now_iso)
+
+
+@dataclass(slots=True)
+class UserRecord:
+    tenant_id: str
+    user_id: str
+    display_name: str
+    email: str
+    role: str = "owner"
+    status: str = "active"
+    created_at: str = field(default_factory=utc_now_iso)
+    updated_at: str = field(default_factory=utc_now_iso)
+
+
+@dataclass(slots=True)
+class UserProfileRecord:
+    tenant_id: str
+    user_id: str
+    profile_id: str
+    display_name: str
+    target_title: str
+    knowledge_base_id: str = ""
+    status: str = "active"
+    created_at: str = field(default_factory=utc_now_iso)
+    updated_at: str = field(default_factory=utc_now_iso)
+
+    @classmethod
+    def new(cls, *, tenant_id: str, user_id: str, display_name: str, target_title: str, knowledge_base_id: str = ""):
+        return cls(
+            tenant_id=tenant_id,
+            user_id=user_id,
+            profile_id=new_id("profile"),
+            display_name=display_name,
+            target_title=target_title,
+            knowledge_base_id=knowledge_base_id,
+        )
+
+
+@dataclass(slots=True)
+class ProfileConfigRecord:
+    tenant_id: str
+    profile_id: str
+    contact_phone: str = ""
+    contact_wechat: str = ""
+    interview_windows: str = ""
+    salary_reply_policy: str = ""
+    resume_attachment_path: str = ""
+    reply_auto_send_enabled: bool = False
+    outreach_auto_send_enabled: bool = False
+    proactive_resume_enabled: bool = False
+    updated_at: str = field(default_factory=utc_now_iso)
+
+
+@dataclass(slots=True)
+class ProfileUploadRecord:
+    tenant_id: str
+    user_id: str
+    profile_id: str
+    upload_id: str
+    source_filename: str
+    source_type: str
+    source_size_bytes: int = 0
+    rag_document_id: str = ""
+    status: str = "queued"
+    error_message: str = ""
+    created_at: str = field(default_factory=utc_now_iso)
+    updated_at: str = field(default_factory=utc_now_iso)
+
+
+@dataclass(slots=True)
+class ConversationProfileBindingRecord:
+    tenant_id: str
+    conversation_id: str
+    user_id: str
+    profile_id: str
+    knowledge_base_id: str
+    binding_source: str = "manual"
+    created_at: str = field(default_factory=utc_now_iso)
+    updated_at: str = field(default_factory=utc_now_iso)
+
+
+@dataclass(slots=True)
+class UsageCounterRecord:
+    tenant_id: str
+    user_id: str
+    profile_id: str
+    metric_name: str
+    period_start: str
+    period_end: str
+    used_count: int = 0
+    limit_count: int = -1
+    updated_at: str = field(default_factory=utc_now_iso)
+```
+
+- [ ] **Step 4: Add schema tables**
+
+Append `CREATE TABLE IF NOT EXISTS` statements to `CREATE_TABLE_STATEMENTS` in `src/boss_agent_cli/rag_reply/schema.py` for:
+
+```sql
+tenants(tenant_id PRIMARY KEY, display_name, plan_code, subscription_status, license_key_hash, payment_provider, provider_customer_id, provider_subscription_id, created_at, updated_at)
+users(user_id PRIMARY KEY, tenant_id, display_name, email, role, status, created_at, updated_at)
+user_profiles(profile_id PRIMARY KEY, tenant_id, user_id, display_name, target_title, knowledge_base_id, status, created_at, updated_at)
+profile_configs(profile_id PRIMARY KEY, tenant_id, contact_phone, contact_wechat, interview_windows, salary_reply_policy, resume_attachment_path, reply_auto_send_enabled, outreach_auto_send_enabled, proactive_resume_enabled, updated_at)
+profile_uploads(upload_id PRIMARY KEY, tenant_id, user_id, profile_id, source_filename, source_type, source_size_bytes, rag_document_id, status, error_message, created_at, updated_at)
+conversation_profile_bindings(conversation_id PRIMARY KEY, tenant_id, user_id, profile_id, knowledge_base_id, binding_source, created_at, updated_at)
+usage_counters(tenant_id, user_id, profile_id, metric_name, period_start, period_end, used_count, limit_count, updated_at, PRIMARY KEY(tenant_id, user_id, profile_id, metric_name, period_start, period_end))
+```
+
+- [ ] **Step 5: Verify and commit**
+
+Run:
+
+```bash
+pytest tests/test_commercial_profile_schema.py tests/test_rag_reply_store.py -v
+git add src/boss_agent_cli/rag_reply/profile_models.py src/boss_agent_cli/rag_reply/schema.py tests/test_commercial_profile_schema.py
+git commit -m "feat: add commercial profile schema"
+```
+
+Expected: pytest PASS, then one focused commit.
+
+## Task 2: Profile Service Persistence
+
+**Files:**
+- Create: `src/boss_agent_cli/rag_reply/profile_service.py`
+- Test: `tests/test_commercial_profile_service.py`
+
+- [ ] **Step 1: Write service round-trip tests**
+
+Create `tests/test_commercial_profile_service.py`:
 
 ```python
 from pathlib import Path
@@ -94,59 +390,56 @@ from boss_agent_cli.rag_reply.profile_service import ProfileService
 from boss_agent_cli.rag_reply.store import RagReplyStore
 
 
-def _profile_service(tmp_path: Path) -> ProfileService:
+def _service(tmp_path: Path) -> ProfileService:
     store = RagReplyStore(tmp_path / "boss-rag.sqlite3")
     store.initialize()
     return ProfileService(store)
 
 
-def test_profile_service_round_trips_tenant_user_profile_config_and_binding(tmp_path: Path):
-    service = _profile_service(tmp_path)
-    tenant = TenantRecord(tenant_id="tenant_001", display_name="Demo Tenant")
-    user = UserRecord(tenant_id="tenant_001", user_id="user_001", display_name="Reggie", email="r@example.com")
-    profile = UserProfileRecord(
-        tenant_id="tenant_001",
-        user_id="user_001",
-        profile_id="profile_ai",
-        display_name="AI 应用工程师",
-        target_title="AI Application Engineer",
-        knowledge_base_id="kb_ai",
+def test_profile_service_round_trips_core_records(tmp_path: Path):
+    service = _service(tmp_path)
+    service.save_tenant(TenantRecord(tenant_id="tenant_001", display_name="Demo"))
+    service.save_user(UserRecord(tenant_id="tenant_001", user_id="user_001", display_name="Reggie", email="r@example.com"))
+    service.save_profile(
+        UserProfileRecord(
+            tenant_id="tenant_001",
+            user_id="user_001",
+            profile_id="profile_ai",
+            display_name="AI 应用工程师",
+            target_title="AI Application Engineer",
+            knowledge_base_id="kb_ai",
+        )
     )
-    config = ProfileConfigRecord(
-        tenant_id="tenant_001",
-        profile_id="profile_ai",
-        contact_phone="13800138000",
-        contact_wechat="reggie-ai",
-        interview_windows="工作日 20:00 后",
-        salary_reply_policy="薪资需本人确认",
-        resume_attachment_path="/tmp/resume.pdf",
-        reply_auto_send_enabled=True,
-        outreach_auto_send_enabled=False,
-        proactive_resume_enabled=True,
+    service.save_profile_config(
+        ProfileConfigRecord(
+            tenant_id="tenant_001",
+            profile_id="profile_ai",
+            contact_phone="13800138000",
+            contact_wechat="reggie-ai",
+            interview_windows="工作日 20:00 后",
+            salary_reply_policy="薪资本人确认",
+            resume_attachment_path="/tmp/resume.pdf",
+            reply_auto_send_enabled=True,
+        )
     )
-    binding = ConversationProfileBindingRecord(
-        tenant_id="tenant_001",
-        conversation_id="boss_conv_001",
-        user_id="user_001",
-        profile_id="profile_ai",
-        knowledge_base_id="kb_ai",
-        binding_source="manual",
+    service.bind_conversation(
+        ConversationProfileBindingRecord(
+            tenant_id="tenant_001",
+            user_id="user_001",
+            conversation_id="conv_001",
+            profile_id="profile_ai",
+            knowledge_base_id="kb_ai",
+        )
     )
 
-    service.save_tenant(tenant)
-    service.save_user(user)
-    service.save_profile(profile)
-    service.save_profile_config(config)
-    service.bind_conversation(binding)
-
-    assert service.get_tenant("tenant_001").display_name == "Demo Tenant"
+    assert service.get_tenant("tenant_001").display_name == "Demo"
     assert service.list_profiles("tenant_001", "user_001")[0].profile_id == "profile_ai"
     assert service.get_profile_config("profile_ai").contact_wechat == "reggie-ai"
-    assert service.get_conversation_binding("boss_conv_001").knowledge_base_id == "kb_ai"
+    assert service.get_conversation_binding("conv_001").knowledge_base_id == "kb_ai"
 
 
-def test_profile_service_tracks_upload_status_and_usage(tmp_path: Path):
-    service = _profile_service(tmp_path)
+def test_profile_service_tracks_uploads_and_usage(tmp_path: Path):
+    service = _service(tmp_path)
     service.save_upload(
         ProfileUploadRecord(
             tenant_id="tenant_001",
@@ -173,596 +466,68 @@ def test_profile_service_tracks_upload_status_and_usage(tmp_path: Path):
         )
     )
 
+    usage = service.increment_usage(
+        tenant_id="tenant_001",
+        user_id="user_001",
+        profile_id="profile_ai",
+        metric_name="rag_calls",
+        period_start="2026-06-01",
+        period_end="2026-07-01",
+    )
+
     assert service.list_uploads("profile_ai")[0].status == "indexed"
-    usage = service.get_usage_counter("tenant_001", "profile_ai", "rag_calls", "2026-06-01", "2026-07-01")
-    assert usage.used_count == 3
+    assert usage.used_count == 4
     assert usage.limit_count == 50
 ```
 
-- [ ] **Step 2: Run the failing tests**
-
-Run: `pytest tests/test_commercial_profile_store.py -v`
-
-Expected: FAIL with `ModuleNotFoundError` for `boss_agent_cli.rag_reply.profile_models`.
-
-- [ ] **Step 3: Add profile dataclasses**
-
-Create `src/boss_agent_cli/rag_reply/profile_models.py`:
-
-```python
-"""Commercial profile domain models for Boss Agent."""
-
-from __future__ import annotations
-
-from dataclasses import dataclass
-
-from boss_agent_cli.rag_reply.models import utc_now_iso
-
-
-SUBSCRIPTION_STATUSES = {"trial", "active", "past_due", "suspended", "canceled"}
-PLAN_CODES = {"free", "pro", "team", "enterprise"}
-PROFILE_STATUSES = {"active", "archived"}
-UPLOAD_STATUSES = {"queued", "uploaded", "indexed", "failed"}
-BINDING_SOURCES = {"manual", "default", "imported"}
-
-
-@dataclass(slots=True)
-class TenantRecord:
-    tenant_id: str
-    display_name: str
-    plan_code: str = "free"
-    subscription_status: str = "trial"
-    license_key_hash: str = ""
-    payment_provider: str = ""
-    provider_customer_id: str = ""
-    provider_subscription_id: str = ""
-    created_at: str = ""
-    updated_at: str = ""
-
-    def __post_init__(self) -> None:
-        now = utc_now_iso()
-        self.created_at = self.created_at or now
-        self.updated_at = self.updated_at or now
-
-
-@dataclass(slots=True)
-class UserRecord:
-    tenant_id: str
-    user_id: str
-    display_name: str
-    email: str
-    role: str = "owner"
-    status: str = "active"
-    created_at: str = ""
-    updated_at: str = ""
-
-    def __post_init__(self) -> None:
-        now = utc_now_iso()
-        self.created_at = self.created_at or now
-        self.updated_at = self.updated_at or now
-
-
-@dataclass(slots=True)
-class UserProfileRecord:
-    tenant_id: str
-    user_id: str
-    profile_id: str
-    display_name: str
-    target_title: str
-    knowledge_base_id: str = ""
-    status: str = "active"
-    created_at: str = ""
-    updated_at: str = ""
-
-    def __post_init__(self) -> None:
-        now = utc_now_iso()
-        self.created_at = self.created_at or now
-        self.updated_at = self.updated_at or now
-
-
-@dataclass(slots=True)
-class ProfileConfigRecord:
-    tenant_id: str
-    profile_id: str
-    contact_phone: str = ""
-    contact_wechat: str = ""
-    interview_windows: str = ""
-    salary_reply_policy: str = ""
-    resume_attachment_path: str = ""
-    reply_auto_send_enabled: bool = False
-    outreach_auto_send_enabled: bool = False
-    proactive_resume_enabled: bool = False
-    updated_at: str = ""
-
-    def __post_init__(self) -> None:
-        self.updated_at = self.updated_at or utc_now_iso()
-
-
-@dataclass(slots=True)
-class ProfileUploadRecord:
-    tenant_id: str
-    user_id: str
-    profile_id: str
-    upload_id: str
-    source_filename: str
-    source_type: str
-    source_size_bytes: int = 0
-    rag_document_id: str = ""
-    status: str = "queued"
-    error_message: str = ""
-    created_at: str = ""
-    updated_at: str = ""
-
-    def __post_init__(self) -> None:
-        now = utc_now_iso()
-        self.created_at = self.created_at or now
-        self.updated_at = self.updated_at or now
-
-
-@dataclass(slots=True)
-class ConversationProfileBindingRecord:
-    tenant_id: str
-    conversation_id: str
-    user_id: str
-    profile_id: str
-    knowledge_base_id: str
-    binding_source: str = "manual"
-    created_at: str = ""
-    updated_at: str = ""
-
-    def __post_init__(self) -> None:
-        now = utc_now_iso()
-        self.created_at = self.created_at or now
-        self.updated_at = self.updated_at or now
-
-
-@dataclass(slots=True)
-class UsageCounterRecord:
-    tenant_id: str
-    user_id: str
-    profile_id: str
-    metric_name: str
-    period_start: str
-    period_end: str
-    used_count: int = 0
-    limit_count: int = 0
-    updated_at: str = ""
-
-    def __post_init__(self) -> None:
-        self.updated_at = self.updated_at or utc_now_iso()
-```
-
-- [ ] **Step 4: Add profile tables to the schema**
-
-Append these SQL statements to `CREATE_TABLE_STATEMENTS` in `src/boss_agent_cli/rag_reply/schema.py`:
-
-```python
-    """
-    CREATE TABLE IF NOT EXISTS tenants (
-        tenant_id TEXT PRIMARY KEY,
-        display_name TEXT NOT NULL,
-        plan_code TEXT NOT NULL,
-        subscription_status TEXT NOT NULL,
-        license_key_hash TEXT NOT NULL,
-        payment_provider TEXT NOT NULL,
-        provider_customer_id TEXT NOT NULL,
-        provider_subscription_id TEXT NOT NULL,
-        created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL
-    )
-    """,
-    """
-    CREATE TABLE IF NOT EXISTS users (
-        user_id TEXT PRIMARY KEY,
-        tenant_id TEXT NOT NULL,
-        display_name TEXT NOT NULL,
-        email TEXT NOT NULL,
-        role TEXT NOT NULL,
-        status TEXT NOT NULL,
-        created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL
-    )
-    """,
-    """
-    CREATE TABLE IF NOT EXISTS user_profiles (
-        profile_id TEXT PRIMARY KEY,
-        tenant_id TEXT NOT NULL,
-        user_id TEXT NOT NULL,
-        display_name TEXT NOT NULL,
-        target_title TEXT NOT NULL,
-        knowledge_base_id TEXT NOT NULL,
-        status TEXT NOT NULL,
-        created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL
-    )
-    """,
-    """
-    CREATE TABLE IF NOT EXISTS profile_configs (
-        profile_id TEXT PRIMARY KEY,
-        tenant_id TEXT NOT NULL,
-        contact_phone TEXT NOT NULL,
-        contact_wechat TEXT NOT NULL,
-        interview_windows TEXT NOT NULL,
-        salary_reply_policy TEXT NOT NULL,
-        resume_attachment_path TEXT NOT NULL,
-        reply_auto_send_enabled INTEGER NOT NULL,
-        outreach_auto_send_enabled INTEGER NOT NULL,
-        proactive_resume_enabled INTEGER NOT NULL,
-        updated_at TEXT NOT NULL
-    )
-    """,
-    """
-    CREATE TABLE IF NOT EXISTS profile_uploads (
-        upload_id TEXT PRIMARY KEY,
-        tenant_id TEXT NOT NULL,
-        user_id TEXT NOT NULL,
-        profile_id TEXT NOT NULL,
-        source_filename TEXT NOT NULL,
-        source_type TEXT NOT NULL,
-        source_size_bytes INTEGER NOT NULL,
-        rag_document_id TEXT NOT NULL,
-        status TEXT NOT NULL,
-        error_message TEXT NOT NULL,
-        created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL
-    )
-    """,
-    """
-    CREATE TABLE IF NOT EXISTS conversation_profile_bindings (
-        conversation_id TEXT PRIMARY KEY,
-        tenant_id TEXT NOT NULL,
-        user_id TEXT NOT NULL,
-        profile_id TEXT NOT NULL,
-        knowledge_base_id TEXT NOT NULL,
-        binding_source TEXT NOT NULL,
-        created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL
-    )
-    """,
-    """
-    CREATE TABLE IF NOT EXISTS usage_counters (
-        tenant_id TEXT NOT NULL,
-        user_id TEXT NOT NULL,
-        profile_id TEXT NOT NULL,
-        metric_name TEXT NOT NULL,
-        period_start TEXT NOT NULL,
-        period_end TEXT NOT NULL,
-        used_count INTEGER NOT NULL,
-        limit_count INTEGER NOT NULL,
-        updated_at TEXT NOT NULL,
-        PRIMARY KEY (tenant_id, profile_id, metric_name, period_start, period_end)
-    )
-    """,
-```
-
-- [ ] **Step 5: Add the profile service**
-
-Create `src/boss_agent_cli/rag_reply/profile_service.py` with these public methods:
-
-```python
-"""SQLite service for commercial Boss Agent profiles."""
-
-from __future__ import annotations
-
-import sqlite3
-
-from boss_agent_cli.rag_reply.profile_models import (
-    ConversationProfileBindingRecord,
-    ProfileConfigRecord,
-    ProfileUploadRecord,
-    TenantRecord,
-    UsageCounterRecord,
-    UserProfileRecord,
-    UserRecord,
-)
-from boss_agent_cli.rag_reply.store import RagReplyStore
-
-
-class ProfileService:
-    def __init__(self, store: RagReplyStore) -> None:
-        self.store = store
-
-    def save_tenant(self, record: TenantRecord) -> None:
-        with self.store.connect() as conn:
-            conn.execute(
-                """
-                INSERT OR REPLACE INTO tenants (
-                    tenant_id, display_name, plan_code, subscription_status,
-                    license_key_hash, payment_provider, provider_customer_id,
-                    provider_subscription_id, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    record.tenant_id,
-                    record.display_name,
-                    record.plan_code,
-                    record.subscription_status,
-                    record.license_key_hash,
-                    record.payment_provider,
-                    record.provider_customer_id,
-                    record.provider_subscription_id,
-                    record.created_at,
-                    record.updated_at,
-                ),
-            )
-            conn.commit()
-
-    def get_tenant(self, tenant_id: str) -> TenantRecord | None:
-        with self.store.connect() as conn:
-            row = conn.execute("SELECT * FROM tenants WHERE tenant_id = ?", (tenant_id,)).fetchone()
-        return None if row is None else _tenant_from_row(row)
-
-    def save_user(self, record: UserRecord) -> None:
-        with self.store.connect() as conn:
-            conn.execute(
-                """
-                INSERT OR REPLACE INTO users (
-                    user_id, tenant_id, display_name, email, role, status, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    record.user_id,
-                    record.tenant_id,
-                    record.display_name,
-                    record.email,
-                    record.role,
-                    record.status,
-                    record.created_at,
-                    record.updated_at,
-                ),
-            )
-            conn.commit()
-
-    def save_profile(self, record: UserProfileRecord) -> None:
-        with self.store.connect() as conn:
-            conn.execute(
-                """
-                INSERT OR REPLACE INTO user_profiles (
-                    profile_id, tenant_id, user_id, display_name, target_title,
-                    knowledge_base_id, status, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    record.profile_id,
-                    record.tenant_id,
-                    record.user_id,
-                    record.display_name,
-                    record.target_title,
-                    record.knowledge_base_id,
-                    record.status,
-                    record.created_at,
-                    record.updated_at,
-                ),
-            )
-            conn.commit()
-
-    def list_profiles(self, tenant_id: str, user_id: str) -> list[UserProfileRecord]:
-        with self.store.connect() as conn:
-            rows = conn.execute(
-                """
-                SELECT * FROM user_profiles
-                WHERE tenant_id = ? AND user_id = ?
-                ORDER BY updated_at DESC, profile_id
-                """,
-                (tenant_id, user_id),
-            ).fetchall()
-        return [_profile_from_row(row) for row in rows]
-
-    def get_profile(self, profile_id: str) -> UserProfileRecord | None:
-        with self.store.connect() as conn:
-            row = conn.execute("SELECT * FROM user_profiles WHERE profile_id = ?", (profile_id,)).fetchone()
-        return None if row is None else _profile_from_row(row)
-
-    def save_profile_config(self, record: ProfileConfigRecord) -> None:
-        with self.store.connect() as conn:
-            conn.execute(
-                """
-                INSERT OR REPLACE INTO profile_configs (
-                    profile_id, tenant_id, contact_phone, contact_wechat,
-                    interview_windows, salary_reply_policy, resume_attachment_path,
-                    reply_auto_send_enabled, outreach_auto_send_enabled,
-                    proactive_resume_enabled, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    record.profile_id,
-                    record.tenant_id,
-                    record.contact_phone,
-                    record.contact_wechat,
-                    record.interview_windows,
-                    record.salary_reply_policy,
-                    record.resume_attachment_path,
-                    int(record.reply_auto_send_enabled),
-                    int(record.outreach_auto_send_enabled),
-                    int(record.proactive_resume_enabled),
-                    record.updated_at,
-                ),
-            )
-            conn.commit()
-
-    def get_profile_config(self, profile_id: str) -> ProfileConfigRecord | None:
-        with self.store.connect() as conn:
-            row = conn.execute("SELECT * FROM profile_configs WHERE profile_id = ?", (profile_id,)).fetchone()
-        return None if row is None else _config_from_row(row)
-
-    def bind_conversation(self, record: ConversationProfileBindingRecord) -> None:
-        with self.store.connect() as conn:
-            conn.execute(
-                """
-                INSERT OR REPLACE INTO conversation_profile_bindings (
-                    conversation_id, tenant_id, user_id, profile_id, knowledge_base_id,
-                    binding_source, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    record.conversation_id,
-                    record.tenant_id,
-                    record.user_id,
-                    record.profile_id,
-                    record.knowledge_base_id,
-                    record.binding_source,
-                    record.created_at,
-                    record.updated_at,
-                ),
-            )
-            conn.commit()
-
-    def get_conversation_binding(self, conversation_id: str) -> ConversationProfileBindingRecord | None:
-        with self.store.connect() as conn:
-            row = conn.execute(
-                "SELECT * FROM conversation_profile_bindings WHERE conversation_id = ?",
-                (conversation_id,),
-            ).fetchone()
-        return None if row is None else _binding_from_row(row)
-
-    def save_upload(self, record: ProfileUploadRecord) -> None:
-        with self.store.connect() as conn:
-            conn.execute(
-                """
-                INSERT OR REPLACE INTO profile_uploads (
-                    upload_id, tenant_id, user_id, profile_id, source_filename, source_type,
-                    source_size_bytes, rag_document_id, status, error_message, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    record.upload_id,
-                    record.tenant_id,
-                    record.user_id,
-                    record.profile_id,
-                    record.source_filename,
-                    record.source_type,
-                    record.source_size_bytes,
-                    record.rag_document_id,
-                    record.status,
-                    record.error_message,
-                    record.created_at,
-                    record.updated_at,
-                ),
-            )
-            conn.commit()
-
-    def list_uploads(self, profile_id: str) -> list[ProfileUploadRecord]:
-        with self.store.connect() as conn:
-            rows = conn.execute(
-                "SELECT * FROM profile_uploads WHERE profile_id = ? ORDER BY created_at, upload_id",
-                (profile_id,),
-            ).fetchall()
-        return [_upload_from_row(row) for row in rows]
-
-    def save_usage_counter(self, record: UsageCounterRecord) -> None:
-        with self.store.connect() as conn:
-            conn.execute(
-                """
-                INSERT OR REPLACE INTO usage_counters (
-                    tenant_id, user_id, profile_id, metric_name, period_start, period_end,
-                    used_count, limit_count, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    record.tenant_id,
-                    record.user_id,
-                    record.profile_id,
-                    record.metric_name,
-                    record.period_start,
-                    record.period_end,
-                    record.used_count,
-                    record.limit_count,
-                    record.updated_at,
-                ),
-            )
-            conn.commit()
-
-    def get_usage_counter(
-        self,
-        tenant_id: str,
-        profile_id: str,
-        metric_name: str,
-        period_start: str,
-        period_end: str,
-    ) -> UsageCounterRecord | None:
-        with self.store.connect() as conn:
-            row = conn.execute(
-                """
-                SELECT * FROM usage_counters
-                WHERE tenant_id = ? AND profile_id = ? AND metric_name = ?
-                  AND period_start = ? AND period_end = ?
-                """,
-                (tenant_id, profile_id, metric_name, period_start, period_end),
-            ).fetchone()
-        return None if row is None else _usage_from_row(row)
-```
-
-Add row helper functions at the bottom of the same file:
-
-```python
-def _tenant_from_row(row: sqlite3.Row) -> TenantRecord:
-    return TenantRecord(**{key: row[key] for key in row.keys()})
-
-
-def _profile_from_row(row: sqlite3.Row) -> UserProfileRecord:
-    return UserProfileRecord(**{key: row[key] for key in row.keys()})
-
-
-def _config_from_row(row: sqlite3.Row) -> ProfileConfigRecord:
-    return ProfileConfigRecord(
-        tenant_id=str(row["tenant_id"]),
-        profile_id=str(row["profile_id"]),
-        contact_phone=str(row["contact_phone"]),
-        contact_wechat=str(row["contact_wechat"]),
-        interview_windows=str(row["interview_windows"]),
-        salary_reply_policy=str(row["salary_reply_policy"]),
-        resume_attachment_path=str(row["resume_attachment_path"]),
-        reply_auto_send_enabled=bool(row["reply_auto_send_enabled"]),
-        outreach_auto_send_enabled=bool(row["outreach_auto_send_enabled"]),
-        proactive_resume_enabled=bool(row["proactive_resume_enabled"]),
-        updated_at=str(row["updated_at"]),
-    )
-
-
-def _binding_from_row(row: sqlite3.Row) -> ConversationProfileBindingRecord:
-    return ConversationProfileBindingRecord(**{key: row[key] for key in row.keys()})
-
-
-def _upload_from_row(row: sqlite3.Row) -> ProfileUploadRecord:
-    return ProfileUploadRecord(**{key: row[key] for key in row.keys()})
-
-
-def _usage_from_row(row: sqlite3.Row) -> UsageCounterRecord:
-    return UsageCounterRecord(**{key: row[key] for key in row.keys()})
-```
-
-- [ ] **Step 6: Run profile persistence tests**
-
-Run: `pytest tests/test_commercial_profile_store.py tests/test_rag_reply_store.py -v`
-
-Expected: PASS.
-
-- [ ] **Step 7: Commit**
+- [ ] **Step 2: Implement `ProfileService`**
+
+Create `src/boss_agent_cli/rag_reply/profile_service.py` using `RagReplyStore.connect()` and the same JSON-free row mapping style as `store.py`. Required methods:
+
+- `__init__(self, store: RagReplyStore) -> None`
+- `save_tenant(self, record: TenantRecord) -> None`
+- `get_tenant(self, tenant_id: str) -> TenantRecord | None`
+- `save_user(self, record: UserRecord) -> None`
+- `save_profile(self, record: UserProfileRecord) -> None`
+- `get_profile(self, profile_id: str) -> UserProfileRecord | None`
+- `list_profiles(self, tenant_id: str, user_id: str) -> list[UserProfileRecord]`
+- `save_profile_config(self, record: ProfileConfigRecord) -> None`
+- `get_profile_config(self, profile_id: str) -> ProfileConfigRecord | None`
+- `save_upload(self, record: ProfileUploadRecord) -> None`
+- `list_uploads(self, profile_id: str) -> list[ProfileUploadRecord]`
+- `bind_conversation(self, record: ConversationProfileBindingRecord) -> None`
+- `get_conversation_binding(self, conversation_id: str) -> ConversationProfileBindingRecord | None`
+- `save_usage_counter(self, record: UsageCounterRecord) -> None`
+- `get_usage_counter(self, tenant_id: str, user_id: str, profile_id: str, metric_name: str, period_start: str, period_end: str) -> UsageCounterRecord | None`
+- `increment_usage(self, *, tenant_id: str, user_id: str, profile_id: str, metric_name: str, period_start: str, period_end: str, amount: int = 1) -> UsageCounterRecord`
+
+All writes use `INSERT OR REPLACE`. `increment_usage()` must preserve an existing `limit_count`; if no record exists, create one with `limit_count=-1`.
+
+- [ ] **Step 3: Verify and commit**
+
+Run:
 
 ```bash
-git add src/boss_agent_cli/rag_reply/profile_models.py src/boss_agent_cli/rag_reply/profile_service.py src/boss_agent_cli/rag_reply/schema.py tests/test_commercial_profile_store.py
-git commit -m "feat: add commercial profile persistence"
+pytest tests/test_commercial_profile_service.py tests/test_commercial_profile_schema.py -v
+git add src/boss_agent_cli/rag_reply/profile_service.py tests/test_commercial_profile_service.py
+git commit -m "feat: add commercial profile service"
 ```
 
----
+Expected: pytest PASS.
 
-### Task 2: Commercial Usage And Quota Gates
+## Task 3: Commercial Gate Policy
 
 **Files:**
 - Create: `src/boss_agent_cli/rag_reply/profile_policy.py`
-- Modify: `src/boss_agent_cli/rag_reply/profile_service.py`
 - Test: `tests/test_commercial_profile_policy.py`
 
-- [ ] **Step 1: Write failing gate tests**
+- [ ] **Step 1: Write gate tests**
 
 Create `tests/test_commercial_profile_policy.py`:
 
 ```python
 from boss_agent_cli.rag_reply.profile_models import TenantRecord, UsageCounterRecord
 from boss_agent_cli.rag_reply.profile_policy import (
-    FEATURE_OUTREACH_AUTO_GREET,
-    FEATURE_PROFILE_CREATE,
-    FEATURE_RAG_ASK,
     CommercialGateDecision,
     evaluate_commercial_gate,
 )
@@ -771,12 +536,12 @@ from boss_agent_cli.rag_reply.profile_policy import (
 def test_gate_allows_active_tenant_under_quota():
     decision = evaluate_commercial_gate(
         tenant=TenantRecord(tenant_id="tenant_001", display_name="Demo", subscription_status="active"),
-        feature=FEATURE_RAG_ASK,
+        metric_name="rag_calls",
         usage=UsageCounterRecord(
             tenant_id="tenant_001",
             user_id="user_001",
             profile_id="profile_ai",
-            metric_name=FEATURE_RAG_ASK,
+            metric_name="rag_calls",
             period_start="2026-06-01",
             period_end="2026-07-01",
             used_count=9,
@@ -784,30 +549,30 @@ def test_gate_allows_active_tenant_under_quota():
         ),
     )
 
-    assert decision == CommercialGateDecision(allowed=True, status="allowed")
+    assert decision == CommercialGateDecision(allowed=True, status="allowed", metric_name="rag_calls")
 
 
-def test_gate_blocks_suspended_tenant_but_allows_history_read_hint():
+def test_gate_blocks_suspended_tenant():
     decision = evaluate_commercial_gate(
         tenant=TenantRecord(tenant_id="tenant_001", display_name="Demo", subscription_status="suspended"),
-        feature=FEATURE_OUTREACH_AUTO_GREET,
+        metric_name="outreach_auto_greet",
         usage=None,
     )
 
     assert decision.allowed is False
     assert decision.status == "tenant_suspended"
-    assert decision.recovery_action == "Reactivate the tenant before starting new automated actions."
+    assert "Reactivate" in decision.recovery_action
 
 
 def test_gate_blocks_quota_exhaustion():
     decision = evaluate_commercial_gate(
         tenant=TenantRecord(tenant_id="tenant_001", display_name="Demo", subscription_status="active"),
-        feature=FEATURE_PROFILE_CREATE,
+        metric_name="profile_count",
         usage=UsageCounterRecord(
             tenant_id="tenant_001",
             user_id="user_001",
             profile_id="",
-            metric_name=FEATURE_PROFILE_CREATE,
+            metric_name="profile_count",
             period_start="2026-06-01",
             period_end="2026-07-01",
             used_count=1,
@@ -817,38 +582,13 @@ def test_gate_blocks_quota_exhaustion():
 
     assert decision.allowed is False
     assert decision.status == "quota_exhausted"
-    assert decision.metric_name == FEATURE_PROFILE_CREATE
 ```
 
-- [ ] **Step 2: Run the failing tests**
+- [ ] **Step 2: Implement policy**
 
-Run: `pytest tests/test_commercial_profile_policy.py -v`
-
-Expected: FAIL with `ModuleNotFoundError` for `boss_agent_cli.rag_reply.profile_policy`.
-
-- [ ] **Step 3: Add gate policy**
-
-Create `src/boss_agent_cli/rag_reply/profile_policy.py`:
+Create `profile_policy.py` with:
 
 ```python
-"""Commercial feature gates for Boss Agent profiles."""
-
-from __future__ import annotations
-
-from dataclasses import dataclass
-
-from boss_agent_cli.rag_reply.profile_models import TenantRecord, UsageCounterRecord
-
-FEATURE_PROFILE_CREATE = "profile_create"
-FEATURE_PROFILE_UPLOAD = "profile_upload"
-FEATURE_RAG_ASK = "rag_calls"
-FEATURE_REPLY_AUTO_SEND = "reply_auto_send"
-FEATURE_OUTREACH_AUTO_GREET = "outreach_auto_greet"
-FEATURE_ATTACHMENT_RESUME_SEND = "attachment_resume_send"
-
-BLOCKED_SUBSCRIPTIONS = {"past_due", "suspended", "canceled"}
-
-
 @dataclass(frozen=True, slots=True)
 class CommercialGateDecision:
     allowed: bool
@@ -858,356 +598,180 @@ class CommercialGateDecision:
     recovery_action: str = ""
 
 
-def evaluate_commercial_gate(
-    *,
-    tenant: TenantRecord | None,
-    feature: str,
-    usage: UsageCounterRecord | None,
-) -> CommercialGateDecision:
+def evaluate_commercial_gate(*, tenant: TenantRecord | None, metric_name: str, usage: UsageCounterRecord | None) -> CommercialGateDecision:
     if tenant is None:
-        return CommercialGateDecision(
-            allowed=False,
-            status="tenant_missing",
-            metric_name=feature,
-            error_message="No tenant is configured for this commercial action.",
-            recovery_action="Create or select a tenant before retrying.",
-        )
-    if tenant.subscription_status in BLOCKED_SUBSCRIPTIONS:
-        return CommercialGateDecision(
-            allowed=False,
-            status=f"tenant_{tenant.subscription_status}",
-            metric_name=feature,
-            error_message=f"Tenant subscription_status={tenant.subscription_status} blocks new automated actions.",
-            recovery_action="Reactivate the tenant before starting new automated actions.",
-        )
+        return CommercialGateDecision(False, "tenant_missing", metric_name, "No tenant is configured.", "Create or select a tenant before retrying.")
+    if tenant.subscription_status in {"past_due", "suspended", "canceled"}:
+        return CommercialGateDecision(False, f"tenant_{tenant.subscription_status}", metric_name, f"Tenant subscription_status={tenant.subscription_status} blocks new actions.", "Reactivate the tenant before starting new automated actions.")
     if usage is not None and usage.limit_count >= 0 and usage.used_count >= usage.limit_count:
-        return CommercialGateDecision(
-            allowed=False,
-            status="quota_exhausted",
-            metric_name=usage.metric_name,
-            error_message=f"Quota exhausted for {usage.metric_name}: {usage.used_count}/{usage.limit_count}.",
-            recovery_action="Raise the plan limit or wait for the next quota period.",
-        )
-    return CommercialGateDecision(allowed=True, status="allowed", metric_name=feature)
+        return CommercialGateDecision(False, "quota_exhausted", usage.metric_name, f"Quota exhausted for {usage.metric_name}: {usage.used_count}/{usage.limit_count}.", "Raise the plan limit or wait for the next quota period.")
+    return CommercialGateDecision(True, "allowed", metric_name)
 ```
 
-- [ ] **Step 4: Add usage consume helper**
+- [ ] **Step 3: Verify and commit**
 
-Add this method to `ProfileService` in `src/boss_agent_cli/rag_reply/profile_service.py`:
-
-```python
-    def increment_usage(
-        self,
-        *,
-        tenant_id: str,
-        profile_id: str,
-        metric_name: str,
-        period_start: str,
-        period_end: str,
-        amount: int = 1,
-    ) -> UsageCounterRecord:
-        existing = self.get_usage_counter(
-            tenant_id,
-            profile_id,
-            metric_name,
-            period_start,
-            period_end,
-        )
-        if existing is None:
-            existing = UsageCounterRecord(
-                tenant_id=tenant_id,
-                user_id="",
-                profile_id=profile_id,
-                metric_name=metric_name,
-                period_start=period_start,
-                period_end=period_end,
-                used_count=0,
-                limit_count=-1,
-            )
-        next_record = UsageCounterRecord(
-            tenant_id=existing.tenant_id,
-            user_id=existing.user_id,
-            profile_id=existing.profile_id,
-            metric_name=existing.metric_name,
-            period_start=existing.period_start,
-            period_end=existing.period_end,
-            used_count=existing.used_count + max(amount, 0),
-            limit_count=existing.limit_count,
-        )
-        self.save_usage_counter(next_record)
-        return next_record
-```
-
-- [ ] **Step 5: Run gate tests**
-
-Run: `pytest tests/test_commercial_profile_policy.py tests/test_commercial_profile_store.py -v`
-
-Expected: PASS.
-
-- [ ] **Step 6: Commit**
+Run:
 
 ```bash
-git add src/boss_agent_cli/rag_reply/profile_policy.py src/boss_agent_cli/rag_reply/profile_service.py tests/test_commercial_profile_policy.py
-git commit -m "feat: add commercial usage gates"
+pytest tests/test_commercial_profile_policy.py -v
+git add src/boss_agent_cli/rag_reply/profile_policy.py tests/test_commercial_profile_policy.py
+git commit -m "feat: add commercial profile gates"
 ```
 
----
+Expected: pytest PASS.
 
-### Task 3: Profile-Aware RAG Connector
+## Task 4: Profile-Aware RAG Connector
 
 **Files:**
 - Create: `src/boss_agent_cli/rag_reply/adapters/rag_profile.py`
-- Modify: `src/boss_agent_cli/rag_reply/adapters/rag_http.py`
+- Modify: `tests/test_rag_reply_rag_http.py`
 - Test: `tests/test_rag_profile_connector.py`
-- Test: `tests/test_rag_reply_rag_http.py`
 
-- [ ] **Step 1: Write failing connector tests**
+- [ ] **Step 1: Write connector tests**
 
 Create `tests/test_rag_profile_connector.py`:
 
 ```python
-from pathlib import Path
-
-import httpx
+from types import SimpleNamespace
 
 from boss_agent_cli.rag_reply.adapters.rag_profile import RagProfileConnector
 
 
-class _Response:
-    def __init__(self, payload):
-        self._payload = payload
+def test_ask_profile_requires_complete_identity():
+    connector = RagProfileConnector(rag_adapter=SimpleNamespace(answer=lambda **kwargs: None))
 
-    def raise_for_status(self):
-        return None
-
-    def json(self):
-        return self._payload
-
-
-def test_rag_profile_connector_uploads_with_identity(monkeypatch, tmp_path: Path):
-    captured = {}
-    upload_file = tmp_path / "resume.txt"
-    upload_file.write_text("resume text", encoding="utf-8")
-
-    def fake_post(url, *, data=None, files=None, json=None, timeout, headers=None):
-        captured["url"] = url
-        captured["data"] = data
-        captured["has_file"] = bool(files)
-        return _Response({"rag_document_id": "doc_001", "status": "uploaded"})
-
-    monkeypatch.setattr(httpx, "post", fake_post)
-    connector = RagProfileConnector(base_url="http://127.0.0.1:8020", timeout_seconds=11)
-
-    result = connector.upload_profile_document(
+    result = connector.ask_profile(
         tenant_id="tenant_001",
         user_id="user_001",
-        profile_id="profile_ai",
+        profile_id="",
         knowledge_base_id="kb_ai",
-        file_path=upload_file,
-        source_type="resume",
-    )
-
-    assert result.ok is True
-    assert result.rag_document_id == "doc_001"
-    assert captured["url"].endswith("/api/v1/profile-documents")
-    assert captured["data"]["tenant_id"] == "tenant_001"
-    assert captured["data"]["profile_id"] == "profile_ai"
-    assert captured["data"]["knowledge_base_id"] == "kb_ai"
-    assert captured["has_file"] is True
-
-
-def test_rag_profile_connector_fails_closed_when_base_url_missing(tmp_path: Path):
-    upload_file = tmp_path / "resume.txt"
-    upload_file.write_text("resume text", encoding="utf-8")
-    connector = RagProfileConnector(base_url="", timeout_seconds=11)
-
-    result = connector.upload_profile_document(
-        tenant_id="tenant_001",
-        user_id="user_001",
-        profile_id="profile_ai",
-        knowledge_base_id="kb_ai",
-        file_path=upload_file,
-        source_type="resume",
+        question="介绍一下项目。",
+        conversation_id="conv_001",
     )
 
     assert result.ok is False
-    assert result.status == "failed"
-```
+    assert result.audit_status == "profile_context_invalid"
+    assert result.send_allowed is False
 
-- [ ] **Step 2: Extend existing RAG HTTP tests for metadata**
 
-Add this test to `tests/test_rag_reply_rag_http.py`:
-
-```python
-def test_rag_http_includes_profile_context_when_provided(monkeypatch):
+def test_ask_profile_wraps_current_chat_ask_without_metadata():
     captured = {}
 
-    def fake_post(url, *, json, timeout, headers=None):
-        captured["json"] = json
-        return _Response({"answer": "draft", "citations": [{"id": "c1"}]})
+    def fake_answer(**kwargs):
+        captured.update(kwargs)
+        return SimpleNamespace(
+            ok=True,
+            answer="我负责企业级 RAG 项目。",
+            citations=[{"id": "c1"}],
+            reasoning_summary={},
+            raw_response={"answer": "我负责企业级 RAG 项目。"},
+            error_message=None,
+            audit_status="draft_created",
+            send_allowed=False,
+            approval_required=True,
+        )
 
-    monkeypatch.setattr(httpx, "post", fake_post)
-    adapter = RagHttpAdapter(base_url="http://127.0.0.1:8020", timeout_seconds=12)
-
-    result = adapter.answer(
-        rag_question="HR question: hi",
-        session_id="sess_001",
+    connector = RagProfileConnector(rag_adapter=SimpleNamespace(answer=fake_answer))
+    result = connector.ask_profile(
         tenant_id="tenant_001",
         user_id="user_001",
         profile_id="profile_ai",
         knowledge_base_id="kb_ai",
+        question="介绍一下项目。",
+        conversation_id="conv_001",
     )
 
     assert result.ok is True
-    assert captured["json"]["tenant_id"] == "tenant_001"
-    assert captured["json"]["user_id"] == "user_001"
-    assert captured["json"]["profile_id"] == "profile_ai"
-    assert captured["json"]["knowledge_base_id"] == "kb_ai"
+    assert captured["rag_question"] == "介绍一下项目。"
+    assert captured["session_id"].startswith("boss-profile-")
+    assert "metadata" not in captured
+    assert result.profile_context["profile_id"] == "profile_ai"
 ```
 
-- [ ] **Step 3: Run failing connector tests**
+- [ ] **Step 2: Implement connector**
 
-Run: `pytest tests/test_rag_profile_connector.py tests/test_rag_reply_rag_http.py::test_rag_http_includes_profile_context_when_provided -v`
-
-Expected: FAIL because `RagProfileConnector` does not exist and `RagHttpAdapter.answer()` does not accept profile context.
-
-- [ ] **Step 4: Add profile connector**
-
-Create `src/boss_agent_cli/rag_reply/adapters/rag_profile.py`:
+Create `rag_profile.py` with:
 
 ```python
-"""Thin connector for profile-aware Enterprise RAG operations."""
-
-from __future__ import annotations
-
-from dataclasses import dataclass, field
-from pathlib import Path
-from typing import Any
-
-import httpx
-
-
 @dataclass(slots=True)
-class RagProfileOperationResult:
+class RagProfileAnswerResult:
     ok: bool
-    status: str
-    knowledge_base_id: str = ""
-    rag_document_id: str = ""
-    raw_response: dict[str, Any] = field(default_factory=dict)
-    error_message: str = ""
+    answer: str
+    citations: list[dict[str, object]]
+    profile_context: dict[str, str]
+    reasoning_summary: dict[str, object] | None = None
+    raw_response: dict[str, object] | None = None
+    error_message: str | None = None
+    audit_status: str = "draft_created"
+    send_allowed: bool = False
+    approval_required: bool = True
 
 
 class RagProfileConnector:
-    def __init__(self, *, base_url: str | None, timeout_seconds: int = 20, api_key: str | None = None) -> None:
-        self.base_url = (base_url or "").rstrip("/")
-        self.timeout_seconds = timeout_seconds
-        self.api_key = (api_key or "").strip()
+    def __init__(self, *, rag_adapter) -> None:
+        self.rag_adapter = rag_adapter
 
-    def upload_profile_document(
-        self,
-        *,
-        tenant_id: str,
-        user_id: str,
-        profile_id: str,
-        knowledge_base_id: str,
-        file_path: Path,
-        source_type: str,
-    ) -> RagProfileOperationResult:
-        if not self.base_url:
-            return RagProfileOperationResult(ok=False, status="failed", error_message="rag_base_url_missing")
-        headers = {"X-API-Key": self.api_key} if self.api_key else None
-        try:
-            with Path(file_path).open("rb") as handle:
-                response = httpx.post(
-                    f"{self.base_url}/api/v1/profile-documents",
-                    data={
-                        "tenant_id": tenant_id,
-                        "user_id": user_id,
-                        "profile_id": profile_id,
-                        "knowledge_base_id": knowledge_base_id,
-                        "source_type": source_type,
-                    },
-                    files={"file": (Path(file_path).name, handle)},
-                    timeout=self.timeout_seconds,
-                    headers=headers,
-                )
-            response.raise_for_status()
-            data = response.json()
-        except (OSError, httpx.HTTPError, ValueError) as exc:
-            return RagProfileOperationResult(ok=False, status="failed", error_message=str(exc))
-        return RagProfileOperationResult(
-            ok=True,
-            status=str(data.get("status") or "uploaded"),
-            knowledge_base_id=str(data.get("knowledge_base_id") or knowledge_base_id),
-            rag_document_id=str(data.get("rag_document_id") or data.get("document_id") or ""),
-            raw_response=data if isinstance(data, dict) else {},
+    def ask_profile(self, *, tenant_id: str, user_id: str, profile_id: str, knowledge_base_id: str, question: str, conversation_id: str, mode: str = "accurate") -> RagProfileAnswerResult:
+        profile_context = {
+            "tenant_id": tenant_id.strip(),
+            "user_id": user_id.strip(),
+            "profile_id": profile_id.strip(),
+            "knowledge_base_id": knowledge_base_id.strip(),
+        }
+        if not all(profile_context.values()):
+            return RagProfileAnswerResult(False, "", [], profile_context, error_message="tenant_id/user_id/profile_id/knowledge_base_id are required.", audit_status="profile_context_invalid")
+        session_hash = hashlib.sha1(f"{conversation_id}:{profile_id}:{knowledge_base_id}".encode("utf-8")).hexdigest()[:16]
+        result = self.rag_adapter.answer(
+            rag_question=question,
+            session_id=f"boss-profile-{session_hash}",
+            mode=mode,
+        )
+        return RagProfileAnswerResult(
+            ok=bool(result.ok),
+            answer=str(result.answer or ""),
+            citations=list(result.citations or []),
+            profile_context=profile_context,
+            reasoning_summary=result.reasoning_summary,
+            raw_response=result.raw_response,
+            error_message=result.error_message,
+            audit_status=result.audit_status,
+            send_allowed=False,
+            approval_required=True,
         )
 ```
 
-- [ ] **Step 5: Extend `RagHttpAdapter.answer` signature**
+Add import for `hashlib`. Keep upload/status methods as explicit future-facing methods when the external RAG exposes endpoints; do not route upload through `/api/v1/chat/ask`.
 
-Modify `src/boss_agent_cli/rag_reply/adapters/rag_http.py` so the method accepts profile context:
+- [ ] **Step 3: Preserve `RagHttpAdapter` chat/ask contract**
+
+Do not add `metadata`, `tenant_id`, `user_id`, `profile_id`, or `knowledge_base_id` into `RagHttpAdapter.answer()` payload for current `/api/v1/chat/ask`.
+
+Keep this assertion in `tests/test_rag_reply_rag_http.py`:
 
 ```python
-    def answer(
-        self,
-        *,
-        rag_question: str,
-        session_id: str,
-        mode: str = "accurate",
-        tenant_id: str | None = None,
-        user_id: str | None = None,
-        profile_id: str | None = None,
-        knowledge_base_id: str | None = None,
-    ) -> RagAnswerResult:
-        """Return a closed result when the HTTP call fails."""
-        if not self.base_url:
-            return RagAnswerResult(
-                ok=False,
-                answer="",
-                error_message="boss_rag_rag_base_url is not configured.",
-                audit_status="rag_failed",
-            )
-        payload = {
-            "question": rag_question,
-            "session_id": session_id,
-            "mode": mode,
-        }
-        if tenant_id:
-            payload["tenant_id"] = tenant_id
-        if user_id:
-            payload["user_id"] = user_id
-        if profile_id:
-            payload["profile_id"] = profile_id
-        if knowledge_base_id:
-            payload["knowledge_base_id"] = knowledge_base_id
+assert "metadata" not in captured["json"]
 ```
 
-Keep the existing HTTP call and result parsing below this payload block unchanged.
+- [ ] **Step 4: Verify and commit**
 
-- [ ] **Step 6: Run connector and HTTP tests**
-
-Run: `pytest tests/test_rag_profile_connector.py tests/test_rag_reply_rag_http.py -v`
-
-Expected: PASS.
-
-- [ ] **Step 7: Commit**
+Run:
 
 ```bash
-git add src/boss_agent_cli/rag_reply/adapters/rag_profile.py src/boss_agent_cli/rag_reply/adapters/rag_http.py tests/test_rag_profile_connector.py tests/test_rag_reply_rag_http.py
+pytest tests/test_rag_profile_connector.py tests/test_rag_reply_rag_http.py -v
+git add src/boss_agent_cli/rag_reply/adapters/rag_profile.py tests/test_rag_profile_connector.py tests/test_rag_reply_rag_http.py
 git commit -m "feat: add profile-aware RAG connector"
 ```
 
----
+Expected: pytest PASS.
 
-### Task 4: Reply Path Profile Binding
+## Task 5: Reply Path Profile Binding
 
 **Files:**
 - Modify: `src/boss_agent_cli/rag_reply/service.py`
 - Modify: `src/boss_agent_cli/rag_reply/question_builder.py`
 - Test: `tests/test_rag_reply_profile_binding.py`
 
-- [ ] **Step 1: Write failing binding tests**
+- [ ] **Step 1: Write binding tests**
 
 Create `tests/test_rag_reply_profile_binding.py`:
 
@@ -1222,9 +786,31 @@ from boss_agent_cli.rag_reply.service import BossRagReplyService
 from boss_agent_cli.rag_reply.store import RagReplyStore
 
 
-def test_rag_reply_uses_bound_profile_context(tmp_path: Path):
+def _store(tmp_path: Path) -> RagReplyStore:
     store = RagReplyStore(tmp_path / "boss-rag.sqlite3")
     store.initialize()
+    return store
+
+
+def test_fact_question_without_profile_binding_is_blocked(tmp_path: Path):
+    store = _store(tmp_path)
+    store.save_conversation(ConversationRecord(conversation_id="conv_001", source="manual_import"))
+    store.save_message(MessageRecord(message_id="msg_001", conversation_id="conv_001", message_text="介绍一下你的 RAG 项目。", direction="inbound"))
+    service = BossRagReplyService(
+        store=store,
+        rag_adapter=SimpleNamespace(answer=lambda **kwargs: (_ for _ in ()).throw(AssertionError("legacy RAG should not be called"))),
+        profile_service=ProfileService(store),
+    )
+
+    draft = service.create_draft_for_message("msg_001")
+
+    assert draft.audit_status == "profile_binding_required"
+    assert draft.send_allowed is False
+    assert "profile_binding_required" in draft.risk_labels
+
+
+def test_fact_question_uses_bound_profile_connector(tmp_path: Path):
+    store = _store(tmp_path)
     profile_service = ProfileService(store)
     profile_service.bind_conversation(
         ConversationProfileBindingRecord(
@@ -1236,215 +822,113 @@ def test_rag_reply_uses_bound_profile_context(tmp_path: Path):
         )
     )
     store.save_conversation(ConversationRecord(conversation_id="conv_001", source="manual_import"))
-    store.save_message(
-        MessageRecord(
-            message_id="msg_001",
-            conversation_id="conv_001",
-            message_text="介绍一下你的 RAG 项目。",
-            direction="inbound",
-        )
-    )
+    store.save_message(MessageRecord(message_id="msg_001", conversation_id="conv_001", message_text="介绍一下你的 RAG 项目。", direction="inbound"))
     captured = {}
+
+    def fake_ask_profile(**kwargs):
+        captured.update(kwargs)
+        return SimpleNamespace(
+            ok=True,
+            answer="我负责企业级 RAG 项目。",
+            citations=[{"id": "c1"}],
+            profile_context={
+                "tenant_id": kwargs["tenant_id"],
+                "user_id": kwargs["user_id"],
+                "profile_id": kwargs["profile_id"],
+                "knowledge_base_id": kwargs["knowledge_base_id"],
+            },
+            reasoning_summary={},
+            raw_response={},
+            error_message=None,
+            audit_status="draft_created",
+            send_allowed=False,
+            approval_required=True,
+        )
+
     service = BossRagReplyService(
         store=store,
-        rag_adapter=SimpleNamespace(
-            answer=lambda **kwargs: captured.setdefault("kwargs", kwargs)
-            or SimpleNamespace(
-                ok=True,
-                answer="我负责企业级 RAG 项目。",
-                citations=[{"id": "c1"}],
-                reasoning_summary={},
-                raw_response={},
-                error_message=None,
-                audit_status="draft_created",
-                send_allowed=False,
-                approval_required=True,
-            )
-        ),
+        rag_adapter=SimpleNamespace(answer=lambda **kwargs: None),
         profile_service=profile_service,
+        profile_rag_connector=SimpleNamespace(ask_profile=fake_ask_profile),
     )
 
     draft = service.create_draft_for_message("msg_001")
 
-    assert draft.audit_status == "draft_created"
-    assert captured["kwargs"]["tenant_id"] == "tenant_001"
-    assert captured["kwargs"]["profile_id"] == "profile_ai"
-    assert captured["kwargs"]["knowledge_base_id"] == "kb_ai"
+    assert captured["profile_id"] == "profile_ai"
+    assert captured["knowledge_base_id"] == "kb_ai"
     assert draft.evidence["profile_context"]["profile_id"] == "profile_ai"
-
-
-def test_fact_question_without_profile_binding_is_blocked(tmp_path: Path):
-    store = RagReplyStore(tmp_path / "boss-rag.sqlite3")
-    store.initialize()
-    store.save_conversation(ConversationRecord(conversation_id="conv_001", source="manual_import"))
-    store.save_message(
-        MessageRecord(
-            message_id="msg_001",
-            conversation_id="conv_001",
-            message_text="介绍一下你的 RAG 项目。",
-            direction="inbound",
-        )
-    )
-    service = BossRagReplyService(
-        store=store,
-        rag_adapter=SimpleNamespace(answer=lambda **kwargs: (_ for _ in ()).throw(AssertionError("RAG should not be called"))),
-        profile_service=ProfileService(store),
-    )
-
-    draft = service.create_draft_for_message("msg_001")
-
-    assert draft.audit_status == "profile_binding_required"
-    assert draft.send_allowed is False
-    assert draft.approval_required is True
+    assert store.list_rag_calls("conv_001")[0].request["profile_context"]["tenant_id"] == "tenant_001"
 ```
 
-- [ ] **Step 2: Run failing binding tests**
+- [ ] **Step 2: Extend service constructor**
 
-Run: `pytest tests/test_rag_reply_profile_binding.py -v`
-
-Expected: FAIL because `BossRagReplyService.__init__()` does not accept `profile_service`.
-
-- [ ] **Step 3: Extend service protocols and constructor**
-
-In `src/boss_agent_cli/rag_reply/service.py`, update `RagAdapterProtocol.answer` and `BossRagReplyService.__init__`:
+Add optional dependencies to `BossRagReplyService.__init__`:
 
 ```python
-class RagAdapterProtocol(Protocol):
-    def answer(
-        self,
-        *,
-        rag_question: str,
-        session_id: str,
-        mode: str = "accurate",
-        tenant_id: str | None = None,
-        user_id: str | None = None,
-        profile_id: str | None = None,
-        knowledge_base_id: str | None = None,
-    ) -> RagAnswerProtocol:
-        ...
+profile_service: object | None = None
+profile_rag_connector: object | None = None
 ```
 
+Save them as `self.profile_service` and `self.profile_rag_connector`.
+
+- [ ] **Step 3: Resolve profile binding**
+
+Add `_resolve_profile_context(message)` that returns `{tenant_id,user_id,profile_id,knowledge_base_id}` from `profile_service.get_conversation_binding(message.conversation_id)`. If `profile_service` is present and binding is missing, `_build_rag_backed_draft()` returns a draft with:
+
 ```python
-    def __init__(
-        self,
-        *,
-        store: RagReplyStore,
-        rag_adapter: RagAdapterProtocol,
-        fallback_adapter: FallbackAdapterProtocol | None = None,
-        agent_answer_adapter: AgentAnswerAdapterProtocol | None = None,
-        profile_service: object | None = None,
-        salary_reply: str = "",
-        interview_windows: str = "",
-    ) -> None:
-        self.store = store
-        self.rag_adapter = rag_adapter
-        self.fallback_adapter = fallback_adapter
-        self.agent_answer_adapter = agent_answer_adapter
-        self.profile_service = profile_service
-        self.salary_reply = salary_reply.strip()
-        self.interview_windows = interview_windows.strip()
+audit_status="profile_binding_required"
+send_allowed=False
+approval_required=True
+risk_labels=[*decision.risk_labels, "profile_binding_required"]
+evidence={"source": "profile_policy", "reason": "profile_binding_required"}
 ```
 
-- [ ] **Step 4: Add profile context resolver**
+- [ ] **Step 4: Call profile connector and record evidence**
 
-Add this method to `BossRagReplyService`:
+When `profile_context` exists, call:
 
 ```python
-    def _resolve_profile_context(self, message: MessageRecord) -> dict[str, str]:
-        service = self.profile_service
-        if service is None or not hasattr(service, "get_conversation_binding"):
-            return {}
-        binding = service.get_conversation_binding(message.conversation_id)
-        if binding is None:
-            return {}
-        return {
-            "tenant_id": binding.tenant_id,
-            "user_id": binding.user_id,
-            "profile_id": binding.profile_id,
-            "knowledge_base_id": binding.knowledge_base_id,
-        }
+profile_result = self.profile_rag_connector.ask_profile(
+    tenant_id=profile_context["tenant_id"],
+    user_id=profile_context["user_id"],
+    profile_id=profile_context["profile_id"],
+    knowledge_base_id=profile_context["knowledge_base_id"],
+    question=rag_question,
+    conversation_id=message.conversation_id,
+)
 ```
 
-- [ ] **Step 5: Block fact RAG questions without binding when profile service is enabled**
-
-At the beginning of `_build_rag_backed_draft`, after `job_summary = self._resolve_job_summary(message)`, add:
+Save `RagCallRecord.request` with:
 
 ```python
-        profile_context = self._resolve_profile_context(message)
-        if self.profile_service is not None and not profile_context:
-            return DraftRecord.new(
-                conversation_id=message.conversation_id,
-                source_message_id=message.message_id,
-                draft_text="",
-                intent=classification.intent,
-                risk_labels=[*decision.risk_labels, "profile_binding_required"],
-                evidence={
-                    "source": "profile_policy",
-                    "reason": "profile_binding_required",
-                },
-                approval_required=True,
-                send_allowed=False,
-                audit_status="profile_binding_required",
-            )
-```
-
-- [ ] **Step 6: Pass profile context into RAG and evidence**
-
-Update the `self.rag_adapter.answer(...)` call:
-
-```python
-        rag_result = self.rag_adapter.answer(
-            rag_question=rag_question,
-            session_id=rag_session_id,
-            tenant_id=profile_context.get("tenant_id"),
-            user_id=profile_context.get("user_id"),
-            profile_id=profile_context.get("profile_id"),
-            knowledge_base_id=profile_context.get("knowledge_base_id"),
-        )
-```
-
-Add profile context to the RAG call request and draft evidence:
-
-```python
-request={
+{
     "question": rag_question,
-    "session_id": rag_session_id,
     "message_id": message.message_id,
     "profile_context": profile_context,
 }
 ```
 
-```python
-evidence: dict[str, object] = {
-    "source": evidence_source,
-    "citations": rag_result.citations,
-    "reasoning_summary": reasoning_summary,
-    "profile_context": profile_context,
-}
-```
+Do not put profile identity inside the natural-language `rag_question`.
 
-- [ ] **Step 7: Run binding tests**
+- [ ] **Step 5: Verify and commit**
 
-Run: `pytest tests/test_rag_reply_profile_binding.py tests/test_rag_reply_service.py -v`
-
-Expected: PASS.
-
-- [ ] **Step 8: Commit**
+Run:
 
 ```bash
+pytest tests/test_rag_reply_profile_binding.py tests/test_rag_reply_service.py tests/test_rag_reply_question_builder.py -v
 git add src/boss_agent_cli/rag_reply/service.py src/boss_agent_cli/rag_reply/question_builder.py tests/test_rag_reply_profile_binding.py
-git commit -m "feat: bind conversations to commercial profiles"
+git commit -m "feat: bind RAG replies to commercial profiles"
 ```
 
----
+Expected: pytest PASS.
 
-### Task 5: Profile CLI Commands
+## Task 6: Profile CLI Surface
 
 **Files:**
 - Modify: `src/boss_agent_cli/commands/rag.py`
 - Test: `tests/test_commercial_profile_commands.py`
 
-- [ ] **Step 1: Write failing CLI tests**
+- [ ] **Step 1: Write CLI tests**
 
 Create `tests/test_commercial_profile_commands.py`:
 
@@ -1457,410 +941,383 @@ from click.testing import CliRunner
 from boss_agent_cli.main import cli
 
 
-def test_agent_profile_create_list_and_bind(tmp_path: Path):
-    runner = CliRunner()
+def _json(output: str) -> dict:
+    return json.loads(output)["data"]
 
+
+def test_agent_profile_create_list_config_and_bind(tmp_path: Path):
+    runner = CliRunner()
     create = runner.invoke(
         cli,
         [
-            "--json",
-            "--data-dir",
-            str(tmp_path),
-            "agent",
-            "profile",
-            "create",
-            "--tenant-id",
-            "tenant_001",
-            "--user-id",
-            "user_001",
-            "--name",
-            "AI 应用工程师",
-            "--target-title",
-            "AI Application Engineer",
-            "--knowledge-base-id",
-            "kb_ai",
+            "--json", "--data-dir", str(tmp_path),
+            "agent", "profile", "create",
+            "--tenant-id", "tenant_001",
+            "--user-id", "user_001",
+            "--name", "AI 应用工程师",
+            "--target-title", "AI Application Engineer",
+            "--knowledge-base-id", "kb_ai",
         ],
     )
     assert create.exit_code == 0
-    created = json.loads(create.output)
-    assert created["data"]["profile"]["profile_id"].startswith("profile_")
+    profile_id = _json(create.output)["profile"]["profile_id"]
 
-    profile_id = created["data"]["profile"]["profile_id"]
+    config = runner.invoke(
+        cli,
+        [
+            "--json", "--data-dir", str(tmp_path),
+            "agent", "profile", "config", "set",
+            "--tenant-id", "tenant_001",
+            "--profile-id", profile_id,
+            "--contact-phone", "13800138000",
+            "--contact-wechat", "reggie-ai",
+            "--interview-windows", "工作日 20:00 后",
+            "--reply-auto-send-enabled",
+        ],
+    )
+    assert config.exit_code == 0
+
     bind = runner.invoke(
         cli,
         [
-            "--json",
-            "--data-dir",
-            str(tmp_path),
-            "agent",
-            "conversation",
-            "bind-profile",
-            "--conversation-id",
-            "conv_001",
-            "--tenant-id",
-            "tenant_001",
-            "--user-id",
-            "user_001",
-            "--profile-id",
-            profile_id,
+            "--json", "--data-dir", str(tmp_path),
+            "agent", "conversation", "bind-profile",
+            "--conversation-id", "conv_001",
+            "--tenant-id", "tenant_001",
+            "--user-id", "user_001",
+            "--profile-id", profile_id,
         ],
     )
     assert bind.exit_code == 0
-    assert json.loads(bind.output)["data"]["binding"]["profile_id"] == profile_id
-
-
-def test_agent_usage_summary_reports_empty_usage(tmp_path: Path):
-    runner = CliRunner()
-    result = runner.invoke(
-        cli,
-        ["--json", "--data-dir", str(tmp_path), "agent", "usage", "summary", "--tenant-id", "tenant_001"],
-    )
-
-    assert result.exit_code == 0
-    assert json.loads(result.output)["data"]["tenant_id"] == "tenant_001"
+    assert _json(bind.output)["binding"]["knowledge_base_id"] == "kb_ai"
 ```
 
-- [ ] **Step 2: Run failing CLI tests**
+- [ ] **Step 2: Add CLI helpers and groups**
 
-Run: `pytest tests/test_commercial_profile_commands.py -v`
-
-Expected: FAIL because `agent profile` and `agent conversation` command groups do not exist.
-
-- [ ] **Step 3: Add profile service builder and serializers**
-
-In `src/boss_agent_cli/commands/rag.py`, add imports:
-
-```python
-from boss_agent_cli.rag_reply.profile_models import (
-    ConversationProfileBindingRecord,
-    ProfileConfigRecord,
-    ProfileUploadRecord,
-    TenantRecord,
-    UserProfileRecord,
-    UserRecord,
-)
-from boss_agent_cli.rag_reply.profile_service import ProfileService
-```
-
-Add helpers near `_resolve_store`:
+In `commands/rag.py`, add:
 
 ```python
 def _resolve_profile_service(ctx: click.Context) -> ProfileService:
-    return ProfileService(_resolve_store(ctx))
-
-
-def _profile_payload(profile: UserProfileRecord) -> dict[str, object]:
-    return {
-        "tenant_id": profile.tenant_id,
-        "user_id": profile.user_id,
-        "profile_id": profile.profile_id,
-        "display_name": profile.display_name,
-        "target_title": profile.target_title,
-        "knowledge_base_id": profile.knowledge_base_id,
-        "status": profile.status,
-    }
-
-
-def _binding_payload(binding: ConversationProfileBindingRecord) -> dict[str, object]:
-    return {
-        "tenant_id": binding.tenant_id,
-        "conversation_id": binding.conversation_id,
-        "user_id": binding.user_id,
-        "profile_id": binding.profile_id,
-        "knowledge_base_id": binding.knowledge_base_id,
-        "binding_source": binding.binding_source,
-    }
+    store = _resolve_store(ctx)
+    store.initialize()
+    return ProfileService(store)
 ```
 
-- [ ] **Step 4: Add nested CLI groups**
-
-Append these command groups before `rag_audit_cmd`:
+Add groups under existing `rag_group`:
 
 ```python
 @rag_group.group("profile")
-@click.pass_context
-def rag_profile_group(ctx: click.Context) -> None:
-    ctx.ensure_object(dict)
-
-
-@rag_profile_group.command("create")
-@click.option("--tenant-id", required=True)
-@click.option("--user-id", required=True)
-@click.option("--name", required=True)
-@click.option("--target-title", required=True)
-@click.option("--knowledge-base-id", default="")
-@click.pass_context
-def rag_profile_create_cmd(
-    ctx: click.Context,
-    tenant_id: str,
-    user_id: str,
-    name: str,
-    target_title: str,
-    knowledge_base_id: str,
-) -> None:
-    service = _resolve_profile_service(ctx)
-    service.save_tenant(TenantRecord(tenant_id=tenant_id, display_name=tenant_id))
-    service.save_user(UserRecord(tenant_id=tenant_id, user_id=user_id, display_name=user_id, email=""))
-    profile = UserProfileRecord(
-        tenant_id=tenant_id,
-        user_id=user_id,
-        profile_id=new_id("profile"),
-        display_name=name,
-        target_title=target_title,
-        knowledge_base_id=knowledge_base_id,
-    )
-    service.save_profile(profile)
-    service.save_profile_config(ProfileConfigRecord(tenant_id=tenant_id, profile_id=profile.profile_id))
-    handle_output(ctx, _workflow_command(ctx, "profile-create"), {"profile": _profile_payload(profile)})
-
-
-@rag_profile_group.command("list")
-@click.option("--tenant-id", required=True)
-@click.option("--user-id", required=True)
-@click.pass_context
-def rag_profile_list_cmd(ctx: click.Context, tenant_id: str, user_id: str) -> None:
-    service = _resolve_profile_service(ctx)
-    profiles = [_profile_payload(profile) for profile in service.list_profiles(tenant_id, user_id)]
-    handle_output(ctx, _workflow_command(ctx, "profile-list"), {"profiles": profiles, "count": len(profiles)})
-
+def rag_profile_group() -> None:
+    """Manage commercial profiles."""
 
 @rag_group.group("conversation")
-@click.pass_context
-def rag_conversation_group(ctx: click.Context) -> None:
-    ctx.ensure_object(dict)
-
-
-@rag_conversation_group.command("bind-profile")
-@click.option("--conversation-id", required=True)
-@click.option("--tenant-id", required=True)
-@click.option("--user-id", required=True)
-@click.option("--profile-id", required=True)
-@click.option("--binding-source", default="manual")
-@click.pass_context
-def rag_conversation_bind_profile_cmd(
-    ctx: click.Context,
-    conversation_id: str,
-    tenant_id: str,
-    user_id: str,
-    profile_id: str,
-    binding_source: str,
-) -> None:
-    service = _resolve_profile_service(ctx)
-    profile = service.get_profile(profile_id)
-    if profile is None:
-        handle_error_output(
-            ctx,
-            _workflow_command(ctx, "conversation-bind-profile"),
-            code="PROFILE_NOT_FOUND",
-            message=f"Unknown profile_id={profile_id}",
-            recoverable=False,
-        )
-        return
-    binding = ConversationProfileBindingRecord(
-        tenant_id=tenant_id,
-        conversation_id=conversation_id,
-        user_id=user_id,
-        profile_id=profile_id,
-        knowledge_base_id=profile.knowledge_base_id,
-        binding_source=binding_source,
-    )
-    service.bind_conversation(binding)
-    handle_output(ctx, _workflow_command(ctx, "conversation-bind-profile"), {"binding": _binding_payload(binding)})
-
+def rag_conversation_group() -> None:
+    """Manage conversation profile bindings."""
 
 @rag_group.group("usage")
-@click.pass_context
-def rag_usage_group(ctx: click.Context) -> None:
-    ctx.ensure_object(dict)
-
-
-@rag_usage_group.command("summary")
-@click.option("--tenant-id", required=True)
-@click.pass_context
-def rag_usage_summary_cmd(ctx: click.Context, tenant_id: str) -> None:
-    _resolve_profile_service(ctx)
-    handle_output(ctx, _workflow_command(ctx, "usage-summary"), {"tenant_id": tenant_id, "usage": []})
+def rag_usage_group() -> None:
+    """Inspect commercial usage counters."""
 ```
 
-- [ ] **Step 5: Run CLI tests**
+Required commands:
 
-Run: `pytest tests/test_commercial_profile_commands.py tests/test_rag_reply_commands.py::test_agent_group_alias_is_registered -v`
+- `agent profile create --tenant-id --user-id --name --target-title [--knowledge-base-id]`
+- `agent profile list --tenant-id --user-id`
+- `agent profile config set --tenant-id --profile-id [--contact-phone] [--contact-wechat] [--interview-windows] [--salary-reply-policy] [--resume-attachment-path] [--reply-auto-send-enabled/--no-reply-auto-send-enabled] [--outreach-auto-send-enabled/--no-outreach-auto-send-enabled] [--proactive-resume-enabled/--no-proactive-resume-enabled]`
+- `agent profile upload --tenant-id --user-id --profile-id --type --file`
+- `agent profile upload-status --profile-id`
+- `agent conversation bind-profile --conversation-id --tenant-id --user-id --profile-id [--binding-source manual|default|imported]`
+- `agent conversation profile --conversation-id`
+- `agent usage summary --tenant-id [--user-id] [--profile-id]`
 
-Expected: PASS.
+- [ ] **Step 3: Verify and commit**
 
-- [ ] **Step 6: Commit**
+Run:
 
 ```bash
+pytest tests/test_commercial_profile_commands.py tests/test_rag_reply_commands.py::test_agent_group_alias_is_registered -v
 git add src/boss_agent_cli/commands/rag.py tests/test_commercial_profile_commands.py
-git commit -m "feat: add commercial profile CLI commands"
+git commit -m "feat: add commercial profile CLI"
 ```
 
----
+Expected: pytest PASS.
 
-### Task 6: Wire Profile Context Into CLI Ask And Frontend Bridge
+## Task 7: Wire CLI Ask To Profile Layer
 
 **Files:**
 - Modify: `src/boss_agent_cli/commands/rag.py`
-- Modify: `demo/interview-simulator/vite.config.mjs`
 - Test: `tests/test_rag_reply_commands.py`
 
-- [ ] **Step 1: Add CLI ask test for profile service wiring**
+- [ ] **Step 1: Add ask wiring test**
 
-Add this test to `tests/test_rag_reply_commands.py`:
+Add a test to `tests/test_rag_reply_commands.py` that:
 
-```python
-def test_agent_ask_uses_bound_profile_context(monkeypatch, tmp_path: Path):
-    captured = {}
-    runner = CliRunner()
-    create = runner.invoke(
-        cli,
-        [
-            "--json",
-            "--data-dir",
-            str(tmp_path),
-            "agent",
-            "profile",
-            "create",
-            "--tenant-id",
-            "tenant_001",
-            "--user-id",
-            "user_001",
-            "--name",
-            "AI 应用工程师",
-            "--target-title",
-            "AI Application Engineer",
-            "--knowledge-base-id",
-            "kb_ai",
-        ],
-    )
-    profile_id = json.loads(create.output)["data"]["profile"]["profile_id"]
-    runner.invoke(
-        cli,
-        [
-            "--json",
-            "--data-dir",
-            str(tmp_path),
-            "agent",
-            "conversation",
-            "bind-profile",
-            "--conversation-id",
-            "demo-session-001",
-            "--tenant-id",
-            "tenant_001",
-            "--user-id",
-            "user_001",
-            "--profile-id",
-            profile_id,
-        ],
-    )
+- creates a profile with `knowledge_base_id="kb_ai"`,
+- binds `demo-session-001`,
+- monkeypatches `RagProfileConnector.ask_profile`,
+- runs `boss --json --data-dir <tmp> agent ask --conversation-id demo-session-001 --question "介绍一下你的 RAG 项目。"`,
+- asserts captured `profile_id` and `knowledge_base_id`.
 
-    def fake_answer(**kwargs):
-        captured.update(kwargs)
-        return SimpleNamespace(
-            ok=True,
-            answer="我负责企业级 RAG 项目。",
-            citations=[{"id": "c1"}],
-            reasoning_summary={},
-            raw_response={},
-            error_message=None,
-            audit_status="draft_created",
-            send_allowed=False,
-            approval_required=True,
-        )
-
-    monkeypatch.setattr(
-        rag_commands,
-        "RagHttpAdapter",
-        lambda **kwargs: SimpleNamespace(answer=fake_answer),
-    )
-
-    result = runner.invoke(
-        cli,
-        [
-            "--json",
-            "--data-dir",
-            str(tmp_path),
-            "agent",
-            "ask",
-            "--conversation-id",
-            "demo-session-001",
-            "--question",
-            "介绍一下你的 RAG 项目。",
-        ],
-    )
-
-    assert result.exit_code == 0
-    assert captured["profile_id"] == profile_id
-    assert captured["knowledge_base_id"] == "kb_ai"
-```
-
-- [ ] **Step 2: Run failing CLI ask test**
-
-Run: `pytest tests/test_rag_reply_commands.py::test_agent_ask_uses_bound_profile_context -v`
-
-Expected: FAIL because `_build_service()` does not pass `profile_service`.
-
-- [ ] **Step 3: Pass profile service into `_build_service`**
-
-Modify `_build_service()` in `src/boss_agent_cli/commands/rag.py`:
+Use this assertion block:
 
 ```python
-    store = _resolve_store(ctx)
-    return BossRagReplyService(
-        store=store,
-        rag_adapter=rag_adapter,
-        fallback_adapter=_build_ai_fallback_adapter(ctx),
-        agent_answer_adapter=_build_agent_answer_adapter(ctx),
-        profile_service=ProfileService(store),
-        salary_reply=str(config.get("boss_rag_salary_reply") or ""),
-        interview_windows=str(config.get("boss_rag_interview_windows") or ""),
+assert captured["profile_id"] == profile_id
+assert captured["knowledge_base_id"] == "kb_ai"
+assert payload["data"]["draft"]["evidence"]["profile_context"]["profile_id"] == profile_id
+```
+
+- [ ] **Step 2: Inject profile dependencies**
+
+Modify `_build_service(ctx)`:
+
+```python
+store = _resolve_store(ctx)
+config = ctx.obj.get("config", {}) if ctx and ctx.obj else {}
+rag_adapter = RagHttpAdapter(
+    base_url=config.get("boss_rag_rag_base_url"),
+    timeout_seconds=int(config.get("boss_rag_rag_timeout_seconds", 20)),
+    api_key=config.get("boss_rag_rag_api_key"),
+    auth_mode=str(config.get("boss_rag_rag_auth_mode", "none")),
+)
+profile_service = ProfileService(store)
+return BossRagReplyService(
+    store=store,
+    rag_adapter=rag_adapter,
+    fallback_adapter=_build_ai_fallback_adapter(ctx),
+    agent_answer_adapter=_build_agent_answer_adapter(ctx),
+    profile_service=profile_service,
+    profile_rag_connector=RagProfileConnector(rag_adapter=rag_adapter),
+    salary_reply=str(config.get("boss_rag_salary_reply") or ""),
+    interview_windows=str(config.get("boss_rag_interview_windows") or ""),
+)
+```
+
+- [ ] **Step 3: Verify and commit**
+
+Run:
+
+```bash
+pytest tests/test_rag_reply_commands.py tests/test_rag_reply_profile_binding.py -v
+git add src/boss_agent_cli/commands/rag.py tests/test_rag_reply_commands.py
+git commit -m "feat: wire agent ask to profile RAG"
+```
+
+Expected: pytest PASS.
+
+## Task 8: Watcher And Outreach Gates
+
+**Files:**
+- Modify: `src/boss_agent_cli/rag_reply/watcher_config.py`
+- Modify: `src/boss_agent_cli/rag_reply/auto_actions.py`
+- Modify: `src/boss_agent_cli/rag_reply/agent_tools.py`
+- Modify: `demo/interview-simulator/vite.config.mjs`
+- Test: `tests/test_passive_watcher.py`
+- Test: `tests/test_rag_reply_agent_tools.py`
+
+- [ ] **Step 1: Add effective config tests**
+
+Add tests proving:
+
+- `ProfileConfig.reply_auto_send_enabled=False` blocks live watcher send but still allows draft creation.
+- `ProfileConfig.outreach_auto_send_enabled=False` blocks `/api/boss/auto-greet` commercial path.
+- `ProfileConfig.proactive_resume_enabled=False` prevents optional proactive resume attachment.
+- missing contact, interview windows, salary policy, or resume path stays blocked/manual for matching intents.
+
+Core expectation:
+
+```python
+assert result.ok is False
+assert result.error_code in {"SEND_DISABLED", "PROFILE_CONFIG_DISABLED", "INVALID_PARAM"}
+```
+
+- [ ] **Step 2: Add effective config resolver**
+
+In `watcher_config.py`, add a pure function:
+
+```python
+def with_profile_config(base: WatcherConfig, profile_config: ProfileConfigRecord | None) -> WatcherConfig:
+    if profile_config is None:
+        return base
+    return WatcherConfig(
+        enabled=base.enabled,
+        dry_run=base.dry_run,
+        contact_phone=profile_config.contact_phone,
+        contact_wechat=profile_config.contact_wechat,
+        interview_windows=profile_config.interview_windows,
+        resume_attachment_path=profile_config.resume_attachment_path,
+        poll_seconds=base.poll_seconds,
+        max_failures_per_conversation=base.max_failures_per_conversation,
+        read_no_reply_followup_limit_per_cycle=base.read_no_reply_followup_limit_per_cycle,
+        live_sync=base.live_sync,
+        require_send_enabled=base.require_send_enabled,
+        send_enabled=base.send_enabled and profile_config.reply_auto_send_enabled,
+        proactive_resume_enabled=profile_config.proactive_resume_enabled,
     )
 ```
 
-- [ ] **Step 4: Add bridge endpoints for profile list and binding**
+- [ ] **Step 3: Gate outbound sends**
 
-In `demo/interview-simulator/vite.config.mjs`, add route flags near other `isAgent...` flags:
+In `BossAgentToolbox.send_boss_reply_guarded()`, return a blocked result when live sending is requested and the effective profile config disables reply auto-send.
 
-```js
-    const isAgentProfiles = req.url.startsWith("/api/agent/profiles");
-    const isAgentProfileBinding = req.url.startsWith("/api/agent/profile-binding");
+For `/api/boss/auto-greet` in `vite.config.mjs`, require `profile_id` from the frontend once profile console exists. Before invoking the existing `batch-greet` command, call a new bridge helper that checks `agent conversation profile` or `agent profile list` and blocks when `outreach_auto_send_enabled` is false.
+
+- [ ] **Step 4: Verify and commit**
+
+Run:
+
+```bash
+pytest tests/test_passive_watcher.py tests/test_rag_reply_agent_tools.py -v
+npm --prefix demo/interview-simulator run build
+git add src/boss_agent_cli/rag_reply/watcher_config.py src/boss_agent_cli/rag_reply/auto_actions.py src/boss_agent_cli/rag_reply/agent_tools.py demo/interview-simulator/vite.config.mjs tests/test_passive_watcher.py tests/test_rag_reply_agent_tools.py
+git commit -m "feat: apply profile gates to watcher and outreach"
 ```
 
-Add a GET handler before `isAgentAsk`:
+Expected: pytest PASS and Vite build success.
+
+## Task 9: Frontend Bridge Contract
+
+**Files:**
+- Create: `demo/interview-simulator/server/profileBridge.mjs`
+- Modify: `demo/interview-simulator/vite.config.mjs`
+- Test: `tests/test_interview_simulator_contract.py`
+
+- [ ] **Step 1: Add text contract tests**
+
+Extend `tests/test_interview_simulator_contract.py`:
+
+```python
+def test_interview_simulator_exposes_profile_bridge_without_removing_existing_flows():
+    repo_root = Path(__file__).resolve().parents[1]
+    vite = (repo_root / "demo" / "interview-simulator" / "vite.config.mjs").read_text(encoding="utf-8")
+    profile_bridge = (repo_root / "demo" / "interview-simulator" / "server" / "profileBridge.mjs").read_text(encoding="utf-8")
+    app = (repo_root / "demo" / "interview-simulator" / "src" / "App.jsx").read_text(encoding="utf-8")
+
+    for token in ("/api/agent/profiles", "/api/agent/profile-binding", "/api/agent/usage"):
+        assert token in profile_bridge
+    for existing in ("/api/agent/ask", "/api/agent/send", "/api/boss/auto-greet", "Boss 自动开聊", "Agent 全自动"):
+        assert existing in vite or existing in app
+```
+
+- [ ] **Step 2: Extract bridge module**
+
+Create `server/profileBridge.mjs` exporting:
 
 ```js
-    if (req.method === "GET" && isAgentProfiles) {
-      const requestUrl = new URL(req.url, "http://127.0.0.1");
-      const tenantId = String(requestUrl.searchParams.get("tenant_id") || "tenant_local").trim();
-      const userId = String(requestUrl.searchParams.get("user_id") || "user_local").trim();
-      res.setHeader("Content-Type", "application/json; charset=utf-8");
-      try {
+function sendJson(res, statusCode, payload) {
+  res.statusCode = statusCode;
+  res.setHeader("Content-Type", "application/json; charset=utf-8");
+  res.end(JSON.stringify(payload));
+}
+
+function responseData(payload) {
+  return payload && typeof payload === "object" && "data" in payload ? payload.data : payload;
+}
+
+function appendTextOption(args, flag, value) {
+  const normalized = String(value || "").trim();
+  if (normalized) args.push(flag, normalized);
+}
+
+function appendBooleanOption(args, enabledFlag, disabledFlag, value) {
+  if (value === true) args.push(enabledFlag);
+  if (value === false) args.push(disabledFlag);
+}
+
+function profileIdFromPath(pathname, suffix) {
+  return decodeURIComponent(pathname.slice("/api/agent/profiles/".length, -suffix.length));
+}
+
+export function createProfileBridgeHandlers({ bridgeConfig, runBossJsonCommand, readBody }) {
+  return async function handleProfileBridge(req, res) {
+    const url = new URL(req.url, "http://127.0.0.1");
+    try {
+      if (req.method === "GET" && url.pathname === "/api/agent/profiles") {
         const payload = await runBossJsonCommand(bridgeConfig, [
           "agent",
           "profile",
           "list",
           "--tenant-id",
-          tenantId,
+          String(url.searchParams.get("tenant_id") || "tenant_local"),
           "--user-id",
-          userId,
+          String(url.searchParams.get("user_id") || "user_local"),
         ]);
-        res.end(JSON.stringify({ ok: true, data: payload.data || {} }));
-      } catch (error) {
-        res.statusCode = 500;
-        res.end(JSON.stringify({ ok: false, errorMessage: error instanceof Error ? error.message : "读取 profile 失败。" }));
+        sendJson(res, 200, { ok: true, data: responseData(payload) });
+        return true;
       }
-      return true;
-    }
-```
-
-Add a POST binding handler:
-
-```js
-    if (req.method === "POST" && isAgentProfileBinding) {
-      res.setHeader("Content-Type", "application/json; charset=utf-8");
-      try {
-        const rawBody = await readBody(req);
-        const body = rawBody ? JSON.parse(rawBody) : {};
+      if (req.method === "POST" && url.pathname === "/api/agent/profiles") {
+        const body = JSON.parse((await readBody(req)) || "{}");
+        const args = [
+          "agent",
+          "profile",
+          "create",
+          "--tenant-id",
+          String(body.tenant_id || "tenant_local"),
+          "--user-id",
+          String(body.user_id || "user_local"),
+          "--name",
+          String(body.name || body.display_name || ""),
+          "--target-title",
+          String(body.target_title || ""),
+        ];
+        appendTextOption(args, "--knowledge-base-id", body.knowledge_base_id);
+        const payload = await runBossJsonCommand(bridgeConfig, args);
+        sendJson(res, 200, { ok: true, data: responseData(payload) });
+        return true;
+      }
+      if (req.method === "PATCH" && url.pathname.startsWith("/api/agent/profiles/") && url.pathname.endsWith("/config")) {
+        const profileId = profileIdFromPath(url.pathname, "/config");
+        const body = JSON.parse((await readBody(req)) || "{}");
+        const args = [
+          "agent",
+          "profile",
+          "config",
+          "set",
+          "--tenant-id",
+          String(body.tenant_id || "tenant_local"),
+          "--profile-id",
+          profileId,
+        ];
+        appendTextOption(args, "--contact-phone", body.contact_phone);
+        appendTextOption(args, "--contact-wechat", body.contact_wechat);
+        appendTextOption(args, "--interview-windows", body.interview_windows);
+        appendTextOption(args, "--salary-reply-policy", body.salary_reply_policy);
+        appendTextOption(args, "--resume-attachment-path", body.resume_attachment_path);
+        appendBooleanOption(args, "--reply-auto-send-enabled", "--no-reply-auto-send-enabled", body.reply_auto_send_enabled);
+        appendBooleanOption(args, "--outreach-auto-send-enabled", "--no-outreach-auto-send-enabled", body.outreach_auto_send_enabled);
+        appendBooleanOption(args, "--proactive-resume-enabled", "--no-proactive-resume-enabled", body.proactive_resume_enabled);
+        const payload = await runBossJsonCommand(bridgeConfig, args);
+        sendJson(res, 200, { ok: true, data: responseData(payload) });
+        return true;
+      }
+      if (req.method === "POST" && url.pathname.startsWith("/api/agent/profiles/") && url.pathname.endsWith("/uploads")) {
+        const profileId = profileIdFromPath(url.pathname, "/uploads");
+        const body = JSON.parse((await readBody(req)) || "{}");
+        const payload = await runBossJsonCommand(bridgeConfig, [
+          "agent",
+          "profile",
+          "upload",
+          "--tenant-id",
+          String(body.tenant_id || "tenant_local"),
+          "--user-id",
+          String(body.user_id || "user_local"),
+          "--profile-id",
+          profileId,
+          "--type",
+          String(body.source_type || "other"),
+          "--file",
+          String(body.file_path || ""),
+        ]);
+        sendJson(res, 200, { ok: true, data: responseData(payload) });
+        return true;
+      }
+      if (req.method === "GET" && url.pathname.startsWith("/api/agent/profiles/") && url.pathname.endsWith("/uploads")) {
+        const profileId = profileIdFromPath(url.pathname, "/uploads");
+        const payload = await runBossJsonCommand(bridgeConfig, ["agent", "profile", "upload-status", "--profile-id", profileId]);
+        sendJson(res, 200, { ok: true, data: responseData(payload) });
+        return true;
+      }
+      if (req.method === "POST" && url.pathname === "/api/agent/profile-binding") {
+        const body = JSON.parse((await readBody(req)) || "{}");
         const args = [
           "agent",
           "conversation",
@@ -1874,344 +1331,216 @@ Add a POST binding handler:
           "--profile-id",
           String(body.profile_id || ""),
         ];
+        appendTextOption(args, "--binding-source", body.binding_source);
         const payload = await runBossJsonCommand(bridgeConfig, args);
-        res.end(JSON.stringify({ ok: true, data: payload.data || {} }));
-      } catch (error) {
-        res.statusCode = 500;
-        res.end(JSON.stringify({ ok: false, errorMessage: error instanceof Error ? error.message : "绑定 profile 失败。" }));
+        sendJson(res, 200, { ok: true, data: responseData(payload) });
+        return true;
       }
-      return true;
-    }
-```
-
-- [ ] **Step 5: Run CLI and bridge build checks**
-
-Run:
-
-```bash
-pytest tests/test_rag_reply_commands.py::test_agent_ask_uses_bound_profile_context tests/test_commercial_profile_commands.py -v
-npm --prefix demo/interview-simulator run build
-```
-
-Expected: PASS for pytest and successful Vite build.
-
-- [ ] **Step 6: Commit**
-
-```bash
-git add src/boss_agent_cli/commands/rag.py demo/interview-simulator/vite.config.mjs tests/test_rag_reply_commands.py
-git commit -m "feat: wire profile context into agent ask"
-```
-
----
-
-### Task 7: Preserve Outreach And Add Commercial Gates
-
-**Files:**
-- Modify: `demo/interview-simulator/vite.config.mjs`
-- Modify: `src/boss_agent_cli/rag_reply/agent_tools.py`
-- Modify: `src/boss_agent_cli/rag_reply/watcher_config.py`
-- Test: `tests/test_rag_reply_agent_tools.py`
-- Test: `tests/test_passive_watcher.py`
-
-- [ ] **Step 1: Add tests proving profile gates do not remove existing outreach**
-
-Add this test to `tests/test_rag_reply_agent_tools.py`:
-
-```python
-def test_reply_auto_send_requires_profile_gate_when_config_is_live(tmp_path):
-    config = WatcherConfig(
-        enabled=True,
-        dry_run=False,
-        contact_phone="13800138000",
-        contact_wechat="reggie-ai",
-        interview_windows="工作日 20:00 后",
-        resume_attachment_path=str(tmp_path / "resume.pdf"),
-        send_enabled=False,
-    )
-    result = BossAgentToolbox(
-        BossAgentToolContext(
-            store=RagReplyStore(tmp_path / "boss-rag.sqlite3"),
-            service=SimpleNamespace(create_draft_for_message=lambda message_id: None),
-            config=config,
-            delivery=SimpleNamespace(send=lambda **kwargs: {}),
-        )
-    ).send_boss_reply_guarded(
-        action={"message": "你好", "status_after_send": "sent"},
-        security_id="sec_001",
-        target={},
-    )
-
-    assert result.ok is False
-    assert result.error_code == "SEND_DISABLED"
-```
-
-Add this bridge preservation check as a lightweight text test in `tests/test_interview_simulator_bridge.py` if that file exists; otherwise create it:
-
-```python
-from pathlib import Path
-
-
-def test_vite_bridge_preserves_boss_auto_greet_and_search_routes():
-    content = Path("demo/interview-simulator/vite.config.mjs").read_text(encoding="utf-8")
-
-    assert 'req.url === "/api/boss/search"' in content
-    assert 'req.url === "/api/boss/auto-greet"' in content
-    assert '"batch-greet"' in content
-    assert 'buildBossDeliveryBlockPayload(browserChannel)' in content
-```
-
-- [ ] **Step 2: Run preservation tests**
-
-Run: `pytest tests/test_rag_reply_agent_tools.py::test_reply_auto_send_requires_profile_gate_when_config_is_live tests/test_interview_simulator_bridge.py -v`
-
-Expected: PASS for the existing send-disabled behavior and bridge route preservation. If `tests/test_interview_simulator_bridge.py` is new, the second test should pass immediately because existing routes are present.
-
-- [ ] **Step 3: Split profile send flags in watcher config**
-
-Modify `WatcherConfig` in `src/boss_agent_cli/rag_reply/watcher_config.py` to add:
-
-```python
-    reply_auto_send_enabled: bool = False
-    outreach_auto_send_enabled: bool = False
-```
-
-Update `from_mapping()`:
-
-```python
-            reply_auto_send_enabled=bool(
-                values.get("boss_rag_reply_auto_send_enabled", values.get("boss_rag_send_enabled", False))
-            ),
-            outreach_auto_send_enabled=bool(
-                values.get("boss_rag_outreach_auto_send_enabled", False)
-            ),
-```
-
-- [ ] **Step 4: Gate outreach bridge without deleting route**
-
-In `demo/interview-simulator/vite.config.mjs`, keep `/api/boss/auto-greet` unchanged except for passing profile fields through the request body and response metadata. Add this parsing inside the route:
-
-```js
-        const tenantId = String(body.tenant_id || "tenant_local").trim();
-        const userId = String(body.user_id || "user_local").trim();
-        const profileId = String(body.profile_id || "").trim();
-```
-
-Add these values to the final JSON response:
-
-```js
-          commercialContext: {
-            tenant_id: tenantId,
-            user_id: userId,
-            profile_id: profileId,
-            route: "outreach",
-          },
-```
-
-The route must still call `"batch-greet"` and must still use `buildBossDeliveryBlockPayload(browserChannel)` before delivery.
-
-- [ ] **Step 5: Run focused tests and build**
-
-Run:
-
-```bash
-pytest tests/test_rag_reply_agent_tools.py tests/test_passive_watcher.py tests/test_interview_simulator_bridge.py -v
-npm --prefix demo/interview-simulator run build
-```
-
-Expected: PASS and Vite build succeeds.
-
-- [ ] **Step 6: Commit**
-
-```bash
-git add src/boss_agent_cli/rag_reply/watcher_config.py src/boss_agent_cli/rag_reply/agent_tools.py demo/interview-simulator/vite.config.mjs tests/test_rag_reply_agent_tools.py tests/test_passive_watcher.py tests/test_interview_simulator_bridge.py
-git commit -m "feat: preserve outreach behind commercial gates"
-```
-
----
-
-### Task 8: Frontend Profile Console With Existing Demo Preserved
-
-**Files:**
-- Modify: `demo/interview-simulator/src/App.jsx`
-- Modify: `demo/interview-simulator/src/styles.css`
-- Test: `demo/interview-simulator` Vite build
-
-- [ ] **Step 1: Add profile state and loader**
-
-In `demo/interview-simulator/src/App.jsx`, add state near existing `watcherState`:
-
-```jsx
-  const [activeAgentRoute, setActiveAgentRoute] = useState("reply");
-  const [profiles, setProfiles] = useState([]);
-  const [selectedProfileId, setSelectedProfileId] = useState("");
-  const [profileError, setProfileError] = useState("");
-```
-
-Add loader:
-
-```jsx
-  async function loadProfiles() {
-    setProfileError("");
-    try {
-      const response = await fetch("/api/agent/profiles?tenant_id=tenant_local&user_id=user_local");
-      const payload = await response.json();
-      if (!response.ok || !payload.ok) {
-        throw new Error(payload.errorMessage || "读取 profile 失败。");
+      if (req.method === "GET" && url.pathname === "/api/agent/profile-binding") {
+        const payload = await runBossJsonCommand(bridgeConfig, [
+          "agent",
+          "conversation",
+          "profile",
+          "--conversation-id",
+          String(url.searchParams.get("conversation_id") || ""),
+        ]);
+        sendJson(res, 200, { ok: true, data: responseData(payload) });
+        return true;
       }
-      const nextProfiles = Array.isArray(payload.data?.profiles) ? payload.data.profiles : [];
-      setProfiles(nextProfiles);
-      if (!selectedProfileId && nextProfiles.length) {
-        setSelectedProfileId(String(nextProfiles[0].profile_id || ""));
+      if (req.method === "GET" && url.pathname === "/api/agent/usage") {
+        const args = ["agent", "usage", "summary", "--tenant-id", String(url.searchParams.get("tenant_id") || "tenant_local")];
+        appendTextOption(args, "--user-id", url.searchParams.get("user_id"));
+        appendTextOption(args, "--profile-id", url.searchParams.get("profile_id"));
+        const payload = await runBossJsonCommand(bridgeConfig, args);
+        sendJson(res, 200, { ok: true, data: responseData(payload) });
+        return true;
       }
     } catch (error) {
-      setProfileError(error instanceof Error ? error.message : "读取 profile 失败。");
+      sendJson(res, 500, { ok: false, errorMessage: error instanceof Error ? error.message : "Profile bridge request failed." });
+      return true;
     }
-  }
-```
-
-Call `loadProfiles()` in the existing startup `useEffect()` next to `loadChatTargets()`.
-
-- [ ] **Step 2: Pass profile context to ask and auto-greet**
-
-In `handleAsk()`, include profile fields in the `/api/agent/ask` body:
-
-```jsx
-          tenant_id: "tenant_local",
-          user_id: "user_local",
-          profile_id: selectedProfileId,
-```
-
-In `handleBossAutoGreet()`, include the same fields in `/api/boss/auto-greet` body:
-
-```jsx
-          tenant_id: "tenant_local",
-          user_id: "user_local",
-          profile_id: selectedProfileId,
-```
-
-- [ ] **Step 3: Add route tabs without removing current panels**
-
-Add this JSX above the watcher console section:
-
-```jsx
-        <nav className="agent-route-tabs" aria-label="Agent route">
-          <button
-            type="button"
-            className={activeAgentRoute === "reply" ? "is-active" : ""}
-            onClick={() => setActiveAgentRoute("reply")}
-          >
-            对话回复
-          </button>
-          <button
-            type="button"
-            className={activeAgentRoute === "outreach" ? "is-active" : ""}
-            onClick={() => setActiveAgentRoute("outreach")}
-          >
-            Boss 自动开聊
-          </button>
-        </nav>
-        <section className="profile-console" aria-label="Profile console">
-          <div>
-            <strong>Profile</strong>
-            <span>{profiles.length ? `${profiles.length} 个 profile` : "暂无 profile"}</span>
-          </div>
-          <select
-            value={selectedProfileId}
-            onChange={(event) => setSelectedProfileId(event.target.value)}
-          >
-            <option value="">未绑定 profile</option>
-            {profiles.map((profile) => (
-              <option key={profile.profile_id} value={profile.profile_id}>
-                {profile.display_name || profile.profile_id}
-              </option>
-            ))}
-          </select>
-          {profileError ? <p>{profileError}</p> : null}
-        </section>
-```
-
-Keep the existing test conversation, starter prompts, watcher console, Boss search panel, and send controls in the DOM. Use `activeAgentRoute` only to visually group sections, not to delete or unmount the existing flows.
-
-- [ ] **Step 4: Add compact styles**
-
-Append to `demo/interview-simulator/src/styles.css`:
-
-```css
-.agent-route-tabs {
-  display: flex;
-  gap: 8px;
-  margin: 16px 0;
-}
-
-.agent-route-tabs button {
-  border: 1px solid rgba(15, 23, 42, 0.14);
-  background: #fff;
-  color: #0f172a;
-  border-radius: 8px;
-  padding: 8px 12px;
-  font: inherit;
-  cursor: pointer;
-}
-
-.agent-route-tabs button.is-active {
-  border-color: #2563eb;
-  background: #eff6ff;
-  color: #1d4ed8;
-}
-
-.profile-console {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(220px, 320px);
-  gap: 12px;
-  align-items: center;
-  margin-bottom: 16px;
-}
-
-.profile-console strong,
-.profile-console span {
-  display: block;
-}
-
-.profile-console select {
-  min-height: 40px;
-  border: 1px solid rgba(15, 23, 42, 0.14);
-  border-radius: 8px;
-  padding: 0 10px;
-  background: #fff;
-  color: #0f172a;
-}
-
-.profile-console p {
-  grid-column: 1 / -1;
-  margin: 0;
-  color: #b91c1c;
-  font-size: 13px;
+    return false;
+  };
 }
 ```
 
-- [ ] **Step 5: Build frontend**
+Each handler calls the corresponding `boss agent profile`, `boss agent conversation`, or `boss agent usage` command and returns `{ ok: true, data }` or `{ ok: false, errorMessage }`.
 
-Run: `npm --prefix demo/interview-simulator run build`
+- [ ] **Step 3: Register module in Vite**
 
-Expected: PASS.
+In `vite.config.mjs`, import `createProfileBridgeHandlers`, construct it beside existing bridge helpers, and call it before existing `isAgentAsk`/`isAgentSend` blocks:
 
-- [ ] **Step 6: Commit**
+```js
+if (await handleProfileBridge(req, res)) return;
+```
+
+- [ ] **Step 4: Verify and commit**
+
+Run:
 
 ```bash
-git add demo/interview-simulator/src/App.jsx demo/interview-simulator/src/styles.css
-git commit -m "feat: add profile console while preserving demo flows"
+pytest tests/test_interview_simulator_contract.py -v
+npm --prefix demo/interview-simulator run build
+git add demo/interview-simulator/server/profileBridge.mjs demo/interview-simulator/vite.config.mjs tests/test_interview_simulator_contract.py
+git commit -m "feat: expose profile bridge endpoints"
 ```
 
----
+Expected: pytest PASS and Vite build success.
 
-### Task 9: Remove Personal Hardcoding From Agent Answer
+## Task 10: Product Design Frontend Refactor
+
+**Files:**
+- Create: `demo/interview-simulator/src/api/agentClient.js`
+- Create: `demo/interview-simulator/src/views/ReplyWorkspace.jsx`
+- Create: `demo/interview-simulator/src/views/OutreachWorkspace.jsx`
+- Create: `demo/interview-simulator/src/views/ProfileHub.jsx`
+- Create: `demo/interview-simulator/src/components/profile/ProfileSelector.jsx`
+- Create: `demo/interview-simulator/src/components/profile/ProfileConfigPanel.jsx`
+- Modify: `demo/interview-simulator/src/App.jsx`
+- Modify: `demo/interview-simulator/src/styles.css`
+- Test: `tests/test_interview_simulator_contract.py`
+
+- [ ] **Step 1: Run Product Design brief gate**
+
+Before editing UI, run Product Design workflow:
+
+```text
+Use `product-design:get-context` playback for:
+- product: BOSS Agent commercial console
+- visual source: existing demo app plus selected Product Design mock/reference
+- interactivity: full local bridge controls
+```
+
+If no visual target is selected, run `product-design:ideate`, present exactly 3 options, and wait for user selection before code changes.
+
+- [ ] **Step 2: Split data client**
+
+Create `src/api/agentClient.js` with functions:
+
+```js
+function query(params) {
+  const search = new URLSearchParams();
+  Object.entries(params || {}).forEach(([key, value]) => {
+    if (value !== undefined && value !== null && String(value).trim()) {
+      search.set(key, String(value));
+    }
+  });
+  const value = search.toString();
+  return value ? `?${value}` : "";
+}
+
+async function requestJson(path, options = {}) {
+  const init = { method: options.method || "GET" };
+  if (options.body !== undefined) {
+    init.headers = { "Content-Type": "application/json" };
+    init.body = JSON.stringify(options.body);
+  }
+  const response = await fetch(path, init);
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok || payload.ok === false) {
+    throw new Error(payload.errorMessage || `Request failed: ${path}`);
+  }
+  return payload.data === undefined ? payload : payload.data;
+}
+
+export async function fetchProfiles({ tenantId, userId }) {
+  return requestJson(`/api/agent/profiles${query({ tenant_id: tenantId, user_id: userId })}`);
+}
+
+export async function createProfile(payload) {
+  return requestJson("/api/agent/profiles", { method: "POST", body: payload });
+}
+
+export async function updateProfileConfig(profileId, payload) {
+  return requestJson(`/api/agent/profiles/${encodeURIComponent(profileId)}/config`, { method: "PATCH", body: payload });
+}
+
+export async function fetchProfileUploads(profileId) {
+  return requestJson(`/api/agent/profiles/${encodeURIComponent(profileId)}/uploads`);
+}
+
+export async function bindConversationProfile(payload) {
+  return requestJson("/api/agent/profile-binding", { method: "POST", body: payload });
+}
+
+export async function fetchConversationProfile(conversationId) {
+  return requestJson(`/api/agent/profile-binding${query({ conversation_id: conversationId })}`);
+}
+
+export async function fetchUsage(params) {
+  return requestJson(`/api/agent/usage${query(params)}`);
+}
+
+export async function askAgent(payload) {
+  return requestJson("/api/agent/ask", { method: "POST", body: payload });
+}
+
+export async function sendAgentDraft(payload) {
+  return requestJson("/api/agent/send", { method: "POST", body: payload });
+}
+
+export async function fetchWatcherStatus() {
+  return requestJson("/api/agent/watcher/status");
+}
+
+export async function runWatcherOnce(payload) {
+  return requestJson("/api/agent/watcher/run", { method: "POST", body: payload || {} });
+}
+
+export async function searchBoss(payload) {
+  return requestJson("/api/boss/search", { method: "POST", body: payload });
+}
+
+export async function autoGreetBoss(payload) {
+  return requestJson("/api/boss/auto-greet", { method: "POST", body: payload });
+}
+```
+
+- [ ] **Step 3: Split views without removing strings**
+
+Move existing reply/test conversation UI into `ReplyWorkspace.jsx`, existing Boss 自动开聊 UI into `OutreachWorkspace.jsx`, and new profile controls into `ProfileHub.jsx`.
+
+`App.jsx` becomes the shell that owns shared state, selected route/tab, selected profile, selected conversation target, and bridge health. It must still render these user-visible strings:
+
+```text
+Boss 自动开聊
+Agent 全自动
+发送到 Boss
+发送附件简历 PDF
+watcher
+```
+
+- [ ] **Step 4: Chrome MCP QA**
+
+Because this is a frontend behavior/design change, run Chrome MCP or the repo-approved browser QA flow against the local Vite server. Check desktop and mobile widths for:
+
+- profile hub visible and usable,
+- `/agent/reply` retains demo/test conversation,
+- `/agent/outreach` retains Boss 自动开聊 and Agent 全自动,
+- no overlapping text/buttons,
+- profile selector does not block existing send/resume controls.
+
+- [ ] **Step 5: Verify and commit**
+
+Run:
+
+```bash
+npm --prefix demo/interview-simulator run build
+pytest tests/test_interview_simulator_contract.py -v
+git add demo/interview-simulator/src/api/agentClient.js demo/interview-simulator/src/views/ReplyWorkspace.jsx demo/interview-simulator/src/views/OutreachWorkspace.jsx demo/interview-simulator/src/views/ProfileHub.jsx demo/interview-simulator/src/components/profile/ProfileSelector.jsx demo/interview-simulator/src/components/profile/ProfileConfigPanel.jsx demo/interview-simulator/src/App.jsx demo/interview-simulator/src/styles.css tests/test_interview_simulator_contract.py
+git commit -m "feat: refactor console for profile workflows"
+```
+
+Expected: Vite build PASS, pytest PASS, browser QA screenshots acceptable.
+
+## Task 11: Remove Personal Candidate Hardcoding
 
 **Files:**
 - Modify: `src/boss_agent_cli/rag_reply/adapters/agent_answer.py`
 - Test: `tests/test_agent_answer_no_personal_templates.py`
 - Modify: `tests/test_rag_reply_agent_answer.py`
 
-- [ ] **Step 1: Write failing no-hardcoding tests**
+- [ ] **Step 1: Write hardcoding tests**
 
 Create `tests/test_agent_answer_no_personal_templates.py`:
 
@@ -2223,13 +1552,11 @@ from boss_agent_cli.rag_reply.adapters.agent_answer import AgentAnswerAdapter
 
 def test_agent_answer_source_has_no_personal_candidate_facts():
     source = Path("src/boss_agent_cli/rag_reply/adapters/agent_answer.py").read_text(encoding="utf-8")
-
-    forbidden = ["孙瑞杰", "宁波伟立", "89 个 API", "26 个核心 schema", "企业级 RAG 知识库与智能问答平台"]
-    for token in forbidden:
+    for token in ("宁波伟立", "89 个 API", "26 个核心 schema", "企业级 RAG 知识库与智能问答平台"):
         assert token not in source
 
 
-def test_agent_answer_without_ai_and_without_grounding_fails_closed_for_personal_question():
+def test_personal_answer_without_ai_or_profile_grounding_fails_closed():
     adapter = AgentAnswerAdapter(ai_service=None)
 
     result = adapter.answer(
@@ -2242,112 +1569,73 @@ def test_agent_answer_without_ai_and_without_grounding_fails_closed_for_personal
 
     assert result.ok is False
     assert result.audit_status == "agent_answer_failed"
-    assert "profile" in str(result.error_message).lower()
-```
-
-- [ ] **Step 2: Run failing tests**
-
-Run: `pytest tests/test_agent_answer_no_personal_templates.py -v`
-
-Expected: FAIL because `agent_answer.py` still contains personal templates.
-
-- [ ] **Step 3: Remove local personal interview templates**
-
-In `src/boss_agent_cli/rag_reply/adapters/agent_answer.py`, remove `_template_answer_for_interview_question()` and the call that returns `local_interview_template`.
-
-Replace that branch inside `_rule_based_rewrite()` with:
-
-```python
-        if not (rag_answer or "").strip():
-            return AgentAnswerResult(
-                ok=False,
-                answer="",
-                reasoning_summary={"strategy": "profile_grounding_required"},
-                raw_response={"mode": "profile_required"},
-                error_message="Personal candidate answers require bound profile RAG grounding.",
-                audit_status="agent_answer_failed",
-            )
-```
-
-Keep `_recruiter_invitation_answer()` because it is generic and does not contain personal candidate facts.
-
-- [ ] **Step 4: Update old tests that expected personal templates**
-
-In `tests/test_rag_reply_agent_answer.py`, replace tests that assert personal hardcoded content with expectations for `agent_answer_failed` or grounded-rule rewrite. Keep tests that verify:
-
-- grounded answer is rewritten into first person.
-- direct general answer uses AI service.
-- recruiter invitation generic fallback still works.
-- AI parse errors with non-empty grounded answer still use rule-based cleanup.
-
-Use this replacement for the old self-introduction hardcoded test:
-
-```python
-def test_agent_answer_requires_profile_grounding_for_personal_question_without_ai():
-    adapter = AgentAnswerAdapter(ai_service=None)
-
-    result = adapter.answer(
-        message_text="请你做一个简短的自我介绍。",
-        intent="resume_question",
-        job_summary=None,
-        rag_answer="",
-        citations=[],
-    )
-
-    assert result.ok is False
-    assert result.audit_status == "agent_answer_failed"
     assert result.raw_response == {"mode": "profile_required"}
 ```
 
-- [ ] **Step 5: Run agent answer tests**
+- [ ] **Step 2: Remove local personal templates**
 
-Run: `pytest tests/test_agent_answer_no_personal_templates.py tests/test_rag_reply_agent_answer.py -v`
+In `agent_answer.py`, delete `_template_answer_for_interview_question()` and its call. Keep `_recruiter_invitation_answer()` because it is generic. When `rag_answer` is empty and AI is unavailable for a personal/fact answer, return:
 
-Expected: PASS.
+```python
+AgentAnswerResult(
+    ok=False,
+    answer="",
+    reasoning_summary={"strategy": "profile_grounding_required"},
+    raw_response={"mode": "profile_required"},
+    error_message="Personal candidate answers require bound profile RAG grounding.",
+    audit_status="agent_answer_failed",
+)
+```
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 3: Update old tests**
+
+In `tests/test_rag_reply_agent_answer.py`, replace tests expecting hardcoded self-introduction/project details with profile-required failure expectations. Keep tests for:
+
+- grounded answer first-person rewrite,
+- direct general AI answer,
+- generic recruiter invitation fallback,
+- non-empty grounded answer rule-based cleanup.
+
+- [ ] **Step 4: Verify and commit**
+
+Run:
 
 ```bash
+pytest tests/test_agent_answer_no_personal_templates.py tests/test_rag_reply_agent_answer.py tests/test_rag_reply_profile_binding.py -v
 git add src/boss_agent_cli/rag_reply/adapters/agent_answer.py tests/test_agent_answer_no_personal_templates.py tests/test_rag_reply_agent_answer.py
 git commit -m "refactor: require profile grounding for personal answers"
 ```
 
----
+Expected: pytest PASS.
 
-### Task 10: Final Regression And Documentation
+## Task 12: Final Regression And Documentation
 
 **Files:**
 - Modify: `README.md`
 - Modify: `docs/boss-agent-current-stage.md`
-- Test: focused pytest suites
+- Test: focused backend/frontend checks
 
-- [ ] **Step 1: Add documentation notes**
+- [ ] **Step 1: Add durable docs**
 
-In `README.md`, add a short section under `Boss Agent V1`:
+In `README.md`, add a short `Commercial Profile Layer` section explaining:
 
-```markdown
-### Commercial Profile Layer
+- tenant/user/profile model,
+- profile uploads and RAG binding,
+- conversation binding,
+- profile config as the source for contact/interview/salary/resume/send flags,
+- payment provider fields are stored but callbacks are out of scope,
+- existing reply/outreach/watcher capabilities remain.
 
-`boss agent profile ...` adds a commercial-ready self-hosted profile layer. A tenant can own users, each user can own multiple profiles, and each Boss conversation can bind to one profile. Candidate facts should come from profile RAG uploads; high-risk fields such as contact details, interview windows, salary policy, resume attachment path, and auto-send flags belong to profile config.
+In `docs/boss-agent-current-stage.md`, add current implementation status and live Boss verification boundary.
 
-Existing capabilities remain available: demo conversations, watcher replies, Boss auto-greet, search preview, Agent 全自动, and attachment resume delivery. Commercial subscription fields are stored for admin/license workflows, but payment provider callbacks are not connected in this version.
-```
-
-In `docs/boss-agent-current-stage.md`, add:
-
-```markdown
-## Commercial Profile RAG Layer
-
-The current commercial-ready layer preserves the existing reply and outreach workflows while adding tenant/user/profile identity, profile upload state, conversation binding, usage counters, and quota gates. Live Boss delivery still follows the existing CDP fail-closed rule and attachment resume UI constraints.
-```
-
-- [ ] **Step 2: Run focused backend tests**
+- [ ] **Step 2: Run focused regression**
 
 Run:
 
 ```bash
 pytest \
-  tests/test_commercial_profile_store.py \
+  tests/test_commercial_profile_schema.py \
+  tests/test_commercial_profile_service.py \
   tests/test_commercial_profile_policy.py \
   tests/test_rag_profile_connector.py \
   tests/test_rag_reply_profile_binding.py \
@@ -2358,37 +1646,26 @@ pytest \
   tests/test_rag_reply_commands.py \
   tests/test_passive_watcher.py \
   tests/test_rag_reply_agent_tools.py \
+  tests/test_interview_simulator_contract.py \
   -v
+npm --prefix demo/interview-simulator run build
 ```
 
-Expected: PASS.
+Expected: pytest PASS and Vite build success.
 
-- [ ] **Step 3: Run frontend build**
-
-Run: `npm --prefix demo/interview-simulator run build`
-
-Expected: PASS.
-
-- [ ] **Step 4: Check preservation strings**
+- [ ] **Step 3: Preservation scan**
 
 Run:
 
 ```bash
-rg -n "Boss 自动开聊|Agent 全自动|starterPrompts|/api/boss/auto-greet|/api/agent/ask|send_attachment_resume" demo/interview-simulator/src/App.jsx demo/interview-simulator/vite.config.mjs src/boss_agent_cli
+rg -n "Boss 自动开聊|Agent 全自动|/api/boss/auto-greet|/api/agent/ask|/api/agent/send|send_attachment_resume|boss-mcp" demo/interview-simulator src pyproject.toml
 ```
 
-Expected: output includes the existing demo prompts, auto-greet endpoint, agent ask endpoint, and attachment resume path.
+Expected: output proves old Boss auto-greet, agent ask/send, attachment resume, and MCP surfaces still exist.
 
-- [ ] **Step 5: Commit docs and final verification notes**
+- [ ] **Step 4: Live Boss verification rule**
 
-```bash
-git add README.md docs/boss-agent-current-stage.md
-git commit -m "docs: document commercial profile layer"
-```
-
-- [ ] **Step 6: Live Boss verification rule**
-
-If implementation changed Boss search, auto-greet, browser fetch, CDP, Bridge delivery, or outreach aggregation behavior, run one bounded real Boss verification using the current default UI/CLI filters and report:
+If implementation changed Boss search, auto-greet, browser fetch, CDP, Bridge delivery, or outreach aggregation behavior, run one bounded real Boss verification and report:
 
 ```text
 total_greeted=<value>
@@ -2397,5 +1674,15 @@ stopped_reason=<value>
 platform_error=<value>
 ```
 
-If only profile persistence, docs, tests, and local RAG context wiring changed, report that live Boss verification was not run because no live Boss delivery path changed.
+If only profile persistence, tests, local RAG context, docs, and frontend data wiring changed, report that live Boss verification was not run because no live Boss delivery path changed.
 
+- [ ] **Step 5: Commit docs**
+
+Run:
+
+```bash
+git add README.md docs/boss-agent-current-stage.md
+git commit -m "docs: document commercial profile layer"
+```
+
+Expected: one focused docs commit.
