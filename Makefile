@@ -90,4 +90,4 @@ agent-auto-reply: cdp-check
 	BOSS_RAG_WATCHER_LIVE_SYNC=true \
 	BOSS_RAG_PROACTIVE_RESUME_ENABLED=$(AGENT_PROACTIVE_RESUME) \
 	BOSS_RAG_RESUME_ATTACHMENT_PATH="$(RESUME_ATTACHMENT_PATH)" \
-	$(BOSS_CLI) --json --data-dir "$(BOSS_DATA_DIR)" --cdp-url "$(CDP_URL)" agent watcher-run --loop --live-sync --ensure-chat-page
+	$(BOSS_CLI) --data-dir "$(BOSS_DATA_DIR)" --cdp-url "$(CDP_URL)" agent watcher-run --loop --live-sync --ensure-chat-page

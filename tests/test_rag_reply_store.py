@@ -61,6 +61,28 @@ def test_store_initialize_skips_wal_switch_when_existing_db_is_write_locked(
 		locker.close()
 
 
+def test_store_uses_short_busy_timeout_for_best_effort_wal_switch(tmp_path: Path):
+	class RecordingConnection:
+		def __init__(self) -> None:
+			self.statements: list[str] = []
+
+		def execute(self, statement: str):
+			self.statements.append(statement)
+			if statement == f"PRAGMA journal_mode={store_module._SQLITE_JOURNAL_MODE}":
+				raise sqlite3.OperationalError("database is locked")
+			return None
+
+	conn = RecordingConnection()
+
+	RagReplyStore(tmp_path / "boss-rag.sqlite3")._enable_wal_if_available(conn)
+
+	assert conn.statements == [
+		f"PRAGMA busy_timeout = {store_module._SQLITE_WAL_BUSY_TIMEOUT_MS}",
+		f"PRAGMA journal_mode={store_module._SQLITE_JOURNAL_MODE}",
+		f"PRAGMA busy_timeout = {store_module._SQLITE_BUSY_TIMEOUT_MS}",
+	]
+
+
 def test_store_round_trips_message_draft_and_audit(tmp_path: Path):
 	store = RagReplyStore(tmp_path / "boss-rag.sqlite3")
 	store.initialize()

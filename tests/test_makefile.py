@@ -28,6 +28,7 @@ def test_agent_auto_reply_make_target_runs_live_watcher_with_explicit_gates():
 	assert "BOSS_RAG_WATCHER_DRY_RUN=false" in output
 	assert "BOSS_RAG_WATCHER_LIVE_SYNC=true" in output
 	assert "BOSS_RAG_PROACTIVE_RESUME_ENABLED=true" in output
+	assert "--json" not in output
 	assert "agent watcher-run --loop --live-sync --ensure-chat-page" in output
 
 

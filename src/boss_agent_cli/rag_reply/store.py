@@ -22,6 +22,7 @@ from boss_agent_cli.rag_reply.schema import CREATE_TABLE_STATEMENTS
 
 _SQLITE_BUSY_TIMEOUT_MS = 30_000
 _SQLITE_CONNECT_TIMEOUT_SECONDS = _SQLITE_BUSY_TIMEOUT_MS / 1000
+_SQLITE_WAL_BUSY_TIMEOUT_MS = 100
 _SQLITE_JOURNAL_MODE = "WAL"
 
 
@@ -47,10 +48,13 @@ class RagReplyStore:
 
 	def _enable_wal_if_available(self, conn: sqlite3.Connection) -> None:
 		try:
+			conn.execute(f"PRAGMA busy_timeout = {_SQLITE_WAL_BUSY_TIMEOUT_MS}")
 			conn.execute(f"PRAGMA journal_mode={_SQLITE_JOURNAL_MODE}")
 		except sqlite3.OperationalError as exc:
 			if "database is locked" not in str(exc).lower():
 				raise
+		finally:
+			conn.execute(f"PRAGMA busy_timeout = {_SQLITE_BUSY_TIMEOUT_MS}")
 
 	def list_tables(self) -> list[str]:
 		with self.connect() as conn:
