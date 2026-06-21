@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import Protocol
 
 from boss_agent_cli.display import error_contract_for_code
@@ -31,6 +32,7 @@ WATCHER_STATUSES = {
     "send_failed",
     "paused",
     "dry_run",
+    "skipped_retry_limit",
 }
 
 
@@ -69,6 +71,8 @@ class WatcherRunResult:
 class _ProcessedMessageIndex:
     message_ids: set[str]
     platform_keys: set[tuple[str, ...]]
+    retry_counts_by_message_id: dict[str, int]
+    retry_counts_by_platform_key: dict[tuple[str, ...], int]
 
 
 class BossPassiveWatcher:
@@ -128,6 +132,18 @@ class BossPassiveWatcher:
                     {"message_id": message.message_id, "status": "skipped_duplicate"}
                 )
                 continue
+            failure_count = self._retry_failure_count(message, processed_index)
+            if failure_count >= self.config.max_failures_per_conversation:
+                skipped += 1
+                tasks.append(
+                    {
+                        "message_id": message.message_id,
+                        "status": "skipped_retry_limit",
+                        "error_message": "max_failures_reached",
+                        "failure_count": failure_count,
+                    }
+                )
+                continue
             if self._is_paused(message.conversation_id):
                 blocked += 1
                 task = self._record_paused_task(message)
@@ -135,7 +151,7 @@ class BossPassiveWatcher:
                 continue
             task = self._process_message(message)
             tasks.append(task)
-            if task["status"] != "paused":
+            if task["status"] != "paused" and not _is_retryable_unsent_failure(task):
                 self._add_processed_message(processed_index, message)
             if task["status"] == "sent":
                 processed += 1
@@ -230,12 +246,15 @@ class BossPassiveWatcher:
         provider = self.pipeline_candidate_provider
         if provider is None:
             return []
-        return [
+        if self._read_no_reply_followup_recently_sent():
+            return []
+        candidates = [
             candidate
             for candidate in provider.list_pipeline_candidates()
             if candidate.get("stage") == "read_no_reply"
             and str(candidate.get("security_id") or "").strip()
         ]
+        return candidates[: self.config.read_no_reply_followup_limit_per_cycle]
 
     def _processed_message_index(self) -> _ProcessedMessageIndex:
         messages_by_id = {
@@ -243,6 +262,8 @@ class BossPassiveWatcher:
         }
         message_ids: set[str] = set()
         platform_keys: set[tuple[str, ...]] = set()
+        retry_counts_by_message_id: dict[str, int] = {}
+        retry_counts_by_platform_key: dict[tuple[str, ...], int] = {}
         for entry in self.store.list_audit_logs():
             if (
                 entry.event_type != "watcher_task"
@@ -252,16 +273,29 @@ class BossPassiveWatcher:
             processed_message_id = str(entry.payload.get("message_id") or "")
             if not processed_message_id:
                 continue
-            message_ids.add(processed_message_id)
             processed_message = messages_by_id.get(processed_message_id)
+            processed_message_key = (
+                None if processed_message is None else _platform_message_key(processed_message)
+            )
+            if _is_retryable_unsent_failure(entry.payload):
+                retry_counts_by_message_id[processed_message_id] = (
+                    retry_counts_by_message_id.get(processed_message_id, 0) + 1
+                )
+                if processed_message_key is not None:
+                    retry_counts_by_platform_key[processed_message_key] = (
+                        retry_counts_by_platform_key.get(processed_message_key, 0) + 1
+                    )
+                continue
+            message_ids.add(processed_message_id)
             if processed_message is None:
                 continue
-            processed_message_key = _platform_message_key(processed_message)
             if processed_message_key is not None:
                 platform_keys.add(processed_message_key)
         return _ProcessedMessageIndex(
             message_ids=message_ids,
             platform_keys=platform_keys,
+            retry_counts_by_message_id=retry_counts_by_message_id,
+            retry_counts_by_platform_key=retry_counts_by_platform_key,
         )
 
     def _already_processed(
@@ -271,6 +305,18 @@ class BossPassiveWatcher:
             return True
         message_key = _platform_message_key(message)
         return message_key is not None and message_key in processed_index.platform_keys
+
+    def _retry_failure_count(
+        self, message: MessageRecord, processed_index: _ProcessedMessageIndex
+    ) -> int:
+        count = processed_index.retry_counts_by_message_id.get(message.message_id, 0)
+        message_key = _platform_message_key(message)
+        if message_key is not None:
+            count = max(
+                count,
+                processed_index.retry_counts_by_platform_key.get(message_key, 0),
+            )
+        return count
 
     def _add_processed_message(
         self, processed_index: _ProcessedMessageIndex, message: MessageRecord
@@ -427,6 +473,29 @@ class BossPassiveWatcher:
                 return True
         return False
 
+    def _read_no_reply_followup_recently_sent(self) -> bool:
+        interval_seconds = self.config.read_no_reply_followup_min_interval_seconds
+        if interval_seconds <= 0:
+            return False
+        now = datetime.now(UTC)
+        for entry in reversed(self.store.list_audit_logs()):
+            if entry.event_type == "read_no_reply_followup":
+                if entry.payload.get("status") != "sent":
+                    continue
+            elif entry.event_type == "watcher_task":
+                if (
+                    entry.payload.get("stage") != "read_no_reply"
+                    or entry.payload.get("status") != "sent"
+                ):
+                    continue
+            else:
+                continue
+            created_at = _parse_iso_datetime(entry.created_at)
+            if created_at is None:
+                continue
+            return (now - created_at).total_seconds() < interval_seconds
+        return False
+
 
 def _sync_blocked_task(
     error_message: str,
@@ -513,6 +582,28 @@ def _tool_step_payload(tool_name: str, result: ToolResult) -> dict[str, object]:
         "error_code": result.error_code,
         "error_message": result.error_message,
     }
+
+
+def _is_retryable_unsent_failure(payload: dict[str, object]) -> bool:
+    if payload.get("status") != "rag_failed":
+        return False
+    delivery = payload.get("delivery") if isinstance(payload.get("delivery"), dict) else {}
+    if any(
+        bool(delivery.get(key))
+        for key in ("ok", "message_sent", "resume_sent")
+    ):
+        return False
+    return True
+
+
+def _parse_iso_datetime(value: str) -> datetime | None:
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=UTC)
+    return parsed.astimezone(UTC)
 
 
 def _platform_message_key(message: MessageRecord) -> tuple[str, ...] | None:

@@ -174,6 +174,16 @@ class AgentAnswerAdapter:
 
 	@staticmethod
 	def _rule_based_rewrite(*, message_text: str, rag_answer: str) -> AgentAnswerResult:
+		recruiter_invitation_answer = AgentAnswerAdapter._recruiter_invitation_answer(
+			message_text
+		)
+		if recruiter_invitation_answer:
+			return AgentAnswerResult(
+				ok=True,
+				answer=recruiter_invitation_answer,
+				reasoning_summary={"strategy": "在无可用 AI 服务时，命中本地招聘邀约回复模板"},
+				raw_response={"mode": "local_recruiter_invitation_template"},
+			)
 		template_answer = AgentAnswerAdapter._template_answer_for_interview_question(message_text)
 		if template_answer:
 			return AgentAnswerResult(
@@ -221,6 +231,35 @@ class AgentAnswerAdapter:
 			raw_response={"mode": "rule_based"},
 			error_message=None if answer else "Agent answer returned empty answer_text.",
 			audit_status="draft_created" if answer else "agent_answer_failed",
+		)
+
+	@staticmethod
+	def _recruiter_invitation_answer(message_text: str) -> str:
+		lower_question = (message_text or "").lower()
+		invitation_tokens = (
+			"招聘",
+			"急招",
+			"岗位",
+			"职位",
+			"工作机会",
+			"看工作",
+			"在看机会",
+		)
+		engagement_tokens = (
+			"沟通",
+			"聊",
+			"兴趣",
+			"有时间",
+			"方便",
+			"机会",
+		)
+		if not any(token in lower_question for token in invitation_tokens):
+			return ""
+		if not any(token in lower_question for token in engagement_tokens):
+			return ""
+		return (
+			"您好，我对这个岗位比较感兴趣，可以进一步沟通。"
+			"也方便请您简单介绍一下岗位职责、技术方向和团队情况。"
 		)
 
 	@staticmethod

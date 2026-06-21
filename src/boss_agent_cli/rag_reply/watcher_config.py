@@ -19,6 +19,8 @@ class WatcherConfig:
     resume_attachment_path: str
     poll_seconds: int = 20
     max_failures_per_conversation: int = 3
+    read_no_reply_followup_limit_per_cycle: int = 1
+    read_no_reply_followup_min_interval_seconds: int = 300
     live_sync: bool = False
     require_send_enabled: bool = True
     send_enabled: bool = False
@@ -44,6 +46,22 @@ class WatcherConfig:
                 _int_or_default(
                     values.get("boss_rag_watcher_max_failures_per_conversation"),
                     3,
+                ),
+            ),
+            read_no_reply_followup_limit_per_cycle=max(
+                1,
+                _int_or_default(
+                    values.get("boss_rag_read_no_reply_followup_limit_per_cycle"),
+                    1,
+                ),
+            ),
+            read_no_reply_followup_min_interval_seconds=max(
+                0,
+                _int_or_default(
+                    values.get(
+                        "boss_rag_read_no_reply_followup_min_interval_seconds"
+                    ),
+                    300,
                 ),
             ),
             live_sync=bool(values.get("boss_rag_watcher_live_sync", False)),

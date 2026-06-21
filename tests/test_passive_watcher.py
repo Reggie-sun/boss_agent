@@ -848,6 +848,120 @@ def test_passive_watcher_processes_read_no_reply_pipeline_candidate(tmp_path):
     assert delivery.calls == []
 
 
+def test_passive_watcher_limits_read_no_reply_pipeline_candidates_per_cycle(tmp_path):
+    store = _store(tmp_path)
+    delivery = _RecordingDelivery()
+    config = _config(tmp_path)
+    config.dry_run = True
+    config.live_sync = True
+    config.read_no_reply_followup_limit_per_cycle = 1
+    pipeline_provider = _PipelineProvider(
+        [
+            {"stage": "read_no_reply", "security_id": "sec_first"},
+            {"stage": "read_no_reply", "security_id": "sec_second"},
+        ]
+    )
+    watcher = BossPassiveWatcher(
+        store=store,
+        service=_integration_service(store),
+        config=config,
+        delivery=delivery,
+        message_syncer=_Syncer(),
+        pipeline_candidate_provider=pipeline_provider,
+    )
+
+    result = watcher.run_once(live_sync=True)
+
+    assert pipeline_provider.calls == 1
+    assert result.processed == 1
+    assert result.tasks == [
+        {
+            "message_id": "",
+            "conversation_id": "",
+            "draft_id": "",
+            "intent": "read_no_reply",
+            "stage": "read_no_reply",
+            "security_id": "sec_first",
+            "status": "dry_run",
+            "error_message": "",
+            "dry_run": True,
+            "action": {
+                "kind": "send_read_no_reply_followup",
+                "message": (
+                    "我是候选人的求职助理 Agent，您好，想跟进一下这个岗位目前"
+                    "是否还在招聘？如果方便的话可以继续沟通，我这边对岗位方向比较感兴趣。"
+                ),
+            },
+            "delivery": {"ok": True, "status": "dry_run"},
+            "target": {
+                "recruiter_name": "",
+                "company": "",
+                "title": "",
+                "security_id": "sec_first",
+                "gid": "",
+                "friend_id": "",
+                "uid": "",
+                "encrypt_boss_id": "",
+                "recruiter_id": "",
+            },
+            "tool_steps": [
+                {
+                    "tool": "send_read_no_reply_followup_guarded",
+                    "ok": True,
+                    "status": "dry_run",
+                    "error_code": "",
+                    "error_message": "",
+                },
+                {
+                    "tool": "record_watcher_audit",
+                    "ok": True,
+                    "status": "audit_recorded",
+                    "error_code": "",
+                    "error_message": "",
+                },
+            ],
+        }
+    ]
+    assert delivery.calls == []
+
+
+def test_passive_watcher_throttles_read_no_reply_after_recent_followup(tmp_path):
+    store = _store(tmp_path)
+    store.append_audit_log(
+        AuditLogRecord.new(
+            event_type="read_no_reply_followup",
+            entity_type="security_id",
+            entity_id="sec_recent",
+            payload={"security_id": "sec_recent", "status": "sent"},
+        )
+    )
+    delivery = _RecordingDelivery()
+    config = _config(tmp_path)
+    config.dry_run = True
+    config.live_sync = True
+    config.read_no_reply_followup_min_interval_seconds = 300
+    pipeline_provider = _PipelineProvider(
+        [{"stage": "read_no_reply", "security_id": "sec_next"}]
+    )
+    watcher = BossPassiveWatcher(
+        store=store,
+        service=_integration_service(store),
+        config=config,
+        delivery=delivery,
+        message_syncer=_Syncer(),
+        pipeline_candidate_provider=pipeline_provider,
+    )
+
+    result = watcher.run_once(live_sync=True)
+
+    assert pipeline_provider.calls == 0
+    assert result.processed == 0
+    assert result.skipped == 0
+    assert result.blocked == 0
+    assert result.tasks == []
+    assert delivery.calls == []
+
+
 def test_passive_watcher_skips_processed_read_no_reply_pipeline_candidate(tmp_path):
     store = _store(tmp_path)
     store.append_audit_log(
@@ -961,6 +1075,119 @@ def test_passive_watcher_processes_only_latest_inbound_per_conversation(tmp_path
     assert result.processed == 1
     assert len(delivery.calls) == 1
     assert result.tasks[0]["message_id"] == "msg_002"
+
+
+def test_passive_watcher_retries_unsent_rag_failure_before_failure_limit(tmp_path):
+    store = _store(tmp_path)
+    store.save_conversation(
+        ConversationRecord(
+            conversation_id="conv_001",
+            source="boss_sync",
+            state={"security_id": "sec_001"},
+        )
+    )
+    store.save_message(
+        MessageRecord(
+            message_id="msg_001",
+            conversation_id="conv_001",
+            message_text="介绍下你的 RAG 项目",
+            direction="inbound",
+        )
+    )
+    store.append_audit_log(
+        AuditLogRecord.new(
+            event_type="watcher_task",
+            entity_type="conversation",
+            entity_id="conv_001",
+            payload={
+                "message_id": "msg_001",
+                "status": "rag_failed",
+                "error_message": "empty_draft",
+                "action": {"kind": "block"},
+                "delivery": {},
+            },
+        )
+    )
+    delivery = _RecordingDelivery()
+    config = _config(tmp_path)
+    config.dry_run = True
+    config.live_sync = True
+    watcher = BossPassiveWatcher(
+        store=store,
+        service=_integration_service(store),
+        config=config,
+        delivery=delivery,
+        message_syncer=_Syncer(),
+    )
+
+    result = watcher.run_once(live_sync=True)
+
+    assert result.processed == 1
+    assert result.skipped == 0
+    assert result.tasks[0]["message_id"] == "msg_001"
+    assert result.tasks[0]["status"] == "sent"
+    assert result.tasks[0]["delivery"]["status"] == "dry_run"
+    assert delivery.calls == []
+
+
+def test_passive_watcher_stops_retrying_unsent_rag_failure_at_failure_limit(tmp_path):
+    store = _store(tmp_path)
+    store.save_conversation(
+        ConversationRecord(
+            conversation_id="conv_001",
+            source="boss_sync",
+            state={"security_id": "sec_001"},
+        )
+    )
+    store.save_message(
+        MessageRecord(
+            message_id="msg_001",
+            conversation_id="conv_001",
+            message_text="介绍下你的 RAG 项目",
+            direction="inbound",
+        )
+    )
+    for _ in range(3):
+        store.append_audit_log(
+            AuditLogRecord.new(
+                event_type="watcher_task",
+                entity_type="conversation",
+                entity_id="conv_001",
+                payload={
+                    "message_id": "msg_001",
+                    "status": "rag_failed",
+                    "error_message": "empty_draft",
+                    "action": {"kind": "block"},
+                    "delivery": {},
+                },
+            )
+        )
+    delivery = _RecordingDelivery()
+    config = _config(tmp_path)
+    config.dry_run = True
+    config.live_sync = True
+    config.max_failures_per_conversation = 3
+    watcher = BossPassiveWatcher(
+        store=store,
+        service=_integration_service(store),
+        config=config,
+        delivery=delivery,
+        message_syncer=_Syncer(),
+    )
+
+    result = watcher.run_once(live_sync=True)
+
+    assert result.processed == 0
+    assert result.skipped == 1
+    assert result.tasks == [
+        {
+            "message_id": "msg_001",
+            "status": "skipped_retry_limit",
+            "error_message": "max_failures_reached",
+            "failure_count": 3,
+        }
+    ]
+    assert delivery.calls == []
 
 
 def test_passive_watcher_blocks_live_sync_without_syncer(tmp_path):

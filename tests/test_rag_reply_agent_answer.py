@@ -158,3 +158,20 @@ def test_agent_answer_uses_local_template_for_hr_fit_question():
 	assert result.ok is True
 	assert "我觉得自己比较适合 AI 应用工程师" in result.answer
 	assert result.raw_response == {"mode": "local_interview_template"}
+
+
+def test_agent_answer_uses_local_template_for_recruiter_invitation_without_ai():
+	adapter = AgentAnswerAdapter(ai_service=None)
+
+	result = adapter.answer(
+		message_text="我们急招AI 开发工程师，能和你深入沟通一下吗？",
+		intent="general_question",
+		job_summary=None,
+		rag_answer="",
+		citations=[],
+	)
+
+	assert result.ok is True
+	assert "我对这个岗位比较感兴趣" in result.answer
+	assert "可以进一步沟通" in result.answer
+	assert result.raw_response == {"mode": "local_recruiter_invitation_template"}
