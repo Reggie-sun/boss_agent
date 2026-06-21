@@ -611,10 +611,18 @@ function normalizeThread(sessionId, messages) {
 function buildAgentAskResponsePayload({ payload, question, sessionId }) {
   const data = payload?.data || {};
   const draft = data.draft && typeof data.draft === "object" ? data.draft : {};
+  const draftEvidence =
+    draft.evidence && typeof draft.evidence === "object" ? draft.evidence : {};
   const thread = normalizeThread(sessionId, data.thread);
   const answer = String(data.answer || draft.draft_text || "");
   const auditStatus = String(data.audit_status || draft.audit_status || "answered");
   const draftIntent = String(draft.intent || "");
+  const emptyAnswerMessage = String(
+    data.error_message ||
+      draft.error_message ||
+      draftEvidence.error_message ||
+      "",
+  ).trim();
   const rawResponse = {
     command: payload?.command,
     conversationId: data.conversation_id,
@@ -628,7 +636,7 @@ function buildAgentAskResponsePayload({ payload, question, sessionId }) {
       body: {
         ok: false,
         errorMessage:
-          data.error_message || "BOSS_AGENT workflow 未能生成可用回答。",
+          emptyAnswerMessage || "BOSS_AGENT workflow 未能生成可用回答。",
         auditStatus,
         draftIntent,
         draft,

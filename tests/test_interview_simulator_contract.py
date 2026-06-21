@@ -91,3 +91,23 @@ def test_interview_simulator_profile_binding_uses_cli_supported_source():
 	assert 'binding_source: "manual"' in profile_hub
 	assert "normalizeBindingSource" in profile_bridge
 	assert '"manual"' in profile_bridge
+
+
+def test_interview_simulator_agent_ask_uses_bound_boss_conversation_id():
+	repo_root = Path(__file__).resolve().parents[1]
+	app = (repo_root / "demo" / "interview-simulator" / "src" / "App.jsx").read_text(encoding="utf-8")
+
+	assert "const agentConversationId = useMemo" in app
+	assert 'selectedChatTarget?.conversation_id || "").trim() || sessionId' in app
+	assert "sessionId: agentConversationId" in app
+	assert "encodeURIComponent(agentConversationId)" in app
+
+
+def test_interview_simulator_target_refresh_preserves_current_selection():
+	repo_root = Path(__file__).resolve().parents[1]
+	app = (repo_root / "demo" / "interview-simulator" / "src" / "App.jsx").read_text(encoding="utf-8")
+
+	assert "selectedTargetValueRef" in app
+	assert "applySecurityIdRef" in app
+	assert "!selectedTargetValueRef.current" in app
+	assert "!applySecurityIdRef.current.trim()" in app

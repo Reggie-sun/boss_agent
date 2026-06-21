@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowClockwise,
   ArrowRight,
@@ -311,6 +311,8 @@ export function App() {
     refreshed: false,
   });
   const [selectedTargetValue, setSelectedTargetValue] = useState("");
+  const selectedTargetValueRef = useRef("");
+  const applySecurityIdRef = useRef("");
   const [isSendingToBoss, setIsSendingToBoss] = useState(false);
   const [sendResumeWithDraft, setSendResumeWithDraft] = useState(false);
   const [watcherState, setWatcherState] = useState({
@@ -330,6 +332,10 @@ export function App() {
       chatTargets.find((target) => targetOptionValue(target) === selectedTargetValue) ||
       null,
     [chatTargets, selectedTargetValue],
+  );
+  const agentConversationId = useMemo(
+    () => String(selectedChatTarget?.conversation_id || "").trim() || sessionId,
+    [selectedChatTarget, sessionId],
   );
   const selectedCitation = result.citations[selectedCitationIndex] ?? null;
   const questionLength = question.replace(/\s/g, "").length;
@@ -365,6 +371,14 @@ export function App() {
       : "搜索中..."
     : "Agent 全自动";
   const bossSearchActionsDisabled = bossAutomationRiskLocked || !bossSearchForm.query.trim();
+
+  useEffect(() => {
+    selectedTargetValueRef.current = selectedTargetValue;
+  }, [selectedTargetValue]);
+
+  useEffect(() => {
+    applySecurityIdRef.current = applyForm.security_id;
+  }, [applyForm.security_id]);
 
   function selectWorkspace(nextWorkspace) {
     setActiveWorkspace(nextWorkspace);
@@ -437,7 +451,11 @@ export function App() {
         refreshed: Boolean(payload.refreshed),
       });
       setChatTargetsError(payload.refreshError ? String(payload.refreshError) : "");
-      if (!selectedTargetValue && !applyForm.security_id.trim() && nextTargets.length) {
+      if (
+        !selectedTargetValueRef.current &&
+        !applySecurityIdRef.current.trim() &&
+        nextTargets.length
+      ) {
         pickTarget(nextTargets[0]);
       }
     } catch (error) {
@@ -711,7 +729,7 @@ export function App() {
       try {
         const [response, threadResponse] = await Promise.all([
           fetch("/api/agent/health"),
-          fetch(`/api/agent/thread?sessionId=${encodeURIComponent(sessionId)}`),
+          fetch(`/api/agent/thread?sessionId=${encodeURIComponent(agentConversationId)}`),
         ]);
         const data = await response.json();
         const threadPayload = await threadResponse.json();
@@ -742,7 +760,7 @@ export function App() {
     return () => {
       cancelled = true;
     };
-  }, [sessionId]);
+  }, [agentConversationId]);
 
   function pickTarget(target) {
     setApplyForm({
@@ -803,7 +821,7 @@ export function App() {
         },
         body: JSON.stringify({
           question: trimmed,
-          sessionId,
+          sessionId: agentConversationId,
           mode: "accurate",
           security_id: resolvedSecurityId,
           auto_send_resume: false,

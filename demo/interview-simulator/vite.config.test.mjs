@@ -123,6 +123,34 @@ test("buildAgentAskResponsePayload rejects empty successful agent drafts", () =>
   assert.equal(response.body.draftIntent, "unsafe_or_unclear");
 });
 
+test("buildAgentAskResponsePayload surfaces nested profile RAG errors", () => {
+  const response = buildAgentAskResponsePayload({
+    payload: {
+      command: ["agent", "ask"],
+      data: {
+        answer: "",
+        audit_status: "profile_context_invalid",
+        draft: {
+          draft_text: "",
+          audit_status: "profile_context_invalid",
+          intent: "project_question",
+          evidence: {
+            error_message:
+              "tenant_id/user_id/profile_id/knowledge_base_id/conversation_id are required.",
+          },
+        },
+      },
+    },
+    question: "介绍一下 RAG 项目",
+    sessionId: "boss_conv_1",
+  });
+
+  assert.equal(response.statusCode, 502);
+  assert.equal(response.body.ok, false);
+  assert.match(response.body.errorMessage, /knowledge_base_id/);
+  assert.equal(response.body.auditStatus, "profile_context_invalid");
+});
+
 test("detectBossDeliveryChannel does not open a CDP probe tab when chat tab is missing", async () => {
   const originalFetch = globalThis.fetch;
   let createdTargets = 0;
