@@ -230,6 +230,66 @@ class _RecentOnlyMessagePlatform:
 		return None
 
 
+class _UnreadBeyondRecentLimitPlatform:
+	def __init__(self):
+		self.friend_list_pages: list[int] = []
+		self.chat_history_calls: list[tuple[str, str]] = []
+
+	def is_success(self, response):
+		return response.get("code") == 0
+
+	def unwrap_data(self, response):
+		return response.get("zpData")
+
+	def parse_error(self, response):
+		return ("UNKNOWN", response.get("message", ""))
+
+	def friend_list(self, page=1):
+		self.friend_list_pages.append(page)
+		if page != 1:
+			raise AssertionError("sync_messages should not deep-page friend_list in V1")
+		return {
+			"code": 0,
+			"zpData": {
+				"result": [
+					{
+						"securityId": f"sec_{index:03d}",
+						"uid": 10000 + index,
+						"encryptJobId": f"job_{index:03d}",
+						"name": f"HR{index}",
+						"brandName": "TestCo",
+						"title": "HRBP",
+						"lastMsg": "第七个未读" if index == 6 else "你好",
+						"lastTS": 1700000000000 + index,
+						"unreadMsgCount": 1 if index == 6 else 0,
+					}
+					for index in range(8)
+				],
+				"hasMore": None,
+			},
+		}
+
+	def chat_history(self, gid, security_id, page=1, count=50):
+		self.chat_history_calls.append((gid, security_id))
+		return {
+			"code": 0,
+			"zpData": {
+				"messages": [
+					{
+						"id": f"m_{gid}",
+						"from": {"uid": int(gid), "name": "HR"},
+						"type": 1,
+						"text": "第七个未读" if security_id == "sec_006" else "你好",
+						"time": 1700000000000,
+					}
+				]
+			},
+		}
+
+	def close(self):
+		return None
+
+
 class _DuplicateTimestampMessagePlatform:
 	def is_success(self, response):
 		return response.get("code") == 0
@@ -498,6 +558,23 @@ def test_sync_messages_limits_recent_conversations_without_deep_pagination(tmp_p
 	assert result.count == 5
 	assert len(result.conversation_ids) == 5
 	assert len(result.message_ids) == 5
+
+
+def test_sync_messages_includes_unread_conversations_beyond_recent_limit(tmp_path: Path):
+	store = RagReplyStore(tmp_path / "boss-rag.sqlite3")
+	store.initialize()
+	platform = _UnreadBeyondRecentLimitPlatform()
+	adapter = BossAutomationAdapter(platform=platform, store=store)
+
+	result = adapter.sync_messages()
+
+	assert platform.friend_list_pages == [1]
+	assert len(platform.chat_history_calls) == 6
+	assert ("10006", "sec_006") in platform.chat_history_calls
+	assert "boss_conv_10006" in result.conversation_ids
+	messages = store.list_messages("boss_conv_10006")
+	assert len(messages) == 1
+	assert messages[0].message_text == "第七个未读"
 
 
 def test_sync_messages_uses_content_fingerprint_when_timestamp_collides(tmp_path: Path):

@@ -173,7 +173,7 @@ class BossAutomationAdapter:
 		seen_message_ids: set[str] = set()
 		selected_items = self._select_friend_items(items, conversation_id)
 		if conversation_id is None:
-			selected_items = selected_items[:_RECENT_CONVERSATION_LIMIT]
+			selected_items = self._select_recent_and_unread_friend_items(selected_items)
 
 		for raw_item in selected_items:
 			if not isinstance(raw_item, dict):
@@ -483,6 +483,27 @@ class BossAutomationAdapter:
 			)
 		return matched
 
+	def _select_recent_and_unread_friend_items(self, items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+		selected: list[dict[str, Any]] = []
+		seen: set[str] = set()
+
+		def add(item: dict[str, Any]) -> None:
+			key = self._conversation_id(item)
+			if key in seen:
+				return
+			seen.add(key)
+			selected.append(item)
+
+		for item in items[:_RECENT_CONVERSATION_LIMIT]:
+			if isinstance(item, dict):
+				add(item)
+
+		for item in items[_RECENT_CONVERSATION_LIMIT:]:
+			if isinstance(item, dict) and self._unread_count(item) > 0:
+				add(item)
+
+		return selected
+
 	def _unwrap_or_raise(self, response: dict[str, Any], *, fallback_message: str) -> dict[str, Any]:
 		if not self.platform.is_success(response):
 			self._raise_platform_error(response, fallback_message=fallback_message)
@@ -518,6 +539,13 @@ class BossAutomationAdapter:
 		gid = str(raw_item.get("uid") or raw_item.get("encryptUid") or "")
 		security_id = str(raw_item.get("securityId") or "")
 		return f"boss_recruiter_{gid or security_id or 'unknown'}"
+
+	@staticmethod
+	def _unread_count(raw_item: dict[str, Any]) -> int:
+		try:
+			return int(raw_item.get("unreadMsgCount") or 0)
+		except (TypeError, ValueError):
+			return 0
 
 	@staticmethod
 	def _build_job_summary(title: str, company: str, salary: str, city: str, description: str) -> str:
