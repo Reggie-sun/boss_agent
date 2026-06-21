@@ -38,6 +38,8 @@ def test_interview_simulator_exposes_profile_bridge_without_removing_existing_fl
 		repo_root / "demo" / "interview-simulator" / "server" / "profileBridge.mjs"
 	).read_text(encoding="utf-8")
 	app = (repo_root / "demo" / "interview-simulator" / "src" / "App.jsx").read_text(encoding="utf-8")
+	reply = (repo_root / "demo" / "interview-simulator" / "src" / "views" / "ReplyWorkspace.jsx").read_text(encoding="utf-8")
+	outreach = (repo_root / "demo" / "interview-simulator" / "src" / "views" / "OutreachWorkspace.jsx").read_text(encoding="utf-8")
 
 	for token in ("/api/agent/profiles", "/api/agent/profile-binding", "/api/agent/usage"):
 		assert token in profile_bridge
@@ -48,4 +50,31 @@ def test_interview_simulator_exposes_profile_bridge_without_removing_existing_fl
 		"Boss 自动开聊",
 		"Agent 全自动",
 	):
-		assert existing in vite or existing in app
+		assert existing in vite or existing in app or existing in reply or existing in outreach
+
+
+def test_interview_simulator_profile_refactor_wires_local_profile_workflows():
+	repo_root = Path(__file__).resolve().parents[1]
+	app = (repo_root / "demo" / "interview-simulator" / "src" / "App.jsx").read_text(encoding="utf-8")
+	client = (repo_root / "demo" / "interview-simulator" / "src" / "api" / "agentClient.js").read_text(encoding="utf-8")
+	profile_hub = (repo_root / "demo" / "interview-simulator" / "src" / "views" / "ProfileHub.jsx").read_text(encoding="utf-8")
+	reply = (repo_root / "demo" / "interview-simulator" / "src" / "views" / "ReplyWorkspace.jsx").read_text(encoding="utf-8")
+	outreach = (repo_root / "demo" / "interview-simulator" / "src" / "views" / "OutreachWorkspace.jsx").read_text(encoding="utf-8")
+	selector = (repo_root / "demo" / "interview-simulator" / "src" / "components" / "profile" / "ProfileSelector.jsx").read_text(encoding="utf-8")
+	panel = (repo_root / "demo" / "interview-simulator" / "src" / "components" / "profile" / "ProfileConfigPanel.jsx").read_text(encoding="utf-8")
+	combined = "\n".join([app, client, profile_hub, reply, outreach, selector, panel])
+
+	for token in (
+		"ProfileHub",
+		"ReplyWorkspace",
+		"OutreachWorkspace",
+		"selectedProfileId",
+		"commercial_profile_required: true",
+		"profile_id: selectedProfileId",
+		"fetchProfileConfig",
+		"updateProfileConfig",
+		"bindConversationProfile",
+	):
+		assert token in combined
+	for visible in ("发送到 Boss", "发送附件简历 PDF", "watcher", "Boss 自动开聊", "Agent 全自动"):
+		assert visible in combined

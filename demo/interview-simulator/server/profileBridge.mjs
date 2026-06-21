@@ -70,6 +70,24 @@ export function createProfileBridgeHandlers({
       }
 
       if (
+        req.method === "GET" &&
+        url.pathname.startsWith("/api/agent/profiles/") &&
+        url.pathname.endsWith("/config")
+      ) {
+        const profileId = profileIdFromPath(url.pathname, "/config");
+        const payload = await runBossJsonCommand(bridgeConfig, [
+          "agent",
+          "profile",
+          "config",
+          "get",
+          "--profile-id",
+          profileId,
+        ]);
+        sendJson(res, 200, { ok: true, data: responseData(payload) });
+        return true;
+      }
+
+      if (
         req.method === "PATCH" &&
         url.pathname.startsWith("/api/agent/profiles/") &&
         url.pathname.endsWith("/config")
