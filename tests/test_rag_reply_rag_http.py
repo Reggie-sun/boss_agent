@@ -37,6 +37,33 @@ def test_rag_http_calls_chat_ask_endpoint(monkeypatch):
 	assert captured["headers"] is None
 
 
+def test_rag_http_sends_optional_supported_scope_without_profile_metadata(monkeypatch):
+	captured = {}
+
+	def fake_post(url, *, json, timeout, headers=None):
+		captured["json"] = json
+		return _Response({"answer": "draft", "citations": []})
+
+	monkeypatch.setattr(httpx, "post", fake_post)
+	adapter = RagHttpAdapter(base_url="http://127.0.0.1:8020", timeout_seconds=12)
+
+	result = adapter.answer(
+		rag_question="HR question: hi",
+		session_id="sess_001",
+		document_id="doc_001",
+		category_id="cat_001",
+	)
+
+	assert result.ok is True
+	assert captured["json"]["document_id"] == "doc_001"
+	assert captured["json"]["category_id"] == "cat_001"
+	assert "metadata" not in captured["json"]
+	assert "tenant_id" not in captured["json"]
+	assert "user_id" not in captured["json"]
+	assert "profile_id" not in captured["json"]
+	assert "knowledge_base_id" not in captured["json"]
+
+
 def test_rag_http_uses_x_api_key_header_when_configured(monkeypatch):
 	captured = {}
 

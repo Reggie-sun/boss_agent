@@ -43,6 +43,8 @@ class RagHttpAdapter:
 		rag_question: str,
 		session_id: str,
 		mode: str = "accurate",
+		document_id: str | None = None,
+		category_id: str | None = None,
 	) -> RagAnswerResult:
 		"""Return a closed result when the HTTP call fails."""
 		if not self.base_url:
@@ -57,6 +59,10 @@ class RagHttpAdapter:
 			"session_id": session_id,
 			"mode": mode,
 		}
+		if document_id:
+			payload["document_id"] = document_id
+		if category_id:
+			payload["category_id"] = category_id
 		try:
 			headers = self._build_headers()
 		except ValueError as exc:
