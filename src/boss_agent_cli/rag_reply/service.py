@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import hashlib
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Any, Protocol
 
 from boss_agent_cli.rag_reply.classifier import ClassificationResult, classify_message_with_context
 from boss_agent_cli.rag_reply.clipboard import copy_text
@@ -83,6 +83,8 @@ class BossRagReplyService:
 		rag_adapter: RagAdapterProtocol,
 		fallback_adapter: FallbackAdapterProtocol | None = None,
 		agent_answer_adapter: AgentAnswerAdapterProtocol | None = None,
+		profile_service: object | None = None,
+		profile_rag_connector: object | None = None,
 		salary_reply: str = "",
 		interview_windows: str = "",
 	) -> None:
@@ -90,6 +92,8 @@ class BossRagReplyService:
 		self.rag_adapter = rag_adapter
 		self.fallback_adapter = fallback_adapter
 		self.agent_answer_adapter = agent_answer_adapter
+		self.profile_service: Any = profile_service
+		self.profile_rag_connector: Any = profile_rag_connector
 		self.salary_reply = salary_reply.strip()
 		self.interview_windows = interview_windows.strip()
 
@@ -188,25 +192,94 @@ class BossRagReplyService:
 	) -> DraftRecord:
 		job_summary = self._resolve_job_summary(message)
 		rag_session_id = self._build_rag_session_id(message)
+		profile_context = None
+		if self.profile_service is not None:
+			profile_context = self._resolve_profile_context(message)
+			if profile_context is None:
+				return DraftRecord.new(
+					conversation_id=message.conversation_id,
+					source_message_id=message.message_id,
+					draft_text="",
+					intent=classification.intent,
+					risk_labels=[*decision.risk_labels, "profile_binding_required"],
+					evidence={"source": "profile_policy", "reason": "profile_binding_required"},
+					approval_required=True,
+					send_allowed=False,
+					audit_status="profile_binding_required",
+					rag_session_id=rag_session_id,
+				)
+			if self.profile_rag_connector is None:
+				return DraftRecord.new(
+					conversation_id=message.conversation_id,
+					source_message_id=message.message_id,
+					draft_text="",
+					intent=classification.intent,
+					risk_labels=[*decision.risk_labels, "profile_rag_connector_required"],
+					evidence={"source": "profile_policy", "reason": "profile_rag_connector_required"},
+					approval_required=True,
+					send_allowed=False,
+					audit_status="profile_rag_connector_required",
+					rag_session_id=rag_session_id,
+				)
 		rag_question = build_rag_question(
 			message.message_text,
 			job_summary,
 			build_answer_objective(classification.intent, message.message_text),
 		)
-		rag_result = self.rag_adapter.answer(
-			rag_question=rag_question,
-			session_id=rag_session_id,
-		)
+		if profile_context is None:
+			rag_result = self.rag_adapter.answer(
+				rag_question=rag_question,
+				session_id=rag_session_id,
+			)
+			rag_request = {"question": rag_question, "session_id": rag_session_id, "message_id": message.message_id}
+			profile_evidence_context = None
+		else:
+			rag_auth_binding = self.profile_service.get_profile_rag_auth_binding(profile_context["profile_id"])
+			rag_result = self.profile_rag_connector.ask_profile(
+				tenant_id=profile_context["tenant_id"],
+				user_id=profile_context["user_id"],
+				profile_id=profile_context["profile_id"],
+				knowledge_base_id=profile_context["knowledge_base_id"],
+				question=rag_question,
+				conversation_id=message.conversation_id,
+				rag_auth_binding=rag_auth_binding,
+			)
+			profile_evidence_context = getattr(rag_result, "profile_context", None) or profile_context
+			rag_request = {
+				"question": rag_question,
+				"message_id": message.message_id,
+				"profile_context": profile_context,
+				"rag_auth": self._rag_auth_request_context(rag_auth_binding),
+			}
 		self.store.save_rag_call(
 			RagCallRecord.new(
 				conversation_id=message.conversation_id,
 				draft_id=None,
-				request={"question": rag_question, "session_id": rag_session_id, "message_id": message.message_id},
+				request=rag_request,
 				status=rag_result.audit_status,
 				response=rag_result.raw_response or {"error_message": rag_result.error_message},
 			)
 		)
 		if not rag_result.ok:
+			if profile_context is not None:
+				audit_status = str(rag_result.audit_status or "profile_rag_failed")
+				return DraftRecord.new(
+					conversation_id=message.conversation_id,
+					source_message_id=message.message_id,
+					draft_text="",
+					intent=classification.intent,
+					risk_labels=[*decision.risk_labels, audit_status],
+					evidence={
+						"source": "profile_rag",
+						"profile_context": profile_evidence_context,
+						"rag_auth": rag_request["rag_auth"],
+						"error_message": rag_result.error_message,
+					},
+					approval_required=True,
+					send_allowed=False,
+					audit_status=audit_status,
+					rag_session_id=rag_session_id,
+				)
 			fallback_draft = self._build_fallback_draft(
 				message=message,
 				classification=classification,
@@ -216,23 +289,49 @@ class BossRagReplyService:
 				rag_error_message=rag_result.error_message,
 			)
 			if fallback_draft is not None:
+				if profile_evidence_context is not None:
+					fallback_draft.evidence["profile_context"] = profile_evidence_context
 				return fallback_draft
+			evidence = {
+				"source": "enterprise_rag",
+				"error_message": rag_result.error_message,
+			}
+			if profile_evidence_context is not None:
+				evidence["profile_context"] = profile_evidence_context
 			return DraftRecord.new(
 				conversation_id=message.conversation_id,
 				source_message_id=message.message_id,
 				draft_text="",
 				intent=classification.intent,
 				risk_labels=decision.risk_labels,
-				evidence={
-					"source": "enterprise_rag",
-					"error_message": rag_result.error_message,
-				},
+				evidence=evidence,
 				approval_required=True,
 				send_allowed=False,
 				audit_status="rag_failed",
 				rag_session_id=rag_session_id,
 			)
 		if not self._rag_result_has_high_confidence(rag_result):
+			if profile_context is not None:
+				audit_status = "profile_rag_low_confidence"
+				return DraftRecord.new(
+					conversation_id=message.conversation_id,
+					source_message_id=message.message_id,
+					draft_text="",
+					intent=classification.intent,
+					risk_labels=[*decision.risk_labels, audit_status],
+					evidence={
+						"source": "profile_rag",
+						"reason": audit_status,
+						"profile_context": profile_evidence_context,
+						"rag_auth": rag_request["rag_auth"],
+						"citations": rag_result.citations,
+						"reasoning_summary": rag_result.reasoning_summary,
+					},
+					approval_required=True,
+					send_allowed=False,
+					audit_status=audit_status,
+					rag_session_id=rag_session_id,
+				)
 			direct_draft = self._build_direct_agent_draft(
 				message=message,
 				classification=classification,
@@ -243,6 +342,8 @@ class BossRagReplyService:
 				rag_result=rag_result,
 			)
 			if direct_draft.draft_text.strip():
+				if profile_evidence_context is not None:
+					direct_draft.evidence["profile_context"] = profile_evidence_context
 				return direct_draft
 		agent_answer = self._build_agent_answer(
 			message=message,
@@ -259,6 +360,8 @@ class BossRagReplyService:
 			"citations": rag_result.citations,
 			"reasoning_summary": reasoning_summary,
 		}
+		if profile_evidence_context is not None:
+			evidence["profile_context"] = profile_evidence_context
 		if agent_answer is not None and agent_answer.ok and agent_answer.answer.strip():
 			draft_text = agent_answer.answer
 			evidence_source = "boss_agent_ai"
@@ -274,6 +377,8 @@ class BossRagReplyService:
 				"reasoning_summary": reasoning_summary,
 				"agent_raw_response": agent_answer.raw_response,
 			}
+			if profile_evidence_context is not None:
+				evidence["profile_context"] = profile_evidence_context
 		elif agent_answer is not None and agent_answer.error_message:
 			evidence["agent_error_message"] = agent_answer.error_message
 		draft = DraftRecord.new(
@@ -289,6 +394,33 @@ class BossRagReplyService:
 			rag_session_id=rag_session_id,
 		)
 		return draft
+
+	def _resolve_profile_context(self, message: MessageRecord) -> dict[str, str] | None:
+		binding = self.profile_service.get_conversation_binding(message.conversation_id)
+		if binding is None:
+			return None
+		return {
+			"tenant_id": binding.tenant_id,
+			"user_id": binding.user_id,
+			"profile_id": binding.profile_id,
+			"knowledge_base_id": binding.knowledge_base_id,
+		}
+
+	@staticmethod
+	def _rag_auth_request_context(rag_auth_binding: object | None) -> dict[str, str]:
+		if rag_auth_binding is None:
+			return {
+				"auth_mode": "inherit",
+				"credential_ref": "",
+				"scope_type": "none",
+				"scope_id": "",
+			}
+		return {
+			"auth_mode": rag_auth_binding.auth_mode,
+			"credential_ref": rag_auth_binding.credential_ref,
+			"scope_type": rag_auth_binding.scope_type,
+			"scope_id": rag_auth_binding.scope_id,
+		}
 
 	def _build_direct_agent_draft(
 		self,
@@ -376,10 +508,23 @@ class BossRagReplyService:
 	def _rag_result_has_high_confidence(rag_result: RagAnswerProtocol) -> bool:
 		if not rag_result.ok or not rag_result.answer.strip():
 			return False
+		if BossRagReplyService._reasoning_summary_is_low_confidence(rag_result.reasoning_summary):
+			return False
 		citations = rag_result.citations or []
 		if not citations:
 			return False
 		return True
+
+	@staticmethod
+	def _reasoning_summary_is_low_confidence(reasoning_summary: dict[str, object] | None) -> bool:
+		if not isinstance(reasoning_summary, dict):
+			return False
+		low_confidence_values = {"low", "insufficient", "weak"}
+		for key in ("confidence", "confidence_level"):
+			value = reasoning_summary.get(key)
+			if isinstance(value, str) and value.strip().lower() in low_confidence_values:
+				return True
+		return False
 
 	def _build_fallback_draft(
 		self,
