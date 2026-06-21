@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import UTC, datetime
 from typing import Protocol
 
 from boss_agent_cli.display import error_contract_for_code
@@ -246,8 +245,6 @@ class BossPassiveWatcher:
         provider = self.pipeline_candidate_provider
         if provider is None:
             return []
-        if self._read_no_reply_followup_recently_sent():
-            return []
         candidates = [
             candidate
             for candidate in provider.list_pipeline_candidates()
@@ -454,46 +451,25 @@ class BossPassiveWatcher:
         security_id = str(candidate.get("security_id") or "").strip()
         if not security_id:
             return True
+        candidate_keys = _read_no_reply_identity_keys(candidate)
         for entry in self.store.list_audit_logs():
-            payload_security_id = str(entry.payload.get("security_id") or "")
+            payload_keys = _read_no_reply_payload_identity_keys(entry.payload)
             if entry.event_type == "read_no_reply_followup":
-                if payload_security_id == security_id and entry.payload.get("status") == "sent":
+                if (
+                    entry.payload.get("status") == "sent"
+                    and bool(candidate_keys & payload_keys)
+                ):
                     return True
                 continue
             if entry.event_type != "watcher_task":
-                continue
-            if payload_security_id != security_id:
                 continue
             if entry.payload.get("status") == "paused":
                 continue
             if (
                 entry.payload.get("stage") == "read_no_reply"
                 or entry.payload.get("intent") == "read_no_reply"
-            ):
+            ) and bool(candidate_keys & payload_keys):
                 return True
-        return False
-
-    def _read_no_reply_followup_recently_sent(self) -> bool:
-        interval_seconds = self.config.read_no_reply_followup_min_interval_seconds
-        if interval_seconds <= 0:
-            return False
-        now = datetime.now(UTC)
-        for entry in reversed(self.store.list_audit_logs()):
-            if entry.event_type == "read_no_reply_followup":
-                if entry.payload.get("status") != "sent":
-                    continue
-            elif entry.event_type == "watcher_task":
-                if (
-                    entry.payload.get("stage") != "read_no_reply"
-                    or entry.payload.get("status") != "sent"
-                ):
-                    continue
-            else:
-                continue
-            created_at = _parse_iso_datetime(entry.created_at)
-            if created_at is None:
-                continue
-            return (now - created_at).total_seconds() < interval_seconds
         return False
 
 
@@ -596,14 +572,42 @@ def _is_retryable_unsent_failure(payload: dict[str, object]) -> bool:
     return True
 
 
-def _parse_iso_datetime(value: str) -> datetime | None:
-    try:
-        parsed = datetime.fromisoformat(value)
-    except ValueError:
-        return None
-    if parsed.tzinfo is None:
-        return parsed.replace(tzinfo=UTC)
-    return parsed.astimezone(UTC)
+def _read_no_reply_identity_keys(data: dict[str, object]) -> set[tuple[str, ...]]:
+    target = data.get("target") if isinstance(data.get("target"), dict) else {}
+    keys: set[tuple[str, ...]] = set()
+    for field in (
+        "security_id",
+        "gid",
+        "friend_id",
+        "uid",
+        "encrypt_boss_id",
+        "recruiter_id",
+    ):
+        value = _first_non_empty(data.get(field), target.get(field))
+        if value:
+            keys.add((field, value))
+    recruiter_name = _first_non_empty(
+        data.get("recruiter_name"), target.get("recruiter_name")
+    )
+    company = _first_non_empty(data.get("company"), target.get("company"))
+    title = _first_non_empty(data.get("title"), target.get("title"))
+    if recruiter_name and company and title:
+        keys.add(("recruiter_company_title", recruiter_name, company, title))
+    return keys
+
+
+def _read_no_reply_payload_identity_keys(
+    payload: dict[str, object],
+) -> set[tuple[str, ...]]:
+    return _read_no_reply_identity_keys(payload)
+
+
+def _first_non_empty(*values: object) -> str:
+    for value in values:
+        normalized = str(value or "").strip()
+        if normalized:
+            return normalized
+    return ""
 
 
 def _platform_message_key(message: MessageRecord) -> tuple[str, ...] | None:

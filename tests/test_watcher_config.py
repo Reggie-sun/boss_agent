@@ -96,7 +96,6 @@ def test_watcher_config_reads_full_auto_flags():
             "boss_rag_watcher_poll_seconds": 3,
             "boss_rag_watcher_max_failures_per_conversation": 2,
             "boss_rag_read_no_reply_followup_limit_per_cycle": 2,
-            "boss_rag_read_no_reply_followup_min_interval_seconds": 120,
             "boss_rag_watcher_require_send_enabled": True,
             "boss_rag_proactive_resume_enabled": True,
             "boss_rag_send_enabled": True,
@@ -113,7 +112,6 @@ def test_watcher_config_reads_full_auto_flags():
     assert config.poll_seconds == 5
     assert config.max_failures_per_conversation == 2
     assert config.read_no_reply_followup_limit_per_cycle == 2
-    assert config.read_no_reply_followup_min_interval_seconds == 120
     assert config.require_send_enabled is True
     assert config.proactive_resume_enabled is True
     assert config.send_enabled is True
@@ -125,11 +123,9 @@ def test_watcher_config_clamps_explicit_zero_values():
             "boss_rag_watcher_poll_seconds": 0,
             "boss_rag_watcher_max_failures_per_conversation": 0,
             "boss_rag_read_no_reply_followup_limit_per_cycle": 0,
-            "boss_rag_read_no_reply_followup_min_interval_seconds": -5,
         }
     )
 
     assert config.poll_seconds == 5
     assert config.max_failures_per_conversation == 1
     assert config.read_no_reply_followup_limit_per_cycle == 1
-    assert config.read_no_reply_followup_min_interval_seconds == 0

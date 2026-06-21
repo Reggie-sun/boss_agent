@@ -925,43 +925,6 @@ def test_passive_watcher_limits_read_no_reply_pipeline_candidates_per_cycle(tmp_
     assert delivery.calls == []
 
 
-def test_passive_watcher_throttles_read_no_reply_after_recent_followup(tmp_path):
-    store = _store(tmp_path)
-    store.append_audit_log(
-        AuditLogRecord.new(
-            event_type="read_no_reply_followup",
-            entity_type="security_id",
-            entity_id="sec_recent",
-            payload={"security_id": "sec_recent", "status": "sent"},
-        )
-    )
-    delivery = _RecordingDelivery()
-    config = _config(tmp_path)
-    config.dry_run = True
-    config.live_sync = True
-    config.read_no_reply_followup_min_interval_seconds = 300
-    pipeline_provider = _PipelineProvider(
-        [{"stage": "read_no_reply", "security_id": "sec_next"}]
-    )
-    watcher = BossPassiveWatcher(
-        store=store,
-        service=_integration_service(store),
-        config=config,
-        delivery=delivery,
-        message_syncer=_Syncer(),
-        pipeline_candidate_provider=pipeline_provider,
-    )
-
-    result = watcher.run_once(live_sync=True)
-
-    assert pipeline_provider.calls == 0
-    assert result.processed == 0
-    assert result.skipped == 0
-    assert result.blocked == 0
-    assert result.tasks == []
-    assert delivery.calls == []
-
-
 def test_passive_watcher_skips_processed_read_no_reply_pipeline_candidate(tmp_path):
     store = _store(tmp_path)
     store.append_audit_log(
@@ -1000,6 +963,74 @@ def test_passive_watcher_skips_processed_read_no_reply_pipeline_candidate(tmp_pa
     assert result.tasks == [
         {
             "security_id": "sec_read",
+            "stage": "read_no_reply",
+            "status": "skipped_duplicate",
+        }
+    ]
+    assert delivery.calls == []
+
+
+def test_passive_watcher_skips_read_no_reply_when_boss_identity_was_followed_up(tmp_path):
+    store = _store(tmp_path)
+    store.append_audit_log(
+        AuditLogRecord.new(
+            event_type="watcher_task",
+            entity_type="security_id",
+            entity_id="old_sec",
+            payload={
+                "security_id": "old_sec",
+                "stage": "read_no_reply",
+                "intent": "read_no_reply",
+                "status": "sent",
+                "target": {
+                    "security_id": "old_sec",
+                    "gid": "boss_gid_001",
+                    "friend_id": "friend_001",
+                    "uid": "boss_uid_001",
+                    "recruiter_id": "boss_recruiter_001",
+                    "recruiter_name": "李女士",
+                    "company": "测试公司",
+                    "title": "AI 工程师",
+                },
+            },
+        )
+    )
+    delivery = _RecordingDelivery()
+    config = _config(tmp_path)
+    config.dry_run = True
+    config.live_sync = True
+    pipeline_provider = _PipelineProvider(
+        [
+            {
+                "stage": "read_no_reply",
+                "security_id": "new_sec",
+                "gid": "boss_gid_001",
+                "friend_id": "friend_001",
+                "uid": "boss_uid_001",
+                "recruiter_id": "boss_recruiter_001",
+                "recruiter_name": "李女士",
+                "company": "测试公司",
+                "title": "AI 工程师",
+            }
+        ]
+    )
+    watcher = BossPassiveWatcher(
+        store=store,
+        service=_integration_service(store),
+        config=config,
+        delivery=delivery,
+        message_syncer=_Syncer(),
+        pipeline_candidate_provider=pipeline_provider,
+    )
+
+    result = watcher.run_once(live_sync=True)
+
+    assert pipeline_provider.calls == 1
+    assert result.processed == 0
+    assert result.skipped == 1
+    assert result.tasks == [
+        {
+            "security_id": "new_sec",
             "stage": "read_no_reply",
             "status": "skipped_duplicate",
         }
