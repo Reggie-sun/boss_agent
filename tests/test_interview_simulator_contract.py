@@ -1,4 +1,7 @@
+import re
 from pathlib import Path
+
+from boss_agent_cli.api.endpoints import INDUSTRY_CODES
 
 
 def test_interview_simulator_uses_shared_boss_bridge_error_helpers():
@@ -122,6 +125,31 @@ def test_interview_simulator_profile_binding_uses_cli_supported_source():
 	assert 'binding_source: "manual"' in profile_hub
 	assert "normalizeBindingSource" in profile_bridge
 	assert '"manual"' in profile_bridge
+
+
+def test_interview_simulator_industry_options_match_boss_lookup_table():
+	repo_root = Path(__file__).resolve().parents[1]
+	app = (repo_root / "demo" / "interview-simulator" / "src" / "App.jsx").read_text(encoding="utf-8")
+
+	match = re.search(r"const bossIndustryOptions = \[(.*?)\];", app, re.S)
+	assert match is not None
+	option_block = match.group(1)
+
+	assert '""' in option_block
+	assert '"不限"' not in option_block
+	for industry in INDUSTRY_CODES:
+		if industry == "不限":
+			continue
+		assert f'"{industry}"' in option_block
+	for local_label in (
+		"机器学习",
+		"深度学习",
+		"智能硬件",
+		"智能硬件/消费电子",
+		"计算机软件",
+		"计算机服务",
+	):
+		assert f'"{local_label}"' in option_block
 
 
 def test_interview_simulator_agent_ask_uses_bound_boss_conversation_id():

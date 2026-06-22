@@ -1,6 +1,7 @@
 """Tests for search_filters module — list-page prefiltering and pipeline."""
 import pytest
 
+from boss_agent_cli.api.endpoints import INDUSTRY_CODES
 from boss_agent_cli.search_filters import (
 	SearchFilterCriteria,
 	SearchUrlParseError,
@@ -72,6 +73,13 @@ class TestSearchUrlParsing:
 	def test_resolve_search_code_params_allows_custom_salary_ranges(self):
 		params = resolve_search_code_params(salary="5-7K")
 		assert "salary" not in params
+
+	def test_resolve_search_code_params_allows_local_only_industry_labels(self):
+		params = resolve_search_code_params(industry="机器学习,人工智能")
+		assert params["industry"] == INDUSTRY_CODES["人工智能"]
+
+		params = resolve_search_code_params(industry="深度学习")
+		assert "industry" not in params
 
 
 # ── Experience threshold ────────────────────────────────────────────
@@ -287,6 +295,21 @@ class TestPrefilterJob:
 	def test_ai_industry_filter_allows_real_software_card_labels(self, industry):
 		raw = _make_raw(industry=industry)
 		criteria = SearchFilterCriteria(query="RAG", industry="人工智能")
+		ok, reasons = prefilter_job(raw, criteria)
+		assert ok is True
+		assert reasons == []
+
+	def test_ai_industry_filter_allows_smart_hardware_card_label(self):
+		raw = _make_raw(industry="智能硬件/消费电子")
+		criteria = SearchFilterCriteria(query="RAG", industry="人工智能")
+		ok, reasons = prefilter_job(raw, criteria)
+		assert ok is True
+		assert reasons == []
+
+	@pytest.mark.parametrize("industry", ["机器学习", "深度学习"])
+	def test_local_ai_direction_filter_allows_broad_ai_card_labels(self, industry):
+		raw = _make_raw(industry="人工智能")
+		criteria = SearchFilterCriteria(query="RAG", industry=industry)
 		ok, reasons = prefilter_job(raw, criteria)
 		assert ok is True
 		assert reasons == []

@@ -38,13 +38,28 @@ WELFARE_KEYWORDS: dict[str, list[str]] = {
 
 _INDUSTRY_CARD_COMPATIBLE_LABELS: dict[str, set[str]] = {
 	"互联网": {"人工智能", "软件/信息服务", "计算机软件", "计算机服务", "机器学习", "深度学习"},
-	"人工智能": {"互联网", "软件/信息服务", "计算机软件", "计算机服务", "机器学习", "深度学习"},
+	"人工智能": {"互联网", "软件/信息服务", "计算机软件", "计算机服务", "机器学习", "深度学习", "智能硬件", "智能硬件/消费电子"},
 	"软件/信息服务": {"计算机软件", "计算机服务"},
+	"机器学习": {"人工智能", "互联网", "软件/信息服务", "计算机软件", "计算机服务"},
+	"深度学习": {"人工智能", "互联网", "软件/信息服务", "计算机软件", "计算机服务"},
+	"智能硬件": {"人工智能", "互联网", "软件/信息服务", "智能硬件/消费电子"},
+	"智能硬件/消费电子": {"人工智能", "互联网", "软件/信息服务", "智能硬件"},
+	"计算机软件": {"互联网", "人工智能", "软件/信息服务", "计算机服务"},
+	"计算机服务": {"互联网", "人工智能", "软件/信息服务", "计算机软件"},
 	"大数据": {"互联网", "软件/信息服务"},
 	"云计算": {"互联网", "软件/信息服务"},
 	"电子商务": {"互联网"},
 	"游戏": {"互联网", "软件/信息服务"},
 }
+
+_LOCAL_ONLY_INDUSTRY_LABELS: set[str] = (
+	set(_INDUSTRY_CARD_COMPATIBLE_LABELS)
+	| {
+		label
+		for compatible_labels in _INDUSTRY_CARD_COMPATIBLE_LABELS.values()
+		for label in compatible_labels
+	}
+) - set(endpoints.INDUSTRY_CODES)
 
 _MAX_FILTER_PAGES = 5
 _WELFARE_WORKERS = 3
@@ -156,6 +171,25 @@ def resolve_salary_code_param(value: str | None) -> str | None:
 		raise
 
 
+def resolve_industry_code_param(value: str | None) -> str | None:
+	"""Resolve official BOSS industries while allowing local-only card labels."""
+	if not value:
+		return None
+	codes: list[str] = []
+	for part in _split_multi_value(value):
+		if part.isdigit():
+			codes.append(part)
+			continue
+		code = endpoints.INDUSTRY_CODES.get(part)
+		if code is not None:
+			codes.append(code)
+			continue
+		if part in _LOCAL_ONLY_INDUSTRY_LABELS:
+			continue
+		raise ValueError(f"未知行业类型: {part}")
+	return ",".join(codes) if codes else None
+
+
 def resolve_search_code_params(
 	*,
 	salary: str | None = None,
@@ -174,7 +208,7 @@ def resolve_search_code_params(
 		params["experience"] = code
 	if code := resolve_lookup_codes(education, endpoints.EDUCATION_CODES, "学历要求"):
 		params["degree"] = code
-	if code := resolve_lookup_codes(industry, endpoints.INDUSTRY_CODES, "行业类型"):
+	if code := resolve_industry_code_param(industry):
 		params["industry"] = code
 	if code := resolve_lookup_codes(scale, endpoints.SCALE_CODES, "公司规模"):
 		params["scale"] = code
