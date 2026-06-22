@@ -120,6 +120,129 @@ def test_greet_custom_message_keeps_existing_agent_disclosure(mock_cache_cls, mo
 	mock_platform.greet.assert_called_once_with("sec_001", "job_001", message)
 
 
+@patch("boss_agent_cli.commands.greet.get_platform_instance")
+@patch("boss_agent_cli.commands.greet.AuthManager")
+@patch("boss_agent_cli.commands.greet.CacheStore")
+def test_greet_sends_attachments_after_success(mock_cache_cls, mock_auth_cls, mock_get_platform, legacy_args, tmp_path):
+	mock_cache = _ctx_mock(mock_cache_cls)
+	mock_cache.is_greeted.return_value = False
+	mock_platform = _ctx_mock(mock_get_platform)
+	mock_platform.greet.return_value = {"code": 0, "zpData": {}}
+	mock_platform.send_chat_attachment.return_value = {"code": 0, "method": "chat-attachment-upload"}
+	mock_platform.is_success.return_value = True
+	first = tmp_path / "proof1.png"
+	second = tmp_path / "proof2.png"
+	first.write_bytes(b"\x89PNG\r\n\x1a\n")
+	second.write_bytes(b"\x89PNG\r\n\x1a\n")
+
+	runner = CliRunner()
+	result = runner.invoke(
+		cli,
+		[
+			*legacy_args,
+			"greet",
+			"sec_001",
+			"job_001",
+			"--attachment",
+			str(first),
+			"--attachment",
+			str(second),
+		],
+	)
+
+	assert result.exit_code == 0, result.output
+	parsed = json.loads(result.output)
+	assert parsed["ok"] is True
+	assert parsed["data"]["attachments_sent"] == [str(first.resolve()), str(second.resolve())]
+	mock_platform.greet.assert_called_once_with("sec_001", "job_001", _DEFAULT_AGENT_GREET_MESSAGE)
+	assert [call.args for call in mock_platform.send_chat_attachment.call_args_list] == [
+		("sec_001", str(first.resolve())),
+		("sec_001", str(second.resolve())),
+	]
+	mock_cache.record_greet.assert_called_once_with("sec_001", "job_001")
+
+
+@patch("boss_agent_cli.commands.greet.get_platform_instance")
+@patch("boss_agent_cli.commands.greet.AuthManager")
+@patch("boss_agent_cli.commands.greet.CacheStore")
+def test_greet_invalid_attachment_fails_before_send(mock_cache_cls, mock_auth_cls, mock_get_platform, legacy_args, tmp_path):
+	mock_cache = _ctx_mock(mock_cache_cls)
+	mock_cache.is_greeted.return_value = False
+	mock_platform = _ctx_mock(mock_get_platform)
+	missing = tmp_path / "missing.png"
+
+	runner = CliRunner()
+	result = runner.invoke(
+		cli,
+		["--json", *legacy_args, "greet", "sec_001", "job_001", "--attachment", str(missing)],
+	)
+
+	assert result.exit_code == 1
+	parsed = json.loads(result.output)
+	assert parsed["ok"] is False
+	assert parsed["error"]["code"] == "INVALID_ATTACHMENT"
+	mock_platform.greet.assert_not_called()
+	mock_platform.send_chat_attachment.assert_not_called()
+
+
+@patch("boss_agent_cli.commands.greet.time")
+@patch("boss_agent_cli.commands.greet.get_platform_instance")
+@patch("boss_agent_cli.commands.greet.AuthManager")
+@patch("boss_agent_cli.commands.greet.CacheStore")
+def test_batch_greet_sends_attachments_to_each_successful_candidate(
+	mock_cache_cls,
+	mock_auth_cls,
+	mock_client_cls,
+	mock_time,
+	legacy_args,
+	tmp_path,
+):
+	mock_cache = _ctx_mock(mock_cache_cls)
+	mock_cache.is_greeted.return_value = False
+	mock_client = _ctx_mock(mock_client_cls)
+	mock_client.search_jobs.return_value = {
+		"zpData": {"jobList": [_make_raw_job("Go 1", "sec_1"), _make_raw_job("Go 2", "sec_2")]}
+	}
+	mock_client.greet.return_value = {"code": 0, "zpData": {}}
+	mock_client.send_chat_attachment.return_value = {"code": 0, "method": "chat-attachment-upload"}
+	mock_client.is_success.return_value = True
+	mock_time.sleep = MagicMock()
+	first = tmp_path / "proof1.png"
+	second = tmp_path / "proof2.png"
+	first.write_bytes(b"\x89PNG\r\n\x1a\n")
+	second.write_bytes(b"\x89PNG\r\n\x1a\n")
+
+	runner = CliRunner()
+	result = runner.invoke(
+		cli,
+		[
+			*legacy_args,
+			"batch-greet",
+			"golang",
+			"--count",
+			"2",
+			"--attachment",
+			str(first),
+			"--attachment",
+			str(second),
+		],
+	)
+
+	assert result.exit_code == 0, result.output
+	parsed = json.loads(result.output)
+	assert parsed["ok"] is True
+	assert parsed["data"]["total_greeted"] == 2
+	assert parsed["data"]["total_failed"] == 0
+	for item in parsed["data"]["greeted"]:
+		assert item["attachments_sent"] == [str(first.resolve()), str(second.resolve())]
+	assert [call.args for call in mock_client.send_chat_attachment.call_args_list] == [
+		("sec_1", str(first.resolve())),
+		("sec_1", str(second.resolve())),
+		("sec_2", str(first.resolve())),
+		("sec_2", str(second.resolve())),
+	]
+
+
 # Note: hook veto 分支已由 tests/test_hooks.py 独立覆盖，Click runner
 # 不便注入 ctx.obj["hooks"]，此处不重复测试。
 

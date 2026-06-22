@@ -1587,6 +1587,11 @@ button {
   min-width: 150px;
 }
 
+.apply-input--attachments {
+  flex: 2 1 360px;
+  min-width: 260px;
+}
+
 .apply-input--count {
   flex: 0 0 92px;
   min-width: 84px;
@@ -2246,6 +2251,7 @@ button {
   .apply-input--stage,
   .apply-input--job-type,
   .apply-input--welfare,
+  .apply-input--attachments,
   .apply-input--count,
   .apply-btn,
   .apply-field {

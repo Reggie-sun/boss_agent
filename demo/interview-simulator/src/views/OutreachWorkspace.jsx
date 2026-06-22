@@ -182,6 +182,12 @@ export function OutreachWorkspace({
               value={bossSearchForm.welfare}
               onChange={(event) => updateBossSearchForm("welfare", event.target.value)}
             />
+            <input
+              className="apply-input apply-input--attachments"
+              placeholder="附件路径，逗号或换行分隔"
+              value={bossSearchForm.attachments}
+              onChange={(event) => updateBossSearchForm("attachments", event.target.value)}
+            />
             <select
               className="apply-input apply-input--count"
               value={bossSearchForm.count}

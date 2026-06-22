@@ -674,6 +674,46 @@ def test_send_resume_attachment_falls_back_to_resume_toolbar_upload(tmp_path):
 	fake_send_button.click.assert_not_called()
 
 
+def test_send_chat_attachment_uploads_image_without_resume_request_agree(tmp_path):
+	client = BossClient(_StubAuth())
+	client._navigate_to_chat = MagicMock(return_value={"ok": True, "url": "https://www.zhipin.com/web/geek/chat"})
+	image_file = tmp_path / "proof.png"
+	image_file.write_bytes(b"\x89PNG\r\n\x1a\n")
+
+	fake_file_input = MagicMock()
+	fake_locator = MagicMock()
+	fake_locator.first = fake_file_input
+	fake_page = MagicMock()
+	fake_page.evaluate.side_effect = [
+		{"ok": True, "method": "dom"},
+		{"ok": True, "nameMatch": True},
+		0,
+		{"ok": True, "method": "chat-attachment-open"},
+		{"ok": True, "method": "chat-attachment-input-ready"},
+		{"ok": True, "method": "chat-attachment-upload", "buttonText": "发送"},
+		{"seenFileName": True, "fileNameCount": 1, "beforeCount": 0},
+	]
+	fake_page.locator.return_value = fake_locator
+	fake_browser = MagicMock()
+	fake_browser._page = fake_page
+	client._get_browser = MagicMock(return_value=fake_browser)
+
+	result = client.send_chat_attachment(
+		"sid",
+		str(image_file),
+		target_recruiter_name="蔡欣",
+		target_company="光昱智能",
+		target_title="招聘经理",
+	)
+
+	assert result["code"] == 0
+	assert result["method"] == "chat-attachment-upload"
+	fake_page.reload.assert_called_once_with(wait_until="domcontentloaded", timeout=15000)
+	fake_file_input.set_input_files.assert_called_once_with(str(image_file.resolve()))
+	evaluated_scripts = "\n".join(str(call.args[0]) for call in fake_page.evaluate.call_args_list)
+	assert "resume request agree button" not in evaluated_scripts
+
+
 # ── 生命周期 / close 等 ─────────────────────────────────────────────────
 
 

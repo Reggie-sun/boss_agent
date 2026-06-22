@@ -439,6 +439,12 @@ SCHEMA_DATA = {
 					"default": "",
 					"description": "自定义打招呼消息（发送时会表明求职助理 Agent 身份）",
 				},
+				"--attachment": {
+					"type": "string",
+					"default": [],
+					"multiple": True,
+					"description": "打招呼成功后发送的聊天附件路径；可重复传入",
+				},
 			},
 		},
 		"batch-greet": {
@@ -506,6 +512,12 @@ SCHEMA_DATA = {
 					"type": "bool",
 					"default": False,
 					"description": "仅模拟执行，不实际打招呼",
+				},
+				"--attachment": {
+					"type": "string",
+					"default": [],
+					"multiple": True,
+					"description": "每个成功打招呼候选都发送的聊天附件路径；可重复传入",
 				},
 			},
 		},

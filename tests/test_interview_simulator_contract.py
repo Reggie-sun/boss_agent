@@ -34,6 +34,20 @@ def test_interview_simulator_auto_greet_requires_profile_gate():
 	assert '"profile",\n      "config",\n      "get"' in vite
 
 
+def test_interview_simulator_auto_greet_forwards_attachment_paths():
+	repo_root = Path(__file__).resolve().parents[1]
+	vite = (repo_root / "demo" / "interview-simulator" / "vite.config.mjs").read_text(encoding="utf-8")
+	app = (repo_root / "demo" / "interview-simulator" / "src" / "App.jsx").read_text(encoding="utf-8")
+	outreach = (
+		repo_root / "demo" / "interview-simulator" / "src" / "views" / "OutreachWorkspace.jsx"
+	).read_text(encoding="utf-8")
+
+	assert "normalizeAttachmentPaths" in vite
+	assert 'args.push("--attachment", attachmentPath)' in vite
+	assert "attachments: bossSearchForm.attachments" in app
+	assert 'updateBossSearchForm("attachments"' in outreach
+
+
 def test_interview_simulator_exposes_profile_bridge_without_removing_existing_flows():
 	repo_root = Path(__file__).resolve().parents[1]
 	vite = (repo_root / "demo" / "interview-simulator" / "vite.config.mjs").read_text(encoding="utf-8")

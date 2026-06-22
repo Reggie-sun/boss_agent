@@ -120,6 +120,7 @@ const defaultBossSearchForm = {
   stage: "",
   jobType: "全职",
   welfare: "",
+  attachments: "",
   count: "10",
 };
 
@@ -679,6 +680,7 @@ export function App() {
           jobType: bossSearchForm.jobType,
           welfare: bossSearchForm.welfare,
           count: bossSearchForm.count,
+          attachments: bossSearchForm.attachments,
           stream: true,
           profile_id: selectedProfileId,
           commercial_profile_required: true,

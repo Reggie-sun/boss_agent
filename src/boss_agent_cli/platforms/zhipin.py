@@ -66,6 +66,9 @@ class BossPlatform(Platform):
 	def greet(self, security_id: str, job_id: str, message: str = "") -> dict[str, Any]:
 		return self._client.greet(security_id, job_id, message)
 
+	def send_chat_attachment(self, security_id: str, file_path: str, **target: Any) -> dict[str, Any]:
+		return self._client.send_chat_attachment(security_id, file_path, **target)
+
 	def apply(self, security_id: str, job_id: str, lid: str = "", message: str = "") -> dict[str, Any]:
 		return self._client.apply(security_id, job_id, lid, message=message)
 

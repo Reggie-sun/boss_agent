@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 import random
 import time
 
@@ -97,15 +98,79 @@ def _emit_batch_greet_progress(enabled: bool, *, current: int, total: int, item:
 	)
 
 
+def _resolve_attachment_paths(ctx: click.Context, command: str, attachments: tuple[str, ...]) -> list[str] | None:
+	paths: list[str] = []
+	for raw_path in attachments:
+		path = Path(raw_path).expanduser().resolve()
+		if not path.is_file():
+			handle_error_output(
+				ctx,
+				command,
+				code="INVALID_ATTACHMENT",
+				message=f"附件文件不存在或不是文件: {path}",
+				recoverable=True,
+				recovery_action="检查 --attachment 路径后重试",
+			)
+			return None
+		paths.append(str(path))
+	return paths
+
+
+def _send_chat_attachments(
+	ctx: click.Context,
+	command: str,
+	platform,
+	security_id: str,
+	attachment_paths: list[str],
+	**target: str,
+) -> tuple[list[str], dict | None]:
+	sent: list[str] = []
+	for attachment_path in attachment_paths:
+		try:
+			resp = platform.send_chat_attachment(security_id, attachment_path, **target)
+		except NotImplementedError:
+			return sent, {
+				"code": "ATTACHMENT_NOT_SUPPORTED",
+				"message": "当前平台暂不支持打招呼后发送聊天附件",
+				"attachment": attachment_path,
+			}
+		except Exception as exc:
+			return sent, {
+				"code": "ATTACHMENT_FAILED",
+				"message": f"附件发送失败: {exc}",
+				"attachment": attachment_path,
+			}
+		if not platform.is_success(resp):
+			error_code, error_detail = platform.parse_error(resp)
+			return sent, {
+				"code": error_code if error_code != "UNKNOWN" else "ATTACHMENT_FAILED",
+				"message": resp.get("message") or error_detail or "附件发送失败",
+				"attachment": attachment_path,
+				"response": resp,
+			}
+		sent.append(attachment_path)
+	return sent, None
+
+
 @click.command("greet")
 @click.argument("security_id")
 @click.argument("job_id")
 @click.option("--message", default="", help="自定义打招呼消息（发送时会表明求职助理 Agent 身份）")
+@click.option(
+	"--attachment",
+	"attachments",
+	multiple=True,
+	type=click.Path(dir_okay=False),
+	help="打招呼成功后发送的聊天附件；可重复传入，支持 Boss 页面 file input 允许的图片/PDF/文档",
+)
 @click.pass_context
 @handle_auth_errors("greet")
-def greet_cmd(ctx: click.Context, security_id: str, job_id: str, message: str) -> None:
+def greet_cmd(ctx: click.Context, security_id: str, job_id: str, message: str, attachments: tuple[str, ...]) -> None:
 	"""向指定招聘者打招呼"""
 	if not require_compliance_allowed(ctx, "greet"):
+		return
+	attachment_paths = _resolve_attachment_paths(ctx, "greet", attachments)
+	if attachment_paths is None:
 		return
 
 	data_dir = ctx.obj["data_dir"]
@@ -160,6 +225,29 @@ def greet_cmd(ctx: click.Context, security_id: str, job_id: str, message: str) -
 				return
 
 			cache.record_greet(security_id, job_id)
+			attachments_sent, attachment_error = _send_chat_attachments(
+				ctx,
+				"greet",
+				platform,
+				security_id,
+				attachment_paths,
+			)
+			if attachment_error:
+				handle_error_output(
+					ctx,
+					"greet",
+					code=attachment_error["code"],
+					message=attachment_error["message"],
+					recoverable=True,
+					recovery_action="确认聊天页和附件上传入口可用后重试附件发送",
+					details={
+						"greet_sent": True,
+						"attachments_sent": attachments_sent,
+						"attachment": attachment_error.get("attachment", ""),
+						"response": attachment_error.get("response"),
+					},
+				)
+				return
 
 			# greet_after hook
 			if hooks:
@@ -176,6 +264,7 @@ def greet_cmd(ctx: click.Context, security_id: str, job_id: str, message: str) -
 				"security_id": security_id,
 				"job_id": job_id,
 				"message": "打招呼成功",
+				"attachments_sent": attachments_sent,
 			}
 			hints = {
 				"next_actions": [
@@ -222,6 +311,13 @@ def greet_cmd(ctx: click.Context, security_id: str, job_id: str, message: str) -
 @click.option("--welfare", default=None, help="福利筛选（如 双休、五险一金），逗号分隔时按 AND 匹配")
 @click.option("--count", default=10, help="打招呼数量上限（最大 150）")
 @click.option("--dry-run", is_flag=True, default=False, help="仅模拟执行，不实际打招呼")
+@click.option(
+	"--attachment",
+	"attachments",
+	multiple=True,
+	type=click.Path(dir_okay=False),
+	help="每个成功打招呼候选都发送的聊天附件；可重复传入",
+)
 @click.option("--progress-json", is_flag=True, default=False, hidden=True, help="向 stderr 输出自动开聊进度 JSONL")
 @click.pass_context
 @handle_auth_errors("batch-greet")
@@ -239,10 +335,14 @@ def batch_greet_cmd(
 	welfare: str | None,
 	count: int,
 	dry_run: bool,
+	attachments: tuple[str, ...],
 	progress_json: bool,
 ) -> None:
 	"""搜索后批量打招呼（上限 150）"""
 	if not require_compliance_allowed(ctx, "batch-greet"):
+		return
+	attachment_paths = _resolve_attachment_paths(ctx, "batch-greet", attachments)
+	if attachment_paths is None:
 		return
 
 	data_dir = ctx.obj["data_dir"]
@@ -377,6 +477,34 @@ def batch_greet_cmd(
 								error_msg = f"{error_code}: {error_detail}"
 							raise RuntimeError(error_msg)
 						cache.record_greet(item["security_id"], item["job_id"])
+						attachments_sent, attachment_error = _send_chat_attachments(
+							ctx,
+							"batch-greet",
+							platform,
+							item["security_id"],
+							attachment_paths,
+							target_recruiter_name=str(item.get("boss_name") or ""),
+							target_company=str(item.get("company") or ""),
+							target_title=str(item.get("boss_title") or item.get("title") or ""),
+						)
+						if attachment_error:
+							error_msg = attachment_error["message"]
+							results.append(
+								{
+									"security_id": item["security_id"],
+									"job_id": item["job_id"],
+									"title": item["title"],
+									"company": item["company"],
+									"status": "failed",
+									"error": error_msg,
+									"greet_sent": True,
+									"attachments_sent": attachments_sent,
+									"attachment": attachment_error.get("attachment", ""),
+								}
+							)
+							stopped_reason = attachment_error["code"]
+							stopped_error = error_msg
+							break
 						results.append(
 							{
 								"security_id": item["security_id"],
@@ -384,6 +512,7 @@ def batch_greet_cmd(
 								"title": item["title"],
 								"company": item["company"],
 								"status": "success",
+								"attachments_sent": attachments_sent,
 							}
 						)
 						success = True

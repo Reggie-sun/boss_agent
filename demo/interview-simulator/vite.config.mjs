@@ -51,6 +51,16 @@ function resolveBossAutoGreetCommandTimeoutMs(commandTimeoutMs, rawCount) {
   return Math.max(commandTimeoutMs || 0, batchTimeoutMs);
 }
 
+function normalizeAttachmentPaths(value) {
+  if (Array.isArray(value)) {
+    return value.map((item) => String(item || "").trim()).filter(Boolean);
+  }
+  return String(value || "")
+    .split(/[\n,]+/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
 function loadBridgeConfig() {
   const repoRoot = path.resolve(process.cwd(), "..", "..");
   const repoEnv = parseEnvFile(path.join(repoRoot, ".env"));
@@ -1429,6 +1439,9 @@ function createRagBridgePlugin() {
         const stage = String(body.stage || "").trim();
         const jobType = String(body.jobType || body.job_type || "").trim();
         const welfare = String(body.welfare || "").trim();
+        const attachmentPaths = normalizeAttachmentPaths(
+          body.attachments || body.attachmentPaths || body.attachment_paths,
+        );
         const rawCount = Number.parseInt(String(body.count || "3"), 10);
         const count = Number.isFinite(rawCount)
           ? Math.min(Math.max(rawCount, 1), MAX_BOSS_AUTO_GREET_COUNT)
@@ -1471,6 +1484,9 @@ function createRagBridgePlugin() {
         if (stage) args.push("--stage", stage);
         if (jobType) args.push("--job-type", jobType);
         if (welfare) args.push("--welfare", welfare);
+        for (const attachmentPath of attachmentPaths) {
+          args.push("--attachment", attachmentPath);
+        }
         if (stream) args.push("--progress-json");
 
         if (stream) {

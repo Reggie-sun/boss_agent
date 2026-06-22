@@ -798,6 +798,8 @@ class BossClient:
 		security_id: str,
 		file_path: str,
 		*,
+		allow_request_card: bool = True,
+		refresh_chat_page: bool = False,
 		target_recruiter_name: str = "",
 		target_company: str = "",
 		target_title: str = "",
@@ -827,22 +829,24 @@ class BossClient:
 				target_encrypt_boss_id=target_encrypt_boss_id,
 				target_recruiter_id=target_recruiter_id,
 			)
-			try:
-				agree_result = self._evaluate_candidate_chat_script(
-					browser,
-					self._AGREE_RESUME_ATTACHMENT_REQUEST_SCRIPT,
-					{"sid": security_id, "target": target},
-				)
-			except Exception as exc:
-				return {"code": -1, "message": f"点击附件简历确认失败: {exc}", "detail": navigation}
-			if isinstance(agree_result, dict) and agree_result.get("ok"):
-				return {
-					"code": 0,
-					"message": "附件简历请求已同意",
-					"method": "resume-request-agree",
-					"file": str(attachment),
-					"detail": {"navigation": navigation, "agree_result": agree_result},
-				}
+			agree_result: dict[str, Any] | None = None
+			if allow_request_card:
+				try:
+					agree_result = self._evaluate_candidate_chat_script(
+						browser,
+						self._AGREE_RESUME_ATTACHMENT_REQUEST_SCRIPT,
+						{"sid": security_id, "target": target},
+					)
+				except Exception as exc:
+					return {"code": -1, "message": f"点击附件简历确认失败: {exc}", "detail": navigation}
+				if isinstance(agree_result, dict) and agree_result.get("ok"):
+					return {
+						"code": 0,
+						"message": "附件简历请求已同意",
+						"method": "resume-request-agree",
+						"file": str(attachment),
+						"detail": {"navigation": navigation, "agree_result": agree_result},
+					}
 			upload_page = browser.ensure_playwright_candidate_chat_page()
 			if not isinstance(upload_page, dict) or not upload_page.get("ok"):
 				return {
@@ -883,6 +887,14 @@ class BossClient:
 			raise RuntimeError(f"{stage}: {last_error}") from last_error
 
 		try:
+			if refresh_chat_page:
+				try:
+					browser._page.reload(wait_until="domcontentloaded", timeout=15000)
+				except Exception:
+					try:
+						browser._page.goto("https://www.zhipin.com/web/geek/chat", wait_until="domcontentloaded", timeout=15000)
+					except Exception:
+						pass
 			try:
 				open_result = browser._page.evaluate(
 					'''({ sid, recruiterName, company, title }) => {
@@ -1085,9 +1097,10 @@ class BossClient:
 				}''',
 				{"name": attachment.name},
 			)
-			try:
-				agree_result = browser._page.evaluate(
-					'''() => {
+			if allow_request_card:
+				try:
+					agree_result = browser._page.evaluate(
+						'''() => {
 						const conversation = document.querySelector(".chat-conversation");
 						if (!conversation) return { ok: false, reason: "conversation not found" };
 						const visible = (el) => !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length);
@@ -1104,22 +1117,22 @@ class BossClient:
 						button.click();
 						return { ok: true, method: "resume-request-agree", agreeButtonCount: agreeButtons.length };
 					}'''
-				)
-			except Exception as exc:
-				if not _is_navigation_context_error(exc):
-					raise RuntimeError(f"click-resume-request-agree: {exc}") from exc
-				agree_result = {
-					"ok": True,
-					"method": "resume-request-agree",
-					"warning": str(exc),
-				}
-			if isinstance(agree_result, dict) and agree_result.get("ok"):
-				verify: dict[str, Any] | None = None
-				for _ in range(12):
-					time.sleep(1)
-					verify = _safe_evaluate(
-						"verify-resume-request-agree",
-						'''({ name, beforeCount }) => {
+					)
+				except Exception as exc:
+					if not _is_navigation_context_error(exc):
+						raise RuntimeError(f"click-resume-request-agree: {exc}") from exc
+					agree_result = {
+						"ok": True,
+						"method": "resume-request-agree",
+						"warning": str(exc),
+					}
+				if isinstance(agree_result, dict) and agree_result.get("ok"):
+					verify: dict[str, Any] | None = None
+					for _ in range(12):
+						time.sleep(1)
+						verify = _safe_evaluate(
+							"verify-resume-request-agree",
+							'''({ name, beforeCount }) => {
 							const conversationText = document.querySelector(".chat-conversation")?.innerText || "";
 							const fileNameCount = conversationText.split(name).length - 1;
 							const visible = (el) => !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length);
@@ -1135,25 +1148,25 @@ class BossClient:
 								textSample: conversationText.replace(/\\s+/g, " ").trim().slice(0, 240),
 							};
 						}''',
-						{"name": attachment.name, "beforeCount": int(before_file_count or 0)},
-					)
-					if isinstance(verify, dict) and (
-						verify.get("seenFileName") or int(verify.get("agreeButtonCount") or 0) == 0
-					):
-						return {
-							"code": 0,
-							"message": "附件简历请求已同意",
-							"method": "resume-request-agree",
-							"file": str(attachment),
-							"detail": {"agree_result": agree_result, "verify": verify},
-						}
-				return {
-					"code": -1,
-					"message": "已点击附件简历同意按钮，但未能确认 Boss 聊天页状态变化",
-					"method": "resume-request-agree",
-					"file": str(attachment),
-					"detail": {"agree_result": agree_result, "verify": verify},
-				}
+							{"name": attachment.name, "beforeCount": int(before_file_count or 0)},
+						)
+						if isinstance(verify, dict) and (
+							verify.get("seenFileName") or int(verify.get("agreeButtonCount") or 0) == 0
+						):
+							return {
+								"code": 0,
+								"message": "附件简历请求已同意",
+								"method": "resume-request-agree",
+								"file": str(attachment),
+								"detail": {"agree_result": agree_result, "verify": verify},
+							}
+					return {
+						"code": -1,
+						"message": "已点击附件简历同意按钮，但未能确认 Boss 聊天页状态变化",
+						"method": "resume-request-agree",
+						"file": str(attachment),
+						"detail": {"agree_result": agree_result, "verify": verify},
+					}
 			open_toolbar_result = _safe_evaluate(
 				"open-resume-toolbar",
 				'''() => {
@@ -1332,7 +1345,7 @@ class BossClient:
 					}
 			return {
 				"code": -1,
-				"message": "已走 Boss 发简历工具栏上传控件，但未确认看到 PDF 文件名",
+				"message": "已走 Boss 发简历工具栏上传控件，但未确认看到附件文件名",
 				"method": "resume-toolbar-upload",
 				"file": str(attachment),
 				"detail": {
@@ -1344,6 +1357,42 @@ class BossClient:
 			}
 		except Exception as exc:
 			return {"code": -1, "message": f"发送附件简历失败: {exc}"}
+
+	def send_chat_attachment(
+		self,
+		security_id: str,
+		file_path: str,
+		*,
+		target_recruiter_name: str = "",
+		target_company: str = "",
+		target_title: str = "",
+		target_gid: str = "",
+		target_friend_id: str = "",
+		target_uid: str = "",
+		target_encrypt_boss_id: str = "",
+		target_recruiter_id: str = "",
+	) -> dict[str, Any]:
+		"""通过 CDP 上传聊天附件；不会点击对方发起的附件简历请求卡片。"""
+		result = self.send_resume_attachment(
+			security_id,
+			file_path,
+			allow_request_card=False,
+			refresh_chat_page=True,
+			target_recruiter_name=target_recruiter_name,
+			target_company=target_company,
+			target_title=target_title,
+			target_gid=target_gid,
+			target_friend_id=target_friend_id,
+			target_uid=target_uid,
+			target_encrypt_boss_id=target_encrypt_boss_id,
+			target_recruiter_id=target_recruiter_id,
+		)
+		if result.get("method") == "resume-toolbar-upload":
+			result = dict(result)
+			result["method"] = "chat-attachment-upload"
+			if result.get("code") == 0:
+				result["message"] = "附件已通过 Boss 聊天工具栏发送"
+		return result
 
 	def resume_status(self) -> dict[str, Any]:
 		"""查询简历完整度和在线状态。"""

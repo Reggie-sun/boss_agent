@@ -179,6 +179,11 @@ TOOLS = [
 			"properties": {
 				"security_id": {"type": "string", "description": "职位的 security_id"},
 				"job_id": {"type": "string", "description": "职位的 encrypt_job_id"},
+				"attachments": {
+					"type": "array",
+					"items": {"type": "string"},
+					"description": "打招呼成功后发送的聊天附件路径",
+				},
 			},
 			"required": ["security_id", "job_id"],
 		},
@@ -305,6 +310,11 @@ TOOLS = [
 				"welfare": {"type": "string", "description": "福利筛选，逗号分隔 AND 逻辑（如 双休,五险一金）"},
 				"limit": {"type": "integer", "description": "最大打招呼数量（最大 150）", "default": 5},
 				"dry_run": {"type": "boolean", "description": "预览模式", "default": False},
+				"attachments": {
+					"type": "array",
+					"items": {"type": "string"},
+					"description": "每个成功打招呼候选都发送的聊天附件路径",
+				},
 			},
 			"required": ["query"],
 		},
@@ -1004,7 +1014,10 @@ def _build_args(tool_name: str, arguments: dict) -> list[str]:
 		return args
 
 	if name == "greet":
-		return [name, arguments["security_id"], arguments["job_id"]]
+		args = [name, arguments["security_id"], arguments["job_id"]]
+		for attachment in arguments.get("attachments") or []:
+			args.extend(["--attachment", str(attachment)])
+		return args
 
 	if name == "chat":
 		args = [name]
@@ -1058,6 +1071,8 @@ def _build_args(tool_name: str, arguments: dict) -> list[str]:
 			args.extend(["--count", str(arguments["count"])])
 		if arguments.get("dry_run"):
 			args.append("--dry-run")
+		for attachment in arguments.get("attachments") or []:
+			args.extend(["--attachment", str(attachment)])
 		return args
 
 	if name == "show":
