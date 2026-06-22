@@ -333,6 +333,7 @@ export function App() {
   const [bossAutomationError, setBossAutomationError] = useState("");
   const [bossAutomationProgress, setBossAutomationProgress] = useState(null);
   const [bossAutomationRiskLocked, setBossAutomationRiskLocked] = useState(false);
+  const [bossAutomationRiskClearedAtMs, setBossAutomationRiskClearedAtMs] = useState(0);
   const [isBossSearching, setIsBossSearching] = useState(false);
   const [isBossAutoRunning, setIsBossAutoRunning] = useState(false);
   const [chatTargets, setChatTargets] = useState([]);
@@ -378,8 +379,8 @@ export function App() {
     [watcherState.tasks],
   );
   const watcherRiskStatusMessage = useMemo(
-    () => watcherRiskHint(watcherState),
-    [watcherState],
+    () => watcherRiskHint(watcherState, { ignoreBeforeMs: bossAutomationRiskClearedAtMs }),
+    [watcherState, bossAutomationRiskClearedAtMs],
   );
   const normalizedBossJobs = useMemo(
     () => bossSearchJobs.map(normalizeBossJob),
@@ -767,8 +768,13 @@ export function App() {
   }
 
   async function handleClearBossAutomationRisk() {
+    setBossAutomationRiskClearedAtMs(Date.now());
     setBossAutomationRiskLocked(false);
     setBossAutomationError("");
+    setWatcherState((current) => ({
+      ...current,
+      errorMessage: isBossAccountRiskMessage(current.errorMessage) ? "" : current.errorMessage,
+    }));
     await refreshWatcherStatus();
   }
 

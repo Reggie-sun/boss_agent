@@ -126,6 +126,10 @@ def test_interview_simulator_boss_risk_copy_is_page_scoped_and_clearable():
 	assert "handleClearBossAutomationRisk" in app
 	assert "onClearBossAutomationRisk" in outreach
 	assert "已处理，解除本地锁" in outreach
+	assert "bossAutomationRiskClearedAtMs" in app
+	assert "ignoreBeforeMs: bossAutomationRiskClearedAtMs" in app
+	assert "setBossAutomationRiskClearedAtMs(Date.now())" in app
+	assert "isBossAccountRiskMessage(current.errorMessage)" in app
 
 
 def test_interview_simulator_watcher_status_does_not_auto_start_frontend_polling():

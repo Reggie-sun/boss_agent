@@ -103,9 +103,14 @@ function taskRiskMessage(task) {
   return String(task?.error_message || task?.action?.message || "").trim();
 }
 
-function isFreshWatcherTask(task, nowMs, riskWindowMs) {
+function taskCreatedAtMs(task) {
   const createdAt = Date.parse(String(task?.created_at || ""));
-  if (!Number.isFinite(createdAt)) return true;
+  return Number.isFinite(createdAt) ? createdAt : null;
+}
+
+function isFreshWatcherTask(task, nowMs, riskWindowMs) {
+  const createdAt = taskCreatedAtMs(task);
+  if (createdAt === null) return true;
   return nowMs - createdAt <= riskWindowMs;
 }
 
@@ -119,13 +124,20 @@ export function watcherRiskHint(watcherState, options = {}) {
   const riskWindowMs = Number.isFinite(options.riskWindowMs)
     ? options.riskWindowMs
     : watcherRiskLockWindowMs;
+  const ignoreBeforeMs = Number.isFinite(options.ignoreBeforeMs)
+    ? options.ignoreBeforeMs
+    : null;
   const tasks = Array.isArray(watcherState?.tasks) ? watcherState.tasks.slice().reverse() : [];
   const riskyTask = tasks.find((task) => {
     const detail = taskRiskMessage(task);
+    const createdAt = taskCreatedAtMs(task);
+    const isLocallyAcknowledged =
+      ignoreBeforeMs !== null && createdAt !== null && createdAt <= ignoreBeforeMs;
     return (
       Boolean(detail) &&
       isBossAccountRiskMessage(detail) &&
-      isFreshWatcherTask(task, nowMs, riskWindowMs)
+      isFreshWatcherTask(task, nowMs, riskWindowMs) &&
+      !isLocallyAcknowledged
     );
   });
   return riskyTask ? taskRiskMessage(riskyTask) : "";

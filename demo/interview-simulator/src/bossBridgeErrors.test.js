@@ -46,7 +46,7 @@ test("bossBridgeErrorMessage keeps explicit account risk responses locked", () =
   );
 
   assert.equal(bossBridgeErrorCode(error), bossAccountRiskCode);
-  assert.match(bossBridgeErrorMessage(error, "BOSS 搜索失败。"), /风控|安全验证/);
+  assert.match(bossBridgeErrorMessage(error, "BOSS 搜索失败。"), /风控|安全验证|安全检查/);
 });
 
 test("code 32 passport 403 url is treated as account risk", () => {
@@ -92,6 +92,26 @@ test("watcherRiskHint ignores stale account risk audit entries", () => {
   assert.equal(
     watcherRiskHint(state, {
       nowMs: Date.parse("2026-06-21T15:01:25.038016+00:00"),
+    }),
+    "",
+  );
+});
+
+test("watcherRiskHint ignores locally acknowledged account risk audit entries", () => {
+  const riskMessage = "您的账户存在异常行为，已暂时被禁止使用.";
+  const state = {
+    tasks: [
+      {
+        created_at: "2026-06-21T15:00:25.038016+00:00",
+        error_message: riskMessage,
+      },
+    ],
+  };
+
+  assert.equal(
+    watcherRiskHint(state, {
+      nowMs: Date.parse("2026-06-21T15:01:25.038016+00:00"),
+      ignoreBeforeMs: Date.parse("2026-06-21T15:00:30.038016+00:00"),
     }),
     "",
   );
