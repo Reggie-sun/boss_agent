@@ -754,6 +754,49 @@ def test_send_chat_attachment_raw_cdp_sets_file_input_without_playwright_attach(
 	assert "resume request agree button" not in evaluated_scripts
 
 
+def test_chat_target_helper_disallows_company_only_write_match():
+	script = BossClient._CHAT_TARGET_HELPER_SCRIPT
+	assert 'error: "target friend ambiguous by company",' not in script
+	assert "companyMatches.length === 1" not in script
+	assert "companyTitleMatches.length === 1" in script
+
+
+def test_send_chat_attachment_raw_cdp_requires_confirmed_send_for_marker_increase(tmp_path):
+	client = BossClient(_StubAuth())
+	client._navigate_to_chat = MagicMock(return_value={"ok": True, "url": "https://www.zhipin.com/web/geek/chat"})
+	image_file = tmp_path / "proof.png"
+	image_file.write_bytes(b"\x89PNG\r\n\x1a\n")
+
+	fake_browser = MagicMock()
+	fake_browser._raw_cdp_url = "http://127.0.0.1:9229"
+	fake_browser.evaluate_js_in_zhipin_tab.side_effect = [
+		{"ok": True, "method": "handleOpenChat"},
+		{"fileNameCount": 0, "markerCount": 2, "messageCount": 4},
+		{"ok": True, "method": "chat-attachment-upload", "warning": "send button not found"},
+		*[
+			{"seenFileName": False, "markerIncreased": True, "messageCountIncreased": False}
+			for _ in range(12)
+		],
+	]
+	fake_browser.set_file_input_files_in_zhipin_tab.return_value = {
+		"ok": True,
+		"method": "raw-cdp-set-file-input-files",
+	}
+	client._get_browser = MagicMock(return_value=fake_browser)
+
+	result = client.send_chat_attachment(
+		"sid",
+		str(image_file),
+		target_recruiter_name="蔡欣",
+		target_company="光昱智能",
+		target_title="招聘经理",
+	)
+
+	assert result["code"] == -1
+	assert "未确认" in result["message"]
+	assert fake_browser.set_file_input_files_in_zhipin_tab.called
+
+
 # ── 生命周期 / close 等 ─────────────────────────────────────────────────
 
 

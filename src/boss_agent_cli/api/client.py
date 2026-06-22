@@ -410,21 +410,30 @@ class BossClient:
 						};
 					}
 				}
-				if (!targetName && targetCompany) {
-					const companyMatches = list.filter(friend => {
-						const itemCompany = normalize(friend.brandName || friend.companyName || friend.company);
-						return itemCompany && (
-							itemCompany === targetCompany ||
-							itemCompany.includes(targetCompany) ||
-							targetCompany.includes(itemCompany)
+				if (!targetName && targetCompany && targetTitle) {
+					const companyTitleMatches = list.filter(friend => {
+						const item = {
+							company: normalize(friend.brandName || friend.companyName || friend.company),
+							title: normalize(friend.title || friend.sourceTitle || friend.positionName || friend.jobName),
+						};
+						const companyMatch = item.company && (
+							item.company === targetCompany ||
+							item.company.includes(targetCompany) ||
+							targetCompany.includes(item.company)
 						);
+						const titleMatch = item.title && (
+							item.title === targetTitle ||
+							item.title.includes(targetTitle) ||
+							targetTitle.includes(item.title)
+						);
+						return companyMatch && titleMatch;
 					});
-					if (companyMatches.length === 1) return { ok: true, friend: companyMatches[0] };
-					if (companyMatches.length > 1) {
+					if (companyTitleMatches.length === 1) return { ok: true, friend: companyTitleMatches[0] };
+					if (companyTitleMatches.length > 1) {
 						return {
 							ok: false,
-							error: "target friend ambiguous by company",
-							candidates: companyMatches.slice(0, 8).map(publicSummary),
+							error: "target friend ambiguous by company and title",
+							candidates: companyTitleMatches.slice(0, 8).map(publicSummary),
 						};
 					}
 				}
@@ -1585,10 +1594,11 @@ class BossClient:
 					}''',
 					{"name": attachment.name, "before": before_counts if isinstance(before_counts, dict) else {}},
 				)
-				if isinstance(verify, dict) and (
+				confirmed_click = isinstance(confirm_result, dict) and bool(confirm_result.get("clicked"))
+				if isinstance(verify, dict) and confirmed_click and (
 					verify.get("seenFileName")
 					or verify.get("markerIncreased")
-					or (verify.get("messageCountIncreased") and isinstance(confirm_result, dict) and confirm_result.get("clicked"))
+					or verify.get("messageCountIncreased")
 				):
 					return {
 						"code": 0,
