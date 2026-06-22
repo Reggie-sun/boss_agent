@@ -114,6 +114,16 @@ def test_interview_simulator_boss_risk_copy_is_page_scoped_and_clearable():
 	assert "已处理，解除本地锁" in outreach
 
 
+def test_interview_simulator_watcher_status_does_not_auto_start_frontend_polling():
+	repo_root = Path(__file__).resolve().parents[1]
+	app = (repo_root / "demo" / "interview-simulator" / "src" / "App.jsx").read_text(encoding="utf-8")
+
+	assert "watcherAutoPolling" in app
+	assert "!watcherAutoPolling || !watcherState.running" in app
+	assert 'setWatcherAutoPolling(action === "resume")' in app
+	assert "setWatcherAutoPolling(false)" in app
+
+
 def test_interview_simulator_profile_binding_uses_cli_supported_source():
 	repo_root = Path(__file__).resolve().parents[1]
 	profile_hub = (repo_root / "demo" / "interview-simulator" / "src" / "views" / "ProfileHub.jsx").read_text(encoding="utf-8")

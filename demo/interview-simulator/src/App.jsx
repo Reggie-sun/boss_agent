@@ -353,6 +353,7 @@ export function App() {
     tasks: [],
     errorMessage: "",
   });
+  const [watcherAutoPolling, setWatcherAutoPolling] = useState(false);
   const [isWatcherBusy, setIsWatcherBusy] = useState(false);
 
   const reasoningItems = useMemo(
@@ -522,6 +523,7 @@ export function App() {
 
   async function runWatcherOnce() {
     if (watcherRiskStatusMessage) {
+      setWatcherAutoPolling(false);
       setWatcherState((current) =>
         current.running ? { ...current, running: false } : current,
       );
@@ -548,6 +550,9 @@ export function App() {
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : "运行 watcher 失败。";
       const isAccountRisk = isBossAccountRiskMessage(errorMessage);
+      if (isAccountRisk) {
+        setWatcherAutoPolling(false);
+      }
       setWatcherState((current) => ({
         ...current,
         running: isAccountRisk ? false : current.running,
@@ -559,12 +564,14 @@ export function App() {
   }
 
   useEffect(() => {
-    if (!watcherState.running || isWatcherBusy || watcherRiskStatusMessage) return undefined;
+    if (!watcherAutoPolling || !watcherState.running || isWatcherBusy || watcherRiskStatusMessage) {
+      return undefined;
+    }
     const timer = window.setInterval(() => {
       runWatcherOnce();
     }, 20_000);
     return () => window.clearInterval(timer);
-  }, [watcherState.running, isWatcherBusy]);
+  }, [watcherAutoPolling, watcherState.running, isWatcherBusy, watcherRiskStatusMessage]);
 
   async function controlWatcher(action, conversationId = "") {
     setIsWatcherBusy(true);
@@ -577,6 +584,9 @@ export function App() {
       const payload = await response.json();
       if (!response.ok || !payload.ok) {
         throw new Error(payload.errorMessage || "更新 watcher 控制状态失败。");
+      }
+      if (!conversationId) {
+        setWatcherAutoPolling(action === "resume");
       }
       await refreshWatcherStatus();
     } catch (error) {
