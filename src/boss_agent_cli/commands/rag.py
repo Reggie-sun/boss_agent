@@ -1627,8 +1627,15 @@ def rag_plan_outreach_cmd(
 		attachments=attachment_paths,
 	)
 	payload = plan.to_payload()
-	if profile_blocked_reason and not payload.get("blocked_reason"):
+	if profile_blocked_reason:
 		payload["blocked_reason"] = profile_blocked_reason
+		for action in payload.get("actions", []):
+			reasons = action.get("reasons")
+			if isinstance(reasons, list):
+				action["reasons"] = [
+					profile_blocked_reason if reason == "profile_outreach_disabled" else reason
+					for reason in reasons
+				]
 	store = _resolve_store(ctx)
 	store.append_audit_log(
 		AuditLogRecord.new(

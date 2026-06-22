@@ -954,6 +954,53 @@ def test_agent_plan_outreach_blocks_when_profile_config_disables_outreach(monkey
 	assert payload["data"]["plan"]["blocked_reason"] == "profile_outreach_disabled"
 
 
+def test_agent_plan_outreach_preserves_profile_gate_failure_reason(monkeypatch, tmp_path: Path):
+	def fake_collect(ctx, *, query, city, salary, experience, education, industry, scale, stage, job_type, welfare, count):
+		return [
+			{
+				"security_id": "sec_001",
+				"job_id": "job_001",
+				"title": "AI Agent 工程师",
+				"company": "光昱智能",
+				"city": "杭州",
+				"industry": "人工智能",
+				"skills": ["RAG"],
+				"greeted": False,
+			}
+		]
+
+	monkeypatch.setattr(rag_commands, "_collect_outreach_plan_candidates", fake_collect)
+	monkeypatch.setattr(rag_commands, "_profile_outreach_enabled", lambda ctx, profile_id: (False, "profile_config_not_found"))
+	runner = CliRunner()
+
+	result = runner.invoke(
+		cli,
+		[
+			"--json",
+			"--data-dir",
+			str(tmp_path),
+			"agent",
+			"plan-outreach",
+			"--query",
+			"RAG",
+			"--profile-id",
+			"missing_profile",
+			"--target-title",
+			"AI Agent 工程师",
+			"--live-execution-requested",
+		],
+	)
+
+	assert result.exit_code == 0
+	payload = json.loads(result.output)
+	plan = payload["data"]["plan"]
+	assert plan["status"] == "blocked_profile_gate"
+	assert plan["blocked_reason"] == "profile_config_not_found"
+	reasons = plan["actions"][0]["reasons"]
+	assert "profile_config_not_found" in reasons
+	assert "profile_outreach_disabled" not in reasons
+
+
 def test_agent_watcher_status_returns_recent_tasks(tmp_path: Path):
 	runner = CliRunner()
 	result = runner.invoke(
