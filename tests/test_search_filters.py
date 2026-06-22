@@ -81,6 +81,10 @@ class TestSearchUrlParsing:
 		params = resolve_search_code_params(industry="深度学习")
 		assert "industry" not in params
 
+	def test_resolve_search_code_params_treats_unlimited_industry_as_no_filter(self):
+		params = resolve_search_code_params(industry="不限")
+		assert "industry" not in params
+
 
 # ── Experience threshold ────────────────────────────────────────────
 
@@ -302,6 +306,13 @@ class TestPrefilterJob:
 	def test_ai_industry_filter_allows_smart_hardware_card_label(self):
 		raw = _make_raw(industry="智能硬件/消费电子")
 		criteria = SearchFilterCriteria(query="RAG", industry="人工智能")
+		ok, reasons = prefilter_job(raw, criteria)
+		assert ok is True
+		assert reasons == []
+
+	def test_unlimited_industry_filter_passes_any_card_label(self):
+		raw = _make_raw(industry="金融")
+		criteria = SearchFilterCriteria(query="RAG", industry="不限")
 		ok, reasons = prefilter_job(raw, criteria)
 		assert ok is True
 		assert reasons == []

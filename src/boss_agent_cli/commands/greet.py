@@ -5,7 +5,6 @@ import time
 import click
 
 from boss_agent_cli.api.endpoints import (
-	INDUSTRY_CODES,
 	JOB_TYPE_CODES,
 	SCALE_CODES,
 	STAGE_CODES,
@@ -22,6 +21,7 @@ from boss_agent_cli.display import (
 	render_message_panel,
 )
 from boss_agent_cli.search_filters import (
+	BOSS_INDUSTRY_FILTER_CHOICES,
 	SearchFilterCriteria,
 	SearchPipelinePlatformError,
 	requires_extended_prefilter_scan,
@@ -199,7 +199,7 @@ def greet_cmd(ctx: click.Context, security_id: str, job_id: str, message: str) -
 @click.option("--experience", default=None, help="经验要求（如 3-5年）")
 @click.option("--education", default=None, help="学历要求（如 本科）")
 @click.option(
-	"--industry", default=None, type=click.Choice(list(INDUSTRY_CODES.keys()), case_sensitive=False), help="行业类型"
+	"--industry", default=None, type=click.Choice(BOSS_INDUSTRY_FILTER_CHOICES, case_sensitive=False), help="行业类型"
 )
 @click.option(
 	"--scale",

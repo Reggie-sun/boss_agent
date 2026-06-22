@@ -52,6 +52,18 @@ _INDUSTRY_CARD_COMPATIBLE_LABELS: dict[str, set[str]] = {
 	"游戏": {"互联网", "软件/信息服务"},
 }
 
+BOSS_LOCAL_INDUSTRY_FILTER_LABELS: tuple[str, ...] = (
+	"计算机软件",
+	"计算机服务",
+	"机器学习",
+	"深度学习",
+	"智能硬件",
+	"智能硬件/消费电子",
+)
+BOSS_INDUSTRY_FILTER_CHOICES: tuple[str, ...] = tuple(
+	dict.fromkeys((*endpoints.INDUSTRY_CODES.keys(), *BOSS_LOCAL_INDUSTRY_FILTER_LABELS))
+)
+
 _LOCAL_ONLY_INDUSTRY_LABELS: set[str] = (
 	set(_INDUSTRY_CARD_COMPATIBLE_LABELS)
 	| {
@@ -177,6 +189,8 @@ def resolve_industry_code_param(value: str | None) -> str | None:
 		return None
 	codes: list[str] = []
 	for part in _split_multi_value(value):
+		if part in {"不限", "0"}:
+			continue
 		if part.isdigit():
 			codes.append(part)
 			continue
@@ -427,6 +441,8 @@ def _matches_filter_values(item_values: list[str], required: str | None, lookup:
 
 
 def _matches_industry_values(item_values: list[str], required: str | None) -> bool:
+	if all(part in {"不限", "0"} for part in _split_multi_value(required or "")):
+		return True
 	if _matches_filter_values(item_values, required, endpoints.INDUSTRY_CODES):
 		return True
 	required_labels = _lookup_labels(_split_multi_value(required or ""), endpoints.INDUSTRY_CODES)

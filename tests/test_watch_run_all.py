@@ -57,6 +57,23 @@ def test_watch_run_all_with_no_watches(tmp_path: Path) -> None:
 	assert envelope["data"]["watches"] == []
 
 
+def test_watch_add_accepts_local_industry_direction_choice(tmp_path: Path) -> None:
+	"""watch 保存也应接受前端行业下拉里的本地方向标签。"""
+	runner = CliRunner()
+	result = runner.invoke(
+		cli,
+		[
+			"--data-dir", str(tmp_path),
+			"watch", "add", "ml-local", "RAG",
+			"--industry", "机器学习",
+		],
+	)
+	assert result.exit_code == 0, result.output
+	envelope = json.loads(result.output)
+	assert envelope["ok"] is True
+	assert envelope["data"]["params"]["industry"] == "机器学习"
+
+
 def test_watch_run_requires_name_or_all(tmp_path: Path) -> None:
 	"""不传 name 也不传 --all 应给出明确错误。"""
 	runner = CliRunner()

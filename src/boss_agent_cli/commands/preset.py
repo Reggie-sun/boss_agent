@@ -2,13 +2,13 @@ import click
 
 from boss_agent_cli.api.endpoints import (
 	CITY_CODES,
-	INDUSTRY_CODES,
 	JOB_TYPE_CODES,
 	SCALE_CODES,
 	STAGE_CODES,
 )
 from boss_agent_cli.cache.store import CacheStore
 from boss_agent_cli.display import handle_error_output, handle_output
+from boss_agent_cli.search_filters import BOSS_INDUSTRY_FILTER_CHOICES
 
 
 def _build_params(
@@ -49,7 +49,7 @@ def preset_group() -> None:
 @click.option("--salary", default=None, help="薪资范围")
 @click.option("--experience", default=None, help="经验要求")
 @click.option("--education", default=None, help="学历要求")
-@click.option("--industry", default=None, type=click.Choice(list(INDUSTRY_CODES.keys()), case_sensitive=False), help="行业类型")
+@click.option("--industry", default=None, type=click.Choice(BOSS_INDUSTRY_FILTER_CHOICES, case_sensitive=False), help="行业类型")
 @click.option("--scale", default=None, type=click.Choice(list(SCALE_CODES.keys()), case_sensitive=False), help="公司规模")
 @click.option("--stage", default=None, type=click.Choice(list(STAGE_CODES.keys()), case_sensitive=False), help="融资阶段")
 @click.option("--job-type", default=None, type=click.Choice(list(JOB_TYPE_CODES.keys()), case_sensitive=False), help="职位类型")

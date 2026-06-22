@@ -62,6 +62,22 @@ def test_preset_add_list_remove(tmp_path):
 	assert remove_parsed["data"]["removed"] is True
 
 
+def test_preset_add_accepts_local_industry_direction_choice(tmp_path):
+	runner = CliRunner()
+	result = runner.invoke(
+		cli,
+		[
+			"--data-dir", str(tmp_path),
+			"--json",
+			"preset", "add", "ml-local", "RAG",
+			"--industry", "机器学习",
+		],
+	)
+	assert result.exit_code == 0, result.output
+	parsed = json.loads(result.output)
+	assert parsed["data"]["params"]["industry"] == "机器学习"
+
+
 @patch("boss_agent_cli.commands.search.get_platform_instance")
 @patch("boss_agent_cli.commands.search.AuthManager")
 @patch("boss_agent_cli.commands.search.CacheStore")

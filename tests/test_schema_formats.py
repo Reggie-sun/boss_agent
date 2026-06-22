@@ -81,6 +81,16 @@ def test_tool_formats_keep_search_welfare_parameter():
 	assert "福利筛选" in anth_search["properties"]["welfare"]["description"]
 
 
+def test_native_schema_industry_choices_include_local_direction_labels():
+	search_choices = SCHEMA_DATA["commands"]["search"]["options"]["--industry"]["choices"]
+	batch_choices = SCHEMA_DATA["commands"]["batch-greet"]["options"]["--industry"]["choices"]
+
+	for choices in (search_choices, batch_choices):
+		assert "机器学习" in choices
+		assert "深度学习" in choices
+		assert "智能硬件/消费电子" in choices
+
+
 def test_command_to_json_schema_required_args():
 	"""required=True 的参数应出现在 required 数组中。"""
 	cmd_spec = {
