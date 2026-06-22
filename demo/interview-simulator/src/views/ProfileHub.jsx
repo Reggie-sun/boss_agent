@@ -203,7 +203,12 @@ export function ProfileHub({
     <section className="session-card profile-hub">
       <div className="session-card__header">
         <span>Profile Hub</span>
-        <span>{selectedProfile ? selectedProfile.profile_id : "未选择"}</span>
+        <span
+          className="profile-id-chip"
+          title={selectedProfile ? selectedProfile.profile_id : "未选择"}
+        >
+          {selectedProfile ? selectedProfile.profile_id : "未选择"}
+        </span>
       </div>
 
       <ProfileSelector
