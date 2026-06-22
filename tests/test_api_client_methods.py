@@ -714,6 +714,46 @@ def test_send_chat_attachment_uploads_image_without_resume_request_agree(tmp_pat
 	assert "resume request agree button" not in evaluated_scripts
 
 
+def test_send_chat_attachment_raw_cdp_sets_file_input_without_playwright_attach(tmp_path):
+	client = BossClient(_StubAuth())
+	client._navigate_to_chat = MagicMock(return_value={"ok": True, "url": "https://www.zhipin.com/web/geek/chat"})
+	image_file = tmp_path / "proof.png"
+	image_file.write_bytes(b"\x89PNG\r\n\x1a\n")
+
+	fake_browser = MagicMock()
+	fake_browser._raw_cdp_url = "http://127.0.0.1:9229"
+	fake_browser.evaluate_js_in_zhipin_tab.side_effect = [
+		{"ok": True, "method": "handleOpenChat"},
+		{"fileNameCount": 0, "markerCount": 2, "messageCount": 4},
+		{"ok": True, "method": "chat-attachment-upload", "clicked": "editor-send"},
+		{"seenFileName": False, "markerIncreased": True, "messageCountIncreased": True},
+	]
+	fake_browser.set_file_input_files_in_zhipin_tab.return_value = {
+		"ok": True,
+		"method": "raw-cdp-set-file-input-files",
+	}
+	fake_browser.ensure_playwright_candidate_chat_page.side_effect = AssertionError(
+		"chat attachment must not use Playwright attach in raw CDP mode"
+	)
+	client._get_browser = MagicMock(return_value=fake_browser)
+
+	result = client.send_chat_attachment(
+		"sid",
+		str(image_file),
+		target_recruiter_name="蔡欣",
+		target_company="光昱智能",
+		target_title="招聘经理",
+	)
+
+	assert result["code"] == 0
+	assert result["method"] == "chat-attachment-upload"
+	fake_browser.set_file_input_files_in_zhipin_tab.assert_called_once()
+	assert fake_browser.set_file_input_files_in_zhipin_tab.call_args.args[1] == [str(image_file.resolve())]
+	fake_browser.ensure_playwright_candidate_chat_page.assert_not_called()
+	evaluated_scripts = "\n".join(str(call.args[0]) for call in fake_browser.evaluate_js_in_zhipin_tab.call_args_list)
+	assert "resume request agree button" not in evaluated_scripts
+
+
 # ── 生命周期 / close 等 ─────────────────────────────────────────────────
 
 

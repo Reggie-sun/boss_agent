@@ -402,17 +402,35 @@ class BossClient:
 				}
 				const nameMatches = list.filter(friend => normalize(friend.name || friend.bossName || friend.friendName) === targetName);
 				if (nameMatches.length === 1) return { ok: true, friend: nameMatches[0] };
-				if (nameMatches.length > 1) {
-					return {
-						ok: false,
-						error: "target friend ambiguous by name",
-						candidates: nameMatches.slice(0, 8).map(publicSummary),
-					};
+					if (nameMatches.length > 1) {
+						return {
+							ok: false,
+							error: "target friend ambiguous by name",
+							candidates: nameMatches.slice(0, 8).map(publicSummary),
+						};
+					}
 				}
-			}
-			return {
-				ok: false,
-				error: "target friend not found",
+				if (!targetName && targetCompany) {
+					const companyMatches = list.filter(friend => {
+						const itemCompany = normalize(friend.brandName || friend.companyName || friend.company);
+						return itemCompany && (
+							itemCompany === targetCompany ||
+							itemCompany.includes(targetCompany) ||
+							targetCompany.includes(itemCompany)
+						);
+					});
+					if (companyMatches.length === 1) return { ok: true, friend: companyMatches[0] };
+					if (companyMatches.length > 1) {
+						return {
+							ok: false,
+							error: "target friend ambiguous by company",
+							candidates: companyMatches.slice(0, 8).map(publicSummary),
+						};
+					}
+				}
+				return {
+					ok: false,
+					error: "target friend not found",
 				target: {
 					recruiter_name: target.recruiter_name || target.recruiterName || "",
 					company: target.company || "",
@@ -542,6 +560,38 @@ class BossClient:
 				agreeButtonCount: agreeButtons.length,
 				remainingAgreeButtonCount,
 				textSample: clean(conversation.innerText || conversation.textContent).slice(0, 240),
+			};
+			} catch(e) { return { ok: false, error: e.message }; }
+		}''' % _CHAT_TARGET_HELPER_SCRIPT
+
+	_CHAT_ATTACHMENT_FILE_SELECTOR = (
+		'input[type="file"][ka="user-resume-upload-file"], '
+		'input[type="file"][accept*="image/"], '
+		'input[type="file"]'
+	)
+
+	_OPEN_CHAT_FOR_ATTACHMENT_SCRIPT = '''async ({ sid, target }) => {
+%s
+		try {
+			const ulc = document.querySelector(".user-list-content");
+			if (!ulc || !ulc.__vue__) return { ok: false, error: "user-list-content not found" };
+			const bossList = ulc.__vue__.$parent;
+			const list = (bossList && bossList.list) || [];
+			const match = findTargetFriend(list, sid, target || {});
+			if (!match.ok) return match;
+			const friend = match.friend;
+			bossList.handleOpenChat(friend);
+			let chatInput = null;
+			for (let i = 0; i < 20; i++) {
+				await new Promise(r => setTimeout(r, 500));
+				chatInput = document.querySelector(".chat-input[contenteditable=\\"true\\"]");
+				if (chatInput) break;
+			}
+			if (!chatInput) return { ok: false, error: "chat-input not found after open" };
+			return {
+				ok: true,
+				method: "handleOpenChat",
+				friendName: friend.name || friend.bossName || friend.friendName || "",
 			};
 		} catch(e) { return { ok: false, error: e.message }; }
 	}''' % _CHAT_TARGET_HELPER_SCRIPT
@@ -1358,6 +1408,219 @@ class BossClient:
 		except Exception as exc:
 			return {"code": -1, "message": f"发送附件简历失败: {exc}"}
 
+	def _send_chat_attachment_via_raw_cdp(
+		self,
+		browser: "BrowserSession",
+		security_id: str,
+		attachment: Path,
+		navigation: dict[str, Any],
+		*,
+		target_recruiter_name: str = "",
+		target_company: str = "",
+		target_title: str = "",
+		target_gid: str = "",
+		target_friend_id: str = "",
+		target_uid: str = "",
+		target_encrypt_boss_id: str = "",
+		target_recruiter_id: str = "",
+	) -> dict[str, Any]:
+		target = self._chat_target_payload(
+			security_id=security_id,
+			target_recruiter_name=target_recruiter_name,
+			target_company=target_company,
+			target_title=target_title,
+			target_gid=target_gid,
+			target_friend_id=target_friend_id,
+			target_uid=target_uid,
+			target_encrypt_boss_id=target_encrypt_boss_id,
+			target_recruiter_id=target_recruiter_id,
+		)
+		try:
+			open_result = self._evaluate_candidate_chat_script(
+				browser,
+				self._OPEN_CHAT_FOR_ATTACHMENT_SCRIPT,
+				{"sid": security_id, "target": target},
+			)
+			if not isinstance(open_result, dict) or not open_result.get("ok"):
+				return {
+					"code": -1,
+					"message": str((open_result or {}).get("error") or "打开目标对话失败"),
+					"method": "chat-attachment-upload",
+					"file": str(attachment),
+					"detail": {"navigation": navigation, "open_result": open_result},
+				}
+			before_counts = self._evaluate_candidate_chat_script(
+				browser,
+				'''({ name }) => {
+					const conversation =
+						document.querySelector(".chat-conversation") ||
+						document.querySelector(".chat-message-list") ||
+						document.querySelector(".chat-panel");
+					const visible = (el) => !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
+					const clean = (value) => String(value || "").replace(/\\s+/g, " ").trim();
+					const text = clean(conversation?.innerText || conversation?.textContent || "");
+					const markerCount = conversation
+						? [...conversation.querySelectorAll('img, [class*="image"], [class*="img"], [class*="pic"], [class*="file"], [class*="attach"]')]
+							.filter(visible).length
+						: 0;
+					const messageCount = conversation
+						? [...conversation.querySelectorAll('.message-item, .chat-message, .item-myself, .item-friend, .msg-item, [class*="message"]')]
+							.filter(visible).length
+						: 0;
+					return {
+						fileNameCount: text.split(name).length - 1,
+						markerCount,
+						messageCount,
+						textSample: text.slice(-240),
+					};
+				}''',
+				{"name": attachment.name},
+			)
+			upload_result = browser.set_file_input_files_in_zhipin_tab(
+				self._CHAT_ATTACHMENT_FILE_SELECTOR,
+				[str(attachment)],
+				preferred_page_url="https://www.zhipin.com/web/geek/chat",
+			)
+			if not isinstance(upload_result, dict) or not upload_result.get("ok"):
+				return {
+					"code": -1,
+					"message": str((upload_result or {}).get("error") or "聊天附件文件选择失败"),
+					"method": "chat-attachment-upload",
+					"file": str(attachment),
+					"detail": {
+						"navigation": navigation,
+						"open_result": open_result,
+						"before_counts": before_counts,
+						"upload_result": upload_result,
+					},
+				}
+			time.sleep(1)
+			confirm_result = self._evaluate_candidate_chat_script(
+				browser,
+				'''async () => {
+					await new Promise(r => setTimeout(r, 800));
+					const visible = (el) => !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
+					const clean = (value) => String(value || "").replace(/\\s+/g, " ").trim();
+					const disabled = (el) =>
+						!!(el.disabled || el.getAttribute("aria-disabled") === "true" || /disabled/.test(String(el.className || "")));
+					const editor = document.querySelector(".chat-editor");
+					const editorSend = editor && [...editor.querySelectorAll(".btn-send, button, a, span")]
+						.filter(el => visible(el) && !disabled(el))
+						.map(el => ({ el, text: clean(el.innerText || el.textContent), className: String(el.className || "") }))
+						.find(item => item.className.includes("btn-send") || item.text === "发送");
+					if (editorSend) {
+						editorSend.el.click();
+						return { ok: true, method: "chat-attachment-upload", clicked: "editor-send", buttonText: editorSend.text };
+					}
+					const roots = [...document.querySelectorAll(".dialog-container, .dialog, .boss-dialog, .modal, .pop, [role='dialog']")]
+						.filter(visible);
+					const labels = ["确认发送", "发送", "确定", "确认"];
+					for (const root of roots) {
+						const actions = [...root.querySelectorAll("button, a, span, div")]
+							.filter(el => visible(el) && !disabled(el))
+							.map(el => ({ el, text: clean(el.innerText || el.textContent) }))
+							.filter(item =>
+								item.text &&
+								labels.some(label => item.text === label || item.text.includes(label)) &&
+								!/取消|发送在线简历|在线填写|上传附件简历|上传简历|换电话|换微信/.test(item.text)
+							);
+						if (actions.length) {
+							const action = actions[actions.length - 1];
+							const clickable = action.el.closest("button, a, [role='button'], .btn, .btn-v2") || action.el;
+							clickable.click();
+							return { ok: true, method: "chat-attachment-upload", clicked: "dialog-action", buttonText: action.text };
+						}
+					}
+					return {
+						ok: true,
+						method: "chat-attachment-upload",
+						warning: "send button not found after file selection; waiting for automatic send",
+						editorText: clean(editor?.innerText || editor?.textContent || "").slice(0, 240),
+						dialogText: roots.map(root => clean(root.innerText || root.textContent)).join(" | ").slice(0, 360),
+					};
+				}''',
+			)
+			verify: dict[str, Any] | None = None
+			for _ in range(12):
+				time.sleep(1)
+				verify = self._evaluate_candidate_chat_script(
+					browser,
+					'''({ name, before }) => {
+						const conversation =
+							document.querySelector(".chat-conversation") ||
+							document.querySelector(".chat-message-list") ||
+							document.querySelector(".chat-panel");
+						const visible = (el) => !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
+						const clean = (value) => String(value || "").replace(/\\s+/g, " ").trim();
+						const text = clean(conversation?.innerText || conversation?.textContent || "");
+						const markerCount = conversation
+							? [...conversation.querySelectorAll('img, [class*="image"], [class*="img"], [class*="pic"], [class*="file"], [class*="attach"]')]
+								.filter(visible).length
+							: 0;
+						const messageCount = conversation
+							? [...conversation.querySelectorAll('.message-item, .chat-message, .item-myself, .item-friend, .msg-item, [class*="message"]')]
+								.filter(visible).length
+							: 0;
+						const beforeFileNameCount = Number(before?.fileNameCount || 0);
+						const beforeMarkerCount = Number(before?.markerCount || 0);
+						const beforeMessageCount = Number(before?.messageCount || 0);
+						const activeDialogText = [...document.querySelectorAll(".dialog-container, .dialog, .boss-dialog, .modal, .pop, [role='dialog']")]
+							.filter(visible)
+							.map(el => clean(el.innerText || el.textContent))
+							.join(" | ")
+							.slice(0, 360);
+						return {
+							seenFileName: text.split(name).length - 1 > beforeFileNameCount,
+							markerIncreased: markerCount > beforeMarkerCount,
+							messageCountIncreased: messageCount > beforeMessageCount,
+							fileNameCount: text.split(name).length - 1,
+							markerCount,
+							messageCount,
+							beforeFileNameCount,
+							beforeMarkerCount,
+							beforeMessageCount,
+							activeDialogText,
+							textSample: text.slice(-240),
+						};
+					}''',
+					{"name": attachment.name, "before": before_counts if isinstance(before_counts, dict) else {}},
+				)
+				if isinstance(verify, dict) and (
+					verify.get("seenFileName")
+					or verify.get("markerIncreased")
+					or (verify.get("messageCountIncreased") and isinstance(confirm_result, dict) and confirm_result.get("clicked"))
+				):
+					return {
+						"code": 0,
+						"message": "附件已通过 Boss 聊天工具栏发送",
+						"method": "chat-attachment-upload",
+						"file": str(attachment),
+						"detail": {
+							"navigation": navigation,
+							"open_result": open_result,
+							"before_counts": before_counts,
+							"upload_result": upload_result,
+							"confirm_result": confirm_result,
+							"verify": verify,
+						},
+					}
+			return {
+				"code": -1,
+				"message": "已选择聊天附件文件，但未确认看到发送后的附件或消息变化",
+				"method": "chat-attachment-upload",
+				"file": str(attachment),
+				"detail": {
+					"navigation": navigation,
+					"open_result": open_result,
+					"before_counts": before_counts,
+					"upload_result": upload_result,
+					"confirm_result": confirm_result,
+					"verify": verify,
+				},
+			}
+		except Exception as exc:
+			return {"code": -1, "message": f"发送聊天附件失败: {exc}", "method": "chat-attachment-upload", "file": str(attachment)}
+
 	def send_chat_attachment(
 		self,
 		security_id: str,
@@ -1373,6 +1636,28 @@ class BossClient:
 		target_recruiter_id: str = "",
 	) -> dict[str, Any]:
 		"""通过 CDP 上传聊天附件；不会点击对方发起的附件简历请求卡片。"""
+		attachment = Path(file_path).expanduser().resolve()
+		if not attachment.exists():
+			return {"code": -1, "message": f"聊天附件不存在: {attachment}"}
+		navigation = self._navigate_to_chat()
+		if not navigation.get("ok"):
+			return {"code": -1, "message": str(navigation.get("message") or "聊天页未就绪"), "detail": navigation}
+		browser = self._get_browser()
+		if self._browser_raw_cdp_url(browser):
+			return self._send_chat_attachment_via_raw_cdp(
+				browser,
+				security_id,
+				attachment,
+				navigation,
+				target_recruiter_name=target_recruiter_name,
+				target_company=target_company,
+				target_title=target_title,
+				target_gid=target_gid,
+				target_friend_id=target_friend_id,
+				target_uid=target_uid,
+				target_encrypt_boss_id=target_encrypt_boss_id,
+				target_recruiter_id=target_recruiter_id,
+			)
 		result = self.send_resume_attachment(
 			security_id,
 			file_path,

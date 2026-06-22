@@ -637,6 +637,24 @@ class BrowserSession:
 		cdp_url = self._raw_cdp_url or self._cdp_url or CDP_DEFAULT_URL
 		return _cdp_evaluate_in_zhipin_tab(cdp_url, script, arg)
 
+	def set_file_input_files_in_zhipin_tab(
+		self,
+		selector: str,
+		file_paths: list[str],
+		*,
+		preferred_page_url: str | None = None,
+	) -> dict[str, Any]:
+		"""Set a file input in an existing BOSS candidate tab via raw CDP."""
+		if self._is_bridge:
+			raise RuntimeError("set_file_input_files_in_zhipin_tab requires CDP mode")
+		cdp_url = self._raw_cdp_url or self._cdp_url or CDP_DEFAULT_URL
+		return _cdp_set_file_input_files_in_zhipin_tab(
+			cdp_url,
+			selector,
+			file_paths,
+			preferred_page_url=preferred_page_url,
+		)
+
 	def evaluate_js_with_chat_events(self, script: str, arg: Any = None, *, listen_ms: int = 3000) -> dict[str, Any]:
 		"""Run JS in the recruiter chat tab and collect short-lived chat WS events.
 
@@ -1398,6 +1416,75 @@ def _cdp_evaluate_in_zhipin_tab(
 				)
 			return result
 		raise RuntimeError("CDP Runtime.evaluate timed out after 30s")
+
+
+def _cdp_set_file_input_files_in_zhipin_tab(
+	cdp_http_url: str,
+	selector: str,
+	file_paths: list[str],
+	*,
+	preferred_page_url: str | None = None,
+) -> dict[str, Any]:
+	import json as _json
+
+	import websockets.sync.client as _ws_client
+
+	target_ws = _pick_zhipin_target_ws(cdp_http_url, preferred_page_url=preferred_page_url)
+
+	with _ws_client.connect(target_ws, max_size=8 * 1024 * 1024) as ws:
+		next_id = 0
+
+		def call(method: str, params: dict[str, Any]) -> dict[str, Any]:
+			nonlocal next_id
+			next_id += 1
+			ws.send(_json.dumps({"id": next_id, "method": method, "params": params}))
+			deadline = time.time() + 30.0
+			while time.time() < deadline:
+				raw = ws.recv(timeout=max(0.1, deadline - time.time()))
+				msg = _json.loads(raw)
+				if msg.get("id") != next_id:
+					continue
+				err = msg.get("error")
+				if err:
+					raise RuntimeError(f"CDP {method} error: {err}")
+				return cast("dict[str, Any]", msg.get("result") or {})
+			raise RuntimeError(f"CDP {method} timed out after 30s")
+
+		document = call("DOM.getDocument", {"depth": 0, "pierce": True})
+		root = document.get("root") if isinstance(document, dict) else None
+		root_id = root.get("nodeId") if isinstance(root, dict) else None
+		if not root_id:
+			return {"ok": False, "error": "cdp_dom_root_not_found"}
+		query = call("DOM.querySelector", {"nodeId": root_id, "selector": selector})
+		node_id = query.get("nodeId") if isinstance(query, dict) else None
+		if not node_id:
+			return {"ok": False, "error": "file_input_not_found", "selector": selector}
+		call("DOM.setFileInputFiles", {"nodeId": node_id, "files": file_paths})
+		expression = f"""(() => {{
+			const el = document.querySelector({_json.dumps(selector, ensure_ascii=False)});
+			if (!el) return {{ ok: false, error: "file input disappeared" }};
+			el.dispatchEvent(new Event("input", {{ bubbles: true }}));
+			el.dispatchEvent(new Event("change", {{ bubbles: true }}));
+			return {{
+				ok: true,
+				fileCount: el.files ? el.files.length : 0,
+				accept: el.getAttribute("accept") || "",
+				ka: el.getAttribute("ka") || "",
+			}};
+		}})()"""
+		dispatched = call(
+			"Runtime.evaluate",
+			{"expression": expression, "returnByValue": True, "awaitPromise": True},
+		)
+		result = dispatched.get("result") if isinstance(dispatched, dict) else None
+		value = result.get("value") if isinstance(result, dict) else None
+		return {
+			"ok": True,
+			"method": "raw-cdp-set-file-input-files",
+			"selector": selector,
+			"nodeId": node_id,
+			"dispatch": value,
+		}
 
 
 def _scrape_jobs_page_via_cdp(cdp_http_url: str, page_url: str) -> dict[str, Any]:
