@@ -62,6 +62,27 @@ def test_general_questions_default_to_direct_agent_answer(message_text: str):
 	assert result.risk_labels == []
 
 
+@pytest.mark.parametrize(
+	"message_text",
+	[
+		"你好 我们这边是阿里的外包岗位 考虑吗",
+		"你好，还考虑新的机会吗？",
+		"你好，看过你的简历，觉得蛮合适的，期待和你聊一下",
+	],
+)
+def test_recruiter_invitation_with_greeting_uses_direct_agent_answer(message_text: str):
+	result = classify_message(message_text)
+	assert result.intent == "general_question"
+	assert result.requires_direct_agent_answer is True
+	assert result.risk_labels == []
+
+
+def test_plain_greeting_still_uses_smalltalk_template():
+	result = classify_message("你好")
+	assert result.intent == "smalltalk"
+	assert result.requires_direct_agent_answer is False
+
+
 @pytest.mark.parametrize("message_text", ["这个时间可以吗？", "那 2 点呢？"])
 def test_contextual_schedule_followups_use_conversation_memory(message_text: str):
 	result = classify_message_with_context(

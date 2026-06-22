@@ -532,7 +532,7 @@ export function App() {
       const response = await fetch("/api/agent/watcher/run", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ liveSync: true, ensureChatPage: true }),
+        body: JSON.stringify({ liveSync: true, ensureChatPage: true, dryRun: true }),
       });
       const payload = await response.json();
       if (!response.ok || !payload.ok) {
@@ -540,12 +540,11 @@ export function App() {
       }
       const runData = payload.data || {};
       await refreshWatcherStatus();
-      if (Array.isArray(runData.tasks) && runData.tasks.length) {
-        setWatcherState((current) => ({
-          ...current,
-          tasks: runData.tasks,
-        }));
-      }
+      setWatcherState((current) => ({
+        ...current,
+        dry_run: typeof runData.dry_run === "boolean" ? runData.dry_run : current.dry_run,
+        tasks: Array.isArray(runData.tasks) && runData.tasks.length ? runData.tasks : current.tasks,
+      }));
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : "运行 watcher 失败。";
       const isAccountRisk = isBossAccountRiskMessage(errorMessage);

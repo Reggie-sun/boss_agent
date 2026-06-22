@@ -185,6 +185,7 @@ def test_agent_answer_uses_local_template_for_recruiter_invitation_synonyms():
 	for message_text in (
 		"我公司正在招贤纳士，可否邀你聊聊呢？",
 		"你好，还考虑新的机会吗？",
+		"你好，看过你的简历，觉得蛮合适的，期待和你聊一下",
 	):
 		result = adapter.answer(
 			message_text=message_text,
@@ -197,3 +198,20 @@ def test_agent_answer_uses_local_template_for_recruiter_invitation_synonyms():
 		assert result.ok is True
 		assert "我对这个岗位比较感兴趣" in result.answer
 		assert result.raw_response == {"mode": "local_recruiter_invitation_template"}
+
+
+def test_agent_answer_handles_consideration_followup_without_ai():
+	adapter = AgentAnswerAdapter(ai_service=None)
+
+	result = adapter.answer(
+		message_text="是不考虑？",
+		intent="general_question",
+		job_summary=None,
+		rag_answer="",
+		citations=[],
+	)
+
+	assert result.ok is True
+	assert "可以进一步沟通" in result.answer
+	assert result.audit_status == "draft_created"
+	assert result.raw_response == {"mode": "local_recruiter_invitation_template"}

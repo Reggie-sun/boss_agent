@@ -5,6 +5,7 @@ import {
   buildAgentAskResponsePayload,
   buildBossCliArgs,
   buildBossDeliveryBlockPayload,
+  buildWatcherRunCommandOptions,
   detectBossDeliveryChannel,
   resolveBossAutoGreetCommandTimeoutMs,
   resolveCommandTimeoutMs,
@@ -31,6 +32,17 @@ test("buildBossCliArgs injects cdp url into spawned boss commands", () => {
     "search",
     "RAG",
   ]);
+});
+
+test("buildWatcherRunCommandOptions defaults prototype watcher runs to dry-run", () => {
+  assert.deepEqual(buildWatcherRunCommandOptions(true), {
+    env: {
+      BOSS_RAG_SEND_ENABLED: "false",
+      BOSS_RAG_WATCHER_DRY_RUN: "true",
+    },
+  });
+
+  assert.deepEqual(buildWatcherRunCommandOptions(false), { env: {} });
 });
 
 test("detectBossDeliveryChannel requires CDP instead of bridge-only exec probe", async () => {

@@ -255,6 +255,16 @@ class AgentAnswerAdapter:
 	@staticmethod
 	def _recruiter_invitation_answer(message_text: str) -> str:
 		lower_question = (message_text or "").lower()
+		rejection_tokens = (
+			"不太合适",
+			"不合适",
+			"暂时停止招聘",
+			"停止招聘",
+			"后期开放",
+			"一切顺利",
+			"祝您早日",
+			"不考虑了",
+		)
 		invitation_tokens = (
 			"招聘",
 			"急招",
@@ -267,6 +277,7 @@ class AgentAnswerAdapter:
 			"新的机会",
 			"看工作",
 			"在看机会",
+			"看过你的简历",
 		)
 		engagement_tokens = (
 			"沟通",
@@ -276,10 +287,28 @@ class AgentAnswerAdapter:
 			"有时间",
 			"方便",
 			"机会",
+			"了解",
+			"期待",
 		)
-		if not any(token in lower_question for token in invitation_tokens):
+		if any(token in lower_question for token in rejection_tokens):
 			return ""
-		if not any(token in lower_question for token in engagement_tokens):
+		resume_fit_invitation = "简历" in lower_question and any(
+			token in lower_question for token in ("合适", "匹配", "期待")
+		)
+		consideration_followup = any(
+			token in lower_question
+			for token in ("是不考虑", "还考虑", "考虑吗", "感兴趣吗", "有兴趣吗")
+		)
+		if not (
+			any(token in lower_question for token in invitation_tokens)
+			or resume_fit_invitation
+			or consideration_followup
+		):
+			return ""
+		if not (
+			any(token in lower_question for token in engagement_tokens)
+			or consideration_followup
+		):
 			return ""
 		return (
 			"您好，我对这个岗位比较感兴趣，可以进一步沟通。"

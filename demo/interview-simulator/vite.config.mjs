@@ -95,6 +95,18 @@ function buildBossCliArgs(config, args) {
   return cliArgs;
 }
 
+function buildWatcherRunCommandOptions(dryRun) {
+  if (!dryRun) {
+    return { env: {} };
+  }
+  return {
+    env: {
+      BOSS_RAG_SEND_ENABLED: "false",
+      BOSS_RAG_WATCHER_DRY_RUN: "true",
+    },
+  };
+}
+
 async function readJsonWithTimeout(url, timeoutMs = 1500) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -582,6 +594,7 @@ export {
   buildAgentAskResponsePayload,
   buildBossCliArgs,
   buildBossDeliveryBlockPayload,
+  buildWatcherRunCommandOptions,
   detectBossDeliveryChannel,
   resolveBossAutoGreetCommandTimeoutMs,
   resolveCommandTimeoutMs,
@@ -679,6 +692,7 @@ function runBossJsonCommand(config, args, options = {}) {
         cwd: config.repoRoot,
         env: {
           ...process.env,
+          ...(options.env || {}),
           PYTHONPATH: process.env.PYTHONPATH
             ? `${config.repoRoot}/src:${process.env.PYTHONPATH}`
             : `${config.repoRoot}/src`,
@@ -1131,11 +1145,16 @@ function createRagBridgePlugin() {
         const body = rawBody ? JSON.parse(rawBody) : {};
         const liveSync = Boolean(body.liveSync);
         const ensureChatPage = Boolean(body.ensureChatPage);
+        const dryRun = body.dryRun !== false;
         const args = ["agent", "watcher-run", "--once"];
         if (liveSync) args.push("--live-sync");
         if (ensureChatPage) args.push("--ensure-chat-page");
-        const payload = await runBossJsonCommand(bridgeConfig, args);
-        res.end(JSON.stringify({ ok: true, data: payload.data || {} }));
+        const payload = await runBossJsonCommand(
+          bridgeConfig,
+          args,
+          buildWatcherRunCommandOptions(dryRun),
+        );
+        res.end(JSON.stringify({ ok: true, data: { ...(payload.data || {}), dry_run: dryRun } }));
       } catch (error) {
         const payload = error?.commandPayload;
         res.statusCode = payload?.error?.recoverable ? 502 : 500;

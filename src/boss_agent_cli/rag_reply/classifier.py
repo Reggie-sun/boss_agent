@@ -113,6 +113,34 @@ TECHNICAL_QUESTION_PATTERNS = (
 	r"\bnlp\b",
 )
 JOB_DETAIL_PATTERNS = (r"你对我们岗位", r"有什么想问", r"还有什么问题", r"了解这个岗位")
+RECRUITER_INVITATION_PATTERNS = (
+	r"招聘",
+	r"急招",
+	r"诚聘",
+	r"招贤",
+	r"纳士",
+	r"岗位",
+	r"职位",
+	r"工作机会",
+	r"新的机会",
+	r"看工作",
+	r"在看机会",
+	r"看过你的简历",
+	r"简历.{0,12}(合适|匹配)",
+	r"(合适|匹配).{0,12}简历",
+)
+RECRUITER_INVITATION_ENGAGEMENT_PATTERNS = (
+	r"沟通",
+	r"聊",
+	r"兴趣",
+	r"考虑",
+	r"有时间",
+	r"方便",
+	r"机会",
+	r"了解",
+	r"回复",
+	r"期待",
+)
 SMALLTALK_PATTERNS = (r"你好", r"您好", r"收到", r"好的", r"谢谢", r"辛苦", r"在吗")
 SCHEDULE_FOLLOWUP_PATTERNS = (
 	r"这个时间",
@@ -157,6 +185,12 @@ def classify_message(message_text: str) -> ClassificationResult:
 				risk_labels=["human_approval_required", "sensitive_intent", intent],
 				classifier_source="rules",
 			)
+	if _looks_like_recruiter_invitation(lower_text):
+		return ClassificationResult(
+			intent="general_question",
+			risk_labels=[],
+			classifier_source="heuristic",
+		)
 	if any(re.search(pattern, lower_text, flags=re.IGNORECASE) for pattern in PROJECT_PATTERNS):
 		return ClassificationResult(
 			intent="project_question",
@@ -216,6 +250,21 @@ def classify_message_with_context(
 def _looks_like_schedule_followup(message_text: str) -> bool:
 	text = (message_text or "").strip()
 	return any(re.search(pattern, text, flags=re.IGNORECASE) for pattern in SCHEDULE_FOLLOWUP_PATTERNS)
+
+
+def _looks_like_recruiter_invitation(message_text: str) -> bool:
+	text = (message_text or "").strip()
+	if not text:
+		return False
+	has_invitation_context = any(
+		re.search(pattern, text, flags=re.IGNORECASE) for pattern in RECRUITER_INVITATION_PATTERNS
+	)
+	if not has_invitation_context:
+		return False
+	return any(
+		re.search(pattern, text, flags=re.IGNORECASE)
+		for pattern in RECRUITER_INVITATION_ENGAGEMENT_PATTERNS
+	)
 
 
 def _has_schedule_context(context_messages: list[str] | tuple[str, ...]) -> bool:
