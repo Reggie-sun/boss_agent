@@ -25,6 +25,10 @@ export function OutreachWorkspace({
   isBossSearching,
   bossSearchActionsDisabled,
   handleBossSearchPreview,
+  bossAgentPlan,
+  isBossAgentPlanning,
+  bossAgentPlanError,
+  handleBossAgentPlan,
   isBossAutoRunning,
   handleBossAutoGreet,
   bossAutoButtonLabel,
@@ -208,6 +212,15 @@ export function OutreachWorkspace({
             </button>
             <button
               type="button"
+              className="apply-btn apply-btn--search"
+              onClick={handleBossAgentPlan}
+              disabled={isBossAgentPlanning || bossSearchActionsDisabled || !selectedProfileId}
+            >
+              <Lightning size={16} weight="fill" />
+              {isBossAgentPlanning ? "规划中..." : "生成 Agent 计划"}
+            </button>
+            <button
+              type="button"
               className="apply-btn apply-btn--send apply-btn--compact"
               onClick={handleBossAutoGreet}
               disabled={isBossAutoRunning || bossSearchActionsDisabled || !selectedProfileId}
@@ -250,6 +263,50 @@ export function OutreachWorkspace({
                       .join(" @ ")}
                   </span>
                 ) : null}
+              </div>
+            </div>
+          ) : null}
+
+          {bossAgentPlanError ? (
+            <div className="apply-result apply-result--error">
+              <WarningCircle size={18} weight="fill" />
+              <span>{bossAgentPlanError}</span>
+            </div>
+          ) : null}
+
+          {bossAgentPlan ? (
+            <div className="agent-plan-panel">
+              <div className="agent-plan-panel__header">
+                <strong>Agent 计划</strong>
+                <span>
+                  {bossAgentPlan.status} · {bossAgentPlan.total || 0} 个候选 ·{" "}
+                  {bossAgentPlan.send_ready ? "可执行" : "需确认"}
+                </span>
+              </div>
+              <div className="agent-plan-list">
+                {(bossAgentPlan.actions || []).slice(0, 5).map((action, index) => {
+                  const candidate = action.candidate || {};
+                  const label =
+                    [candidate.title, candidate.company].filter(Boolean).join(" @ ") ||
+                    candidate.security_id ||
+                    `候选 ${index + 1}`;
+                  return (
+                    <article className="agent-plan-card" key={`${candidate.security_id || label}-${index}`}>
+                      <div className="agent-plan-card__topline">
+                        <strong>{label}</strong>
+                        <span>{action.decision}</span>
+                      </div>
+                      <p>
+                        score {action.score} · risk {action.risk}
+                      </p>
+                      <div className="agent-plan-card__reasons">
+                        {(action.reasons || []).map((reason) => (
+                          <span key={reason}>{reason}</span>
+                        ))}
+                      </div>
+                    </article>
+                  );
+                })}
               </div>
             </div>
           ) : null}

@@ -334,6 +334,9 @@ export function App() {
   const [bossAutomationProgress, setBossAutomationProgress] = useState(null);
   const [bossAutomationRiskLocked, setBossAutomationRiskLocked] = useState(false);
   const [bossAutomationRiskClearedAtMs, setBossAutomationRiskClearedAtMs] = useState(0);
+  const [bossAgentPlan, setBossAgentPlan] = useState(null);
+  const [isBossAgentPlanning, setIsBossAgentPlanning] = useState(false);
+  const [bossAgentPlanError, setBossAgentPlanError] = useState("");
   const [isBossSearching, setIsBossSearching] = useState(false);
   const [isBossAutoRunning, setIsBossAutoRunning] = useState(false);
   const [chatTargets, setChatTargets] = useState([]);
@@ -650,6 +653,46 @@ export function App() {
       );
     } finally {
       setIsBossSearching(false);
+    }
+  }
+
+  async function handleBossAgentPlan() {
+    const query = bossSearchForm.query.trim();
+    if (!query || isBossAgentPlanning || !selectedProfileId) return;
+    setIsBossAgentPlanning(true);
+    setBossAgentPlanError("");
+    try {
+      const response = await fetch("/api/agent/outreach-plan", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          query,
+          city: bossSearchForm.city,
+          salary: bossSearchForm.salary,
+          experience: bossSearchForm.experience,
+          education: bossSearchForm.education,
+          industry: bossSearchForm.industry,
+          scale: bossSearchForm.scale,
+          stage: bossSearchForm.stage,
+          jobType: bossSearchForm.jobType,
+          welfare: bossSearchForm.welfare,
+          count: bossSearchForm.count,
+          attachments: bossSearchForm.attachments,
+          profile_id: selectedProfileId,
+          targetTitle: "AI Agent 工程师",
+          live_execution_requested: false,
+        }),
+      });
+      const payload = await response.json();
+      if (!response.ok || !payload.ok) {
+        throw new Error(payload.errorMessage || "生成 Agent 计划失败。");
+      }
+      setBossAgentPlan(payload.data?.plan || null);
+    } catch (error) {
+      setBossAgentPlan(null);
+      setBossAgentPlanError(error instanceof Error ? error.message : "生成 Agent 计划失败。");
+    } finally {
+      setIsBossAgentPlanning(false);
     }
   }
 
@@ -1442,6 +1485,10 @@ export function App() {
             isBossSearching={isBossSearching}
             bossSearchActionsDisabled={bossSearchActionsDisabled}
             handleBossSearchPreview={handleBossSearchPreview}
+            bossAgentPlan={bossAgentPlan}
+            isBossAgentPlanning={isBossAgentPlanning}
+            bossAgentPlanError={bossAgentPlanError}
+            handleBossAgentPlan={handleBossAgentPlan}
             isBossAutoRunning={isBossAutoRunning}
             handleBossAutoGreet={handleBossAutoGreet}
             bossAutoButtonLabel={bossAutoButtonLabel}

@@ -1878,6 +1878,71 @@ button {
   color: var(--accent);
 }
 
+.agent-plan-panel {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid rgba(47, 128, 237, 0.14);
+  background: rgba(255, 255, 255, 0.62);
+}
+
+.agent-plan-panel__header,
+.agent-plan-card__topline {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.agent-plan-panel__header span,
+.agent-plan-card p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.84rem;
+}
+
+.agent-plan-list {
+  display: grid;
+  gap: 10px;
+}
+
+.agent-plan-card {
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  background: var(--surface-soft);
+}
+
+.agent-plan-card__topline strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agent-plan-card__topline span {
+  flex: 0 0 auto;
+  padding: 4px 8px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 0.76rem;
+  font-weight: 800;
+}
+
+.agent-plan-card__reasons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.agent-plan-card__reasons span {
+  padding: 4px 7px;
+  background: rgba(43, 58, 78, 0.06);
+  color: var(--muted);
+  font-size: 0.76rem;
+}
+
 .workspace-tabs {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));

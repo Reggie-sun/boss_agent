@@ -212,3 +212,19 @@ def test_interview_simulator_exposes_read_only_outreach_plan_endpoint():
 	route_block = vite.split('req.url === "/api/agent/outreach-plan"', 1)[1].split("return true;", 1)[0]
 	assert "detectBossDeliveryChannel" not in route_block
 	assert "buildBossDeliveryBlockPayload" not in route_block
+
+
+def test_interview_simulator_renders_agent_outreach_plan_panel():
+	repo_root = Path(__file__).resolve().parents[1]
+	app = (repo_root / "demo" / "interview-simulator" / "src" / "App.jsx").read_text(encoding="utf-8")
+	outreach = (
+		repo_root / "demo" / "interview-simulator" / "src" / "views" / "OutreachWorkspace.jsx"
+	).read_text(encoding="utf-8")
+	styles = (repo_root / "demo" / "interview-simulator" / "src" / "styles.css").read_text(encoding="utf-8")
+
+	assert "bossAgentPlan" in app
+	assert "handleBossAgentPlan" in app
+	assert 'fetch("/api/agent/outreach-plan"' in app
+	assert "生成 Agent 计划" in outreach
+	assert "agent-plan-card" in outreach
+	assert ".agent-plan-card" in styles
