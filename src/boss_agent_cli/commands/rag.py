@@ -13,6 +13,7 @@ from boss_agent_cli.api.browser_client import ensure_candidate_chat_page_via_cdp
 from boss_agent_cli.ai.config import AIConfigStore
 from boss_agent_cli.ai.service import AIService
 from boss_agent_cli.auth.manager import AuthManager
+from boss_agent_cli.cache.store import CacheStore
 from boss_agent_cli.commands._platform import get_platform_instance
 from boss_agent_cli.commands.chat_reply import execute_chat_reply
 from boss_agent_cli.display import handle_error_output, handle_output
@@ -31,6 +32,7 @@ from boss_agent_cli.rag_reply.adapters.rag_http import RagHttpAdapter
 from boss_agent_cli.rag_reply.adapters.rag_profile import RagProfileConnector
 from boss_agent_cli.rag_reply.langchain_memory import build_thread_payload
 from boss_agent_cli.rag_reply.models import AuditLogRecord, ConversationRecord, MessageRecord, new_id
+from boss_agent_cli.rag_reply.outreach_planner import OutreachCandidate, OutreachPlanner, OutreachPlannerConfig
 from boss_agent_cli.rag_reply.profile_models import (
 	BINDING_SOURCES,
 	RAG_AUTH_MODES,
@@ -49,6 +51,12 @@ from boss_agent_cli.rag_reply.service import BossRagReplyService
 from boss_agent_cli.rag_reply.store import RagReplyStore
 from boss_agent_cli.rag_reply.watcher import BossPassiveWatcher, WatcherRunResult
 from boss_agent_cli.rag_reply.watcher_config import WatcherConfig
+from boss_agent_cli.search_filters import (
+	SearchFilterCriteria,
+	SearchPipelinePlatformError,
+	resolve_welfare_keywords,
+	run_search_pipeline,
+)
 
 
 @dataclass(slots=True)
@@ -652,6 +660,84 @@ def _cached_recent_targets(store: RagReplyStore, *, limit: int) -> list[dict[str
 		if len(targets) >= unique_limit:
 			break
 	return targets
+
+
+def _resolve_outreach_attachment_paths(ctx: click.Context, attachments: tuple[str, ...]) -> list[str] | None:
+	paths: list[str] = []
+	for raw in attachments:
+		path = Path(raw).expanduser().resolve()
+		if not path.is_file():
+			handle_error_output(
+				ctx,
+				_workflow_command(ctx, "plan-outreach"),
+				code="INVALID_ATTACHMENT",
+				message=f"附件文件不存在或不是文件: {path}",
+				recoverable=True,
+				recovery_action="检查 --attachment 路径后重试",
+			)
+			return None
+		paths.append(str(path))
+	return paths
+
+
+def _profile_outreach_enabled(ctx: click.Context, profile_id: str) -> tuple[bool, str]:
+	if not profile_id:
+		return False, "profile_id_required"
+	config = _resolve_profile_service(ctx).get_profile_config(profile_id)
+	if config is None:
+		return False, "profile_config_not_found"
+	if not config.outreach_auto_send_enabled:
+		return False, "profile_outreach_disabled"
+	return True, ""
+
+
+def _collect_outreach_plan_candidates(
+	ctx: click.Context,
+	*,
+	query: str,
+	city: str | None,
+	salary: str | None,
+	experience: str | None,
+	education: str | None,
+	industry: str | None,
+	scale: str | None,
+	stage: str | None,
+	job_type: str | None,
+	welfare: str | None,
+	count: int,
+) -> list[dict[str, object]]:
+	welfare_conditions = [
+		(label, resolve_welfare_keywords(label))
+		for label in (part.strip() for part in (welfare or "").split(","))
+		if label
+	]
+	criteria = SearchFilterCriteria(
+		query=query,
+		city=city,
+		salary=salary,
+		experience=experience,
+		education=education,
+		industry=industry,
+		scale=scale,
+		stage=stage,
+		job_type=job_type,
+	)
+	data_dir = Path(ctx.obj["data_dir"])
+	logger = ctx.obj["logger"]
+	with CacheStore(data_dir / "cache" / "boss_agent.db") as cache:
+		auth = AuthManager(data_dir, logger=logger, platform=ctx.obj.get("platform", "zhipin"))
+		with get_platform_instance(ctx, auth) as platform:
+			result = run_search_pipeline(
+				platform,
+				cache,
+				logger,
+				criteria=criteria,
+				max_pages=max(1, min(count, 5)),
+				limit=count,
+				welfare_conditions=welfare_conditions,
+				skip_greeted=True,
+			)
+	return list(result.items)
 
 
 def _not_implemented(ctx: click.Context, command: str) -> None:
@@ -1454,6 +1540,118 @@ def rag_targets_cmd(ctx: click.Context, limit: int) -> None:
 				"agent send <draft_id> --security-id <security_id> --send-resume",
 			]
 		},
+	)
+
+
+@rag_group.command("plan-outreach")
+@click.option("--query", required=True)
+@click.option("--profile-id", required=True)
+@click.option("--target-title", default="")
+@click.option("--city", default=None)
+@click.option("--salary", default=None)
+@click.option("--experience", default=None)
+@click.option("--education", default=None)
+@click.option("--industry", default=None)
+@click.option("--scale", default=None)
+@click.option("--stage", default=None)
+@click.option("--job-type", default=None)
+@click.option("--welfare", default=None)
+@click.option("--count", default=5, type=int, show_default=True)
+@click.option("--attachment", "attachments", multiple=True)
+@click.option("--live-execution-requested", is_flag=True, default=False)
+@click.pass_context
+@handle_auth_errors("agent-plan-outreach")
+def rag_plan_outreach_cmd(
+	ctx: click.Context,
+	query: str,
+	profile_id: str,
+	target_title: str,
+	city: str | None,
+	salary: str | None,
+	experience: str | None,
+	education: str | None,
+	industry: str | None,
+	scale: str | None,
+	stage: str | None,
+	job_type: str | None,
+	welfare: str | None,
+	count: int,
+	attachments: tuple[str, ...],
+	live_execution_requested: bool,
+) -> None:
+	command = _workflow_command(ctx, "plan-outreach")
+	attachment_paths = _resolve_outreach_attachment_paths(ctx, attachments)
+	if attachment_paths is None:
+		return
+
+	safe_count = max(1, min(count, 150))
+	try:
+		raw_candidates = _collect_outreach_plan_candidates(
+			ctx,
+			query=query,
+			city=city,
+			salary=salary,
+			experience=experience,
+			education=education,
+			industry=industry,
+			scale=scale,
+			stage=stage,
+			job_type=job_type,
+			welfare=welfare,
+			count=safe_count,
+		)
+	except SearchPipelinePlatformError as exc:
+		handle_error_output(
+			ctx,
+			command,
+			code=exc.code,
+			message=exc.message or "搜索结果获取失败",
+			recoverable=exc.code == "NETWORK_ERROR",
+			recovery_action="检查网络或登录状态后重试" if exc.code == "NETWORK_ERROR" else None,
+			details=exc.details,
+		)
+		return
+
+	profile_enabled, profile_blocked_reason = _profile_outreach_enabled(ctx, profile_id)
+	planner = OutreachPlanner(
+		OutreachPlannerConfig(
+			query=query,
+			target_title=target_title,
+			profile_id=profile_id,
+			profile_outreach_enabled=profile_enabled,
+			live_execution_requested=live_execution_requested,
+		)
+	)
+	plan = planner.build_plan(
+		[OutreachCandidate.from_mapping(item) for item in raw_candidates],
+		attachments=attachment_paths,
+	)
+	payload = plan.to_payload()
+	if profile_blocked_reason and not payload.get("blocked_reason"):
+		payload["blocked_reason"] = profile_blocked_reason
+	store = _resolve_store(ctx)
+	store.append_audit_log(
+		AuditLogRecord.new(
+			event_type="outreach_plan",
+			entity_type="profile",
+			entity_id=profile_id,
+			payload={
+				"query": query,
+				"profile_id": profile_id,
+				"plan": payload,
+				"live_execution_requested": live_execution_requested,
+			},
+		)
+	)
+	handle_output(
+		ctx,
+		command,
+		{
+			"dry_run": True,
+			"live_execution_requested": live_execution_requested,
+			"plan": payload,
+		},
+		render=lambda data: click.echo(f"Planned {data['plan']['total']} outreach candidate(s).", err=True),
 	)
 
 
