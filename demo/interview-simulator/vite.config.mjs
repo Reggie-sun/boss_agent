@@ -61,6 +61,13 @@ function normalizeAttachmentPaths(value) {
     .filter(Boolean);
 }
 
+function appendTextOption(args, flag, value) {
+  const normalized = String(value || "").trim();
+  if (normalized) {
+    args.push(flag, normalized);
+  }
+}
+
 function loadBridgeConfig() {
   const repoRoot = path.resolve(process.cwd(), "..", "..");
   const repoEnv = parseEnvFile(path.join(repoRoot, ".env"));
@@ -1417,6 +1424,52 @@ function createRagBridgePlugin() {
         res.end(JSON.stringify({
           ok: false,
           errorMessage: error instanceof Error ? error.message : "搜索失败",
+          error: p?.error || null,
+        }));
+      }
+      return true;
+    }
+
+    if (req.method === "POST" && req.url === "/api/agent/outreach-plan") {
+      res.setHeader("Content-Type", "application/json; charset=utf-8");
+      try {
+        const rawBody = await readBody(req);
+        const body = rawBody ? JSON.parse(rawBody) : {};
+        const attachments = normalizeAttachmentPaths(
+          body.attachments || body.attachmentPaths || body.attachment_paths,
+        );
+        const args = ["agent", "plan-outreach"];
+        appendTextOption(args, "--query", body.query);
+        appendTextOption(args, "--profile-id", body.profile_id);
+        appendTextOption(args, "--target-title", body.targetTitle);
+        appendTextOption(args, "--city", body.city);
+        appendTextOption(args, "--salary", body.salary);
+        appendTextOption(args, "--experience", body.experience);
+        appendTextOption(args, "--education", body.education);
+        appendTextOption(args, "--industry", body.industry);
+        appendTextOption(args, "--scale", body.scale);
+        appendTextOption(args, "--stage", body.stage);
+        appendTextOption(args, "--job-type", body.jobType || body.job_type);
+        appendTextOption(args, "--welfare", body.welfare);
+        appendTextOption(args, "--count", body.count);
+        if (body.live_execution_requested === true) {
+          args.push("--live-execution-requested");
+        }
+        for (const attachmentPath of attachments) {
+          args.push("--attachment", attachmentPath);
+        }
+        const payload = await runBossJsonCommand(bridgeConfig, args);
+        res.end(JSON.stringify({
+          ok: Boolean(payload.ok),
+          data: payload.data || {},
+          errorMessage: payload.error?.message || payload.errorMessage || "",
+        }));
+      } catch (error) {
+        const p = error?.commandPayload;
+        res.statusCode = p?.error?.recoverable ? 400 : 500;
+        res.end(JSON.stringify({
+          ok: false,
+          errorMessage: error instanceof Error ? error.message : "生成 Agent 计划失败",
           error: p?.error || null,
         }));
       }

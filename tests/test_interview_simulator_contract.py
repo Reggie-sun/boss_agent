@@ -198,3 +198,17 @@ def test_interview_simulator_target_refresh_preserves_current_selection():
 	assert "applySecurityIdRef" in app
 	assert "!selectedTargetValueRef.current" in app
 	assert "!applySecurityIdRef.current.trim()" in app
+
+
+def test_interview_simulator_exposes_read_only_outreach_plan_endpoint():
+	repo_root = Path(__file__).resolve().parents[1]
+	vite = (repo_root / "demo" / "interview-simulator" / "vite.config.mjs").read_text(encoding="utf-8")
+
+	assert 'req.url === "/api/agent/outreach-plan"' in vite
+	assert '"agent", "plan-outreach"' in vite
+	assert 'appendTextOption(args, "--profile-id", body.profile_id)' in vite
+	assert 'appendTextOption(args, "--target-title", body.targetTitle)' in vite
+	assert 'args.push("--attachment", attachmentPath)' in vite
+	route_block = vite.split('req.url === "/api/agent/outreach-plan"', 1)[1].split("return true;", 1)[0]
+	assert "detectBossDeliveryChannel" not in route_block
+	assert "buildBossDeliveryBlockPayload" not in route_block
