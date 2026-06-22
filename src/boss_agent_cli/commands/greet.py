@@ -277,10 +277,14 @@ def batch_greet_cmd(
 				job_type=job_type,
 			)
 			try:
-				max_pages = 5 if requires_extended_prefilter_scan(criteria, welfare_conditions) else 1
+				needs_extended_scan = requires_extended_prefilter_scan(criteria, welfare_conditions)
 			except ValueError as exc:
 				handle_error_output(ctx, "batch-greet", code="INVALID_PARAM", message=str(exc))
 				return
+			if needs_extended_scan:
+				max_pages = max(5, count)
+			else:
+				max_pages = count if count > 1 else 1
 			try:
 				pipeline_result = run_search_pipeline(
 					platform,

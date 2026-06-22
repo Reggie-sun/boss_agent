@@ -22,7 +22,12 @@ def _ctx_mock(mock_cls):
 	return instance
 
 
-def _make_raw_job(name: str = "Go 开发", security_id: str = "sec_x", welfare: list[str] | None = None) -> dict:
+def _make_raw_job(
+	name: str = "Go 开发",
+	security_id: str = "sec_x",
+	welfare: list[str] | None = None,
+	brand_scale: str = "100-499人",
+) -> dict:
 	return {
 		"encryptJobId": f"job_{security_id}",
 		"jobName": name,
@@ -35,7 +40,7 @@ def _make_raw_job(name: str = "Go 开发", security_id: str = "sec_x", welfare: 
 		"skills": ["Golang"],
 		"welfareList": welfare or [],
 		"brandIndustry": "互联网",
-		"brandScaleName": "100-499人",
+		"brandScaleName": brand_scale,
 		"brandStageName": "A轮",
 		"bossName": "李",
 		"bossTitle": "HR",
@@ -190,6 +195,80 @@ def test_batch_greet_progress_json_reports_current_candidate(
 	assert [event["total"] for event in events] == [2, 2]
 	assert events[0]["title"] == "Go 1"
 	assert events[0]["company"] == "TestCo"
+
+
+@patch("boss_agent_cli.commands.greet.get_platform_instance")
+@patch("boss_agent_cli.commands.greet.AuthManager")
+@patch("boss_agent_cli.commands.greet.CacheStore")
+def test_batch_greet_dry_run_paginates_until_requested_count(mock_cache_cls, mock_auth_cls, mock_client_cls):
+	"""Regression: Agent 自动 count > 1 时不能只看第一页的 1 个候选。"""
+	mock_cache = _ctx_mock(mock_cache_cls)
+	mock_cache.is_greeted.return_value = False
+	mock_client = _ctx_mock(mock_client_cls)
+	mock_client.search_jobs.side_effect = [
+		{
+			"zpData": {
+				"hasMore": True,
+				"jobList": [_make_raw_job("Go 1", "sec_1")],
+			},
+		},
+		{
+			"zpData": {
+				"hasMore": False,
+				"jobList": [_make_raw_job("Go 2", "sec_2"), _make_raw_job("Go 3", "sec_3")],
+			},
+		},
+	]
+	mock_client.is_success.return_value = True
+
+	runner = CliRunner()
+	result = runner.invoke(cli, ["batch-greet", "golang", "--count", "3", "--dry-run"])
+
+	assert result.exit_code == 0, result.output
+	parsed = json.loads(result.output)
+	assert parsed["ok"] is True
+	assert parsed["data"]["count"] == 3
+	assert [item["security_id"] for item in parsed["data"]["candidates"]] == ["sec_1", "sec_2", "sec_3"]
+	assert mock_client.search_jobs.call_count == 2
+
+
+@patch("boss_agent_cli.commands.greet.get_platform_instance")
+@patch("boss_agent_cli.commands.greet.AuthManager")
+@patch("boss_agent_cli.commands.greet.CacheStore")
+def test_batch_greet_dry_run_keeps_extended_scan_floor_for_local_filters(
+	mock_cache_cls,
+	mock_auth_cls,
+	mock_client_cls,
+):
+	"""本地筛选 count=1 时仍要允许继续翻页，避免第一页误空。"""
+	mock_cache = _ctx_mock(mock_cache_cls)
+	mock_cache.is_greeted.return_value = False
+	mock_client = _ctx_mock(mock_client_cls)
+	mock_client.search_jobs.side_effect = [
+		{
+			"zpData": {
+				"hasMore": True,
+				"jobList": [_make_raw_job("Go 1", "sec_1", brand_scale="100-499人")],
+			},
+		},
+		{
+			"zpData": {
+				"hasMore": False,
+				"jobList": [_make_raw_job("Go 2", "sec_2", brand_scale="10000人以上")],
+			},
+		},
+	]
+	mock_client.is_success.return_value = True
+
+	runner = CliRunner()
+	result = runner.invoke(cli, ["batch-greet", "python", "--scale", "10000人以上", "--count", "1", "--dry-run"])
+
+	assert result.exit_code == 0, result.output
+	parsed = json.loads(result.output)
+	assert parsed["ok"] is True
+	assert parsed["data"]["count"] == 1
+	assert [item["security_id"] for item in parsed["data"]["candidates"]] == ["sec_2"]
+	assert mock_client.search_jobs.call_count == 2
 
 
 @patch("boss_agent_cli.commands.greet.time")
