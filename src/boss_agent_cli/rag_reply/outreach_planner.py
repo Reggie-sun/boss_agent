@@ -104,15 +104,21 @@ class OutreachDecision:
 @dataclass(slots=True)
 class OutreachPlan:
     status: str
+    query: str
+    profile_id: str
     total: int
     send_ready: bool
     actions: list[OutreachDecision]
+    blocked_reason: str = ""
 
     def to_payload(self) -> dict[str, Any]:
         return {
             "status": self.status,
+            "query": self.query,
+            "profile_id": self.profile_id,
             "total": self.total,
             "send_ready": self.send_ready,
+            "blocked_reason": self.blocked_reason,
             "actions": [action.to_payload() for action in self.actions],
         }
 
@@ -137,8 +143,11 @@ class OutreachPlanner:
             ]
             return OutreachPlan(
                 status="blocked_profile_gate",
+                query=self.config.query,
+                profile_id=self.config.profile_id,
                 total=len(candidates),
                 send_ready=False,
+                blocked_reason="profile_outreach_disabled",
                 actions=actions,
             )
 
@@ -149,6 +158,8 @@ class OutreachPlanner:
         )
         return OutreachPlan(
             status="planned",
+            query=self.config.query,
+            profile_id=self.config.profile_id,
             total=len(candidates),
             send_ready=send_ready,
             actions=actions,

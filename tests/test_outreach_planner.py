@@ -50,6 +50,10 @@ def test_outreach_planner_recommends_greet_with_attachments_for_relevant_candida
     assert "has_attachments" in plan.actions[0].reasons
     assert plan.actions[0].proposed_cli_args[:2] == ["batch-greet", "RAG"]
     assert "--attachment" in plan.actions[0].proposed_cli_args
+    payload = plan.to_payload()
+    assert payload["query"] == "RAG"
+    assert payload["profile_id"] == "profile_001"
+    assert payload["blocked_reason"] == ""
 
 
 def test_outreach_planner_skips_already_greeted_candidate_with_reason():
@@ -89,6 +93,7 @@ def test_outreach_planner_blocks_live_plan_when_profile_gate_disabled():
     assert plan.send_ready is False
     assert plan.actions[0].decision == "blocked_manual_required"
     assert "profile_outreach_disabled" in plan.actions[0].reasons
+    assert plan.to_payload()["blocked_reason"] == "profile_outreach_disabled"
 
 
 def test_outreach_planner_skips_low_match_candidate():
