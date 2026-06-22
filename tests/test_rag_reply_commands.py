@@ -1239,6 +1239,86 @@ def test_agent_watcher_run_live_sync_read_disabled_records_recovery(
 	)
 
 
+def test_cli_watcher_message_syncer_refreshes_stale_local_auth_from_cdp(
+	monkeypatch, tmp_path: Path
+):
+	events: list[object] = []
+
+	class _FakeAuthManager:
+		def __init__(self, data_dir, *, logger=None, platform="zhipin"):
+			events.append(("auth_init", data_dir, platform))
+			self.token = {
+				"cookies": {"wt2": "stale-cookie"},
+				"stoken": "stale-stoken",
+				"user_agent": "stale-ua",
+			}
+
+		def check_status(self):
+			events.append("check_status")
+			return self.token
+
+		def _verify_cookie(self, token):
+			events.append(("verify_cookie", token["stoken"]))
+			return token["stoken"] == "fresh-stoken"
+
+		def login(self, *, timeout=120, cookie_source=None, cdp_url=None, force_cdp=False):
+			events.append(("login", timeout, cdp_url, force_cdp))
+			self.token = {
+				"cookies": {"wt2": "fresh-cookie"},
+				"stoken": "fresh-stoken",
+				"user_agent": "fresh-ua",
+			}
+			return self.token
+
+	class _FakePlatform:
+		def close(self):
+			events.append("close")
+
+		def friend_list(self, page=1):
+			events.append(("friend_list", page))
+			return {"code": 0, "zpData": {"friendList": [], "hasMore": False}}
+
+		def is_success(self, response):
+			return response.get("code") == 0
+
+		def unwrap_data(self, response):
+			return response.get("zpData")
+
+		def parse_error(self, response):
+			return "UNKNOWN", str(response.get("message") or "")
+
+	def _get_platform_instance(ctx, auth):
+		events.append(("platform", auth.token["stoken"]))
+		return _FakePlatform()
+
+	ctx = SimpleNamespace(
+		obj={
+			"data_dir": tmp_path,
+			"logger": None,
+			"platform": "zhipin",
+			"delay": (0.0, 0.0),
+			"cdp_url": "http://127.0.0.1:9229",
+			"config": {"boss_rag_allow_message_read": True},
+		}
+	)
+	monkeypatch.setattr(rag_commands, "AuthManager", _FakeAuthManager)
+	monkeypatch.setattr(rag_commands, "get_platform_instance", _get_platform_instance)
+
+	result = rag_commands._CliWatcherMessageSyncer(ctx).sync_messages()
+
+	assert result["ok"] is True
+	assert result["count"] == 0
+	assert events == [
+		("auth_init", tmp_path, "zhipin"),
+		"check_status",
+		("verify_cookie", "stale-stoken"),
+		("login", 30, "http://127.0.0.1:9229", True),
+		("platform", "fresh-stoken"),
+		("friend_list", 1),
+		"close",
+	]
+
+
 def test_agent_watcher_run_once_no_live_sync_overrides_config(monkeypatch, tmp_path: Path):
 	(tmp_path / "config.json").write_text(
 		json.dumps(
@@ -1542,7 +1622,7 @@ def test_cli_watcher_message_syncer_normalizes_read_disabled_and_success(monkeyp
 			)
 
 	enabled_ctx = SimpleNamespace(obj={"config": {"boss_rag_allow_message_read": True}})
-	monkeypatch.setattr(rag_commands, "_build_boss_adapter", lambda ctx: _FakeBossAdapter())
+	monkeypatch.setattr(rag_commands, "_build_boss_adapter", lambda ctx, **kwargs: _FakeBossAdapter())
 
 	synced = rag_commands._CliWatcherMessageSyncer(enabled_ctx).sync_messages(conversation_id="conv_001")
 

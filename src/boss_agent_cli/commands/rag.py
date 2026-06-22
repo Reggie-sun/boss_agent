@@ -125,7 +125,7 @@ class _CliWatcherMessageSyncer:
 				"recovery_action": "Set boss_rag_allow_message_read=true in config.json and retry.",
 				"count": 0,
 			}
-		with _build_boss_adapter(self.ctx) as adapter:
+		with _build_boss_adapter(self.ctx, refresh_stale_auth=True) as adapter:
 			result = adapter.sync_messages(conversation_id=conversation_id)
 		return {
 			"ok": True,
@@ -139,7 +139,7 @@ class _CliWatcherMessageSyncer:
 		config = self.ctx.obj.get("config", {}) if self.ctx and self.ctx.obj else {}
 		if not bool(config.get("boss_rag_allow_message_read", False)):
 			return []
-		with _build_boss_adapter(self.ctx) as adapter:
+		with _build_boss_adapter(self.ctx, refresh_stale_auth=True) as adapter:
 			return adapter.list_pipeline_candidates(stale_days=3)
 
 
@@ -338,13 +338,41 @@ def _watcher_audit_payload(entry: AuditLogRecord) -> dict[str, object]:
 	}
 
 
-def _build_boss_adapter(ctx: click.Context) -> BossAutomationAdapter:
+def _build_boss_adapter(ctx: click.Context, *, refresh_stale_auth: bool = False) -> BossAutomationAdapter:
 	"""Construct the read-only Boss automation adapter."""
 	data_dir = Path(ctx.obj["data_dir"])
 	logger = ctx.obj["logger"]
 	auth = AuthManager(data_dir, logger=logger, platform=ctx.obj.get("platform", "zhipin"))
+	if refresh_stale_auth:
+		_refresh_stale_auth_from_cdp(ctx, auth)
 	platform = get_platform_instance(ctx, auth)
 	return BossAutomationAdapter(platform=platform, store=_resolve_store(ctx))
+
+
+def _refresh_stale_auth_from_cdp(ctx: click.Context, auth: AuthManager) -> None:
+	"""Refresh an expired local token from the attached CDP browser before watcher reads."""
+	obj = ctx.obj or {}
+	cdp_url = obj.get("cdp_url")
+	if not cdp_url:
+		return
+	try:
+		current = auth.check_status()
+	except Exception:
+		return
+	if not current:
+		return
+	try:
+		if auth._verify_cookie(current):
+			return
+	except Exception:
+		return
+	try:
+		auth.login(timeout=30, cdp_url=cdp_url, force_cdp=True)
+	except Exception as exc:
+		logger = obj.get("logger")
+		info = getattr(logger, "info", None)
+		if callable(info):
+			info(f"CDP 登录态刷新失败，继续使用现有认证并让平台错误处理: {exc}")
 
 
 def _ensure_conversation(
