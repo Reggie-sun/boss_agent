@@ -23,6 +23,7 @@ class WatcherConfig:
     poll_seconds: int = 20
     max_failures_per_conversation: int = 3
     read_no_reply_followup_limit_per_cycle: int = 1
+    read_no_reply_stale_days: int = 3
     live_sync: bool = False
     require_send_enabled: bool = True
     send_enabled: bool = False
@@ -58,6 +59,10 @@ class WatcherConfig:
                     1,
                 ),
             ),
+            read_no_reply_stale_days=max(
+                0,
+                _int_or_default(values.get("boss_rag_read_no_reply_stale_days"), 3),
+            ),
             live_sync=bool(values.get("boss_rag_watcher_live_sync", False)),
             require_send_enabled=bool(
                 values.get("boss_rag_watcher_require_send_enabled", True)
@@ -86,6 +91,7 @@ def with_profile_config(
         poll_seconds=base.poll_seconds,
         max_failures_per_conversation=base.max_failures_per_conversation,
         read_no_reply_followup_limit_per_cycle=base.read_no_reply_followup_limit_per_cycle,
+        read_no_reply_stale_days=base.read_no_reply_stale_days,
         live_sync=base.live_sync,
         require_send_enabled=base.require_send_enabled,
         send_enabled=base.send_enabled and profile_config.reply_auto_send_enabled,

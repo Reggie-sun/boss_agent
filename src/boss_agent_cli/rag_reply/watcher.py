@@ -202,7 +202,11 @@ class BossPassiveWatcher:
                 blocked=blocked,
                 tasks=tasks,
             )
+        processed_pipeline_candidates = 0
+        pipeline_limit = self.config.read_no_reply_followup_limit_per_cycle
         for candidate in pipeline_candidates:
+            if processed_pipeline_candidates >= pipeline_limit:
+                break
             if self._already_processed_pipeline_candidate(candidate):
                 skipped += 1
                 tasks.append(
@@ -214,6 +218,7 @@ class BossPassiveWatcher:
                 )
                 continue
             task = self._process_pipeline_candidate(candidate)
+            processed_pipeline_candidates += 1
             tasks.append(task)
             if task["status"] in {"blocked_manual_required", "paused"}:
                 blocked += 1
@@ -272,7 +277,7 @@ class BossPassiveWatcher:
             if candidate.get("stage") == "read_no_reply"
             and str(candidate.get("security_id") or "").strip()
         ]
-        return candidates[: self.config.read_no_reply_followup_limit_per_cycle]
+        return candidates
 
     def _processed_message_index(self) -> _ProcessedMessageIndex:
         messages_by_id = {
@@ -492,6 +497,8 @@ class BossPassiveWatcher:
                 entry.payload.get("stage") == "read_no_reply"
                 or entry.payload.get("intent") == "read_no_reply"
             ) and bool(candidate_keys & payload_keys):
+                if entry.payload.get("status") == "dry_run" or bool(entry.payload.get("dry_run")):
+                    continue
                 return True
         return False
 

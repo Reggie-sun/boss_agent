@@ -1059,6 +1059,40 @@ def test_build_passive_watcher_registers_pipeline_candidate_provider(monkeypatch
 	assert hasattr(watcher.pipeline_candidate_provider, "list_pipeline_candidates")
 
 
+def test_cli_watcher_pipeline_candidates_use_configured_read_no_reply_stale_days(monkeypatch):
+	calls: list[int] = []
+
+	class _FakeAdapter:
+		def __enter__(self):
+			return self
+
+		def __exit__(self, exc_type, exc, tb):
+			return None
+
+		def list_pipeline_candidates(self, *, stale_days: int):
+			calls.append(stale_days)
+			return [{"stage": "read_no_reply", "security_id": "sec_read"}]
+
+	ctx = SimpleNamespace(
+		obj={
+			"config": {
+				"boss_rag_allow_message_read": True,
+				"boss_rag_read_no_reply_stale_days": 0,
+			}
+		}
+	)
+	monkeypatch.setattr(
+		rag_commands,
+		"_build_boss_adapter",
+		lambda ctx, refresh_stale_auth=False: _FakeAdapter(),
+	)
+
+	result = rag_commands._CliWatcherMessageSyncer(ctx).list_pipeline_candidates()
+
+	assert calls == [0]
+	assert result == [{"stage": "read_no_reply", "security_id": "sec_read"}]
+
+
 def test_agent_watcher_run_once_live_sync_passes_flag(monkeypatch, tmp_path: Path):
 	(tmp_path / "config.json").write_text(
 		json.dumps(

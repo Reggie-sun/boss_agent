@@ -139,8 +139,12 @@ class _CliWatcherMessageSyncer:
 		config = self.ctx.obj.get("config", {}) if self.ctx and self.ctx.obj else {}
 		if not bool(config.get("boss_rag_allow_message_read", False)):
 			return []
+		stale_days = max(
+			0,
+			int(config.get("boss_rag_read_no_reply_stale_days", 3) or 0),
+		)
 		with _build_boss_adapter(self.ctx, refresh_stale_auth=True) as adapter:
-			return adapter.list_pipeline_candidates(stale_days=3)
+			return adapter.list_pipeline_candidates(stale_days=stale_days)
 
 
 def _workflow_name(ctx: click.Context) -> str:
