@@ -667,6 +667,18 @@ V1 边界是 `Boss read-only automation + RAG draft reply + human approval send 
 - `boss agent sync-messages`：默认关闭；只有 `boss_rag_allow_message_read=true` 且本地登录态有效时才会读取 Boss 消息。
 - `boss agent draft` / `review` / `approve --copy`：生成草稿、查看 evidence/risk labels、人工批准并复制到剪贴板。
 
+### Boss Runtime Decision Agent
+
+`boss agent plan-outreach` 是只读决策层：它会搜索候选、读取本地 profile gate、检查附件路径、给每个候选生成 `decision / score / risk / reasons / proposed_cli_args`，并写入本地 audit log。它不会调用真实 `greet`、不会发送附件，也不会绕过 CDP/Bridge fail-closed 边界。
+
+推荐链路是：
+
+1. `boss agent plan-outreach --query <关键词> --profile-id <profile_id>` 生成计划。
+2. 用户或上层 Agent 审阅 `actions` 和 `reasons`。
+3. 真正执行时仍调用现有 `batch-greet` / watcher guarded tools。
+
+这让系统具备“观察、解释、规划”的 Agent 行为，同时保持 live Boss 写操作可测试、可审计、可阻断。
+
 重要 guardrails：
 
 - `approve != send`。V1 不实现真实 `send-message` 作为默认路径。
