@@ -163,6 +163,30 @@ test("buildAgentAskResponsePayload surfaces nested profile RAG errors", () => {
   assert.equal(response.body.auditStatus, "profile_context_invalid");
 });
 
+test("buildAgentAskResponsePayload explains missing profile binding", () => {
+  const response = buildAgentAskResponsePayload({
+    payload: {
+      command: ["agent", "ask"],
+      data: {
+        answer: "",
+        audit_status: "profile_binding_required",
+        draft: {
+          draft_text: "",
+          audit_status: "profile_binding_required",
+          intent: "project_question",
+        },
+      },
+    },
+    question: "请介绍一下候选人的 RAG 项目",
+    sessionId: "boss_conv_without_profile",
+  });
+
+  assert.equal(response.statusCode, 502);
+  assert.equal(response.body.ok, false);
+  assert.match(response.body.errorMessage, /绑定当前对话/);
+  assert.equal(response.body.auditStatus, "profile_binding_required");
+});
+
 test("detectBossDeliveryChannel does not open a CDP probe tab when chat tab is missing", async () => {
   const originalFetch = globalThis.fetch;
   let createdTargets = 0;

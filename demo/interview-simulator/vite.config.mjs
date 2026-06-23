@@ -8,6 +8,8 @@ import { createProfileBridgeHandlers } from "./server/profileBridge.mjs";
 const BOSS_GEEK_CHAT_URL = "https://www.zhipin.com/web/geek/chat";
 const CDP_REQUIRED_FOR_BOSS_DELIVERY_MESSAGE =
   "Boss 自动开聊/发送需要 CDP 真实 Chrome（127.0.0.1:9229）。当前只检测到 Bridge 扩展；为保护账号，已停止本次自动触达。请用 --remote-debugging-port=9229 打开真实 Chrome 后刷新本页面。";
+const PROFILE_BINDING_REQUIRED_MESSAGE =
+  "当前 Boss 对话还未绑定 profile。请先点击「绑定当前对话」，再让 Agent 回答。";
 const DELIVERY_PROBE_CACHE_TTL_MS = 10_000;
 const DELIVERY_PROBE_SOCKET_OPEN_TIMEOUT_MS = 3_000;
 const DELIVERY_PROBE_COMMAND_TIMEOUT_MS = 3_000;
@@ -666,7 +668,9 @@ function buildAgentAskResponsePayload({ payload, question, sessionId }) {
       body: {
         ok: false,
         errorMessage:
-          emptyAnswerMessage || "BOSS_AGENT workflow 未能生成可用回答。",
+          auditStatus === "profile_binding_required"
+            ? PROFILE_BINDING_REQUIRED_MESSAGE
+            : emptyAnswerMessage || "BOSS_AGENT workflow 未能生成可用回答。",
         auditStatus,
         draftIntent,
         draft,
