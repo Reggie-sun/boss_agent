@@ -18,6 +18,9 @@ services:
         required: false
     environment:
       PYTHONPATH: /app/src
+      BOSS_RAG_RAG_BASE_URL: ${BOSS_PERSONAL_RAG_BASE_URL:-http://127.0.0.1:18020}
+      BOSS_RAG_RAG_AUTH_MODE: ${BOSS_PERSONAL_RAG_AUTH_MODE:-none}
+      BOSS_RAG_RAG_API_KEY: ${BOSS_PERSONAL_RAG_AUTH_API_KEY:-}
     volumes:
       - ./src:/app/src
       - ./mcp-server:/app/mcp-server
@@ -33,3 +36,149 @@ services:
       - --port
       - "${BOSS_AGENT_PORT:-8766}"
       - --reload
+
+  personal-rag-postgres:
+    profiles: ["personal-rag"]
+    image: pgvector/pgvector:pg16
+    container_name: ${BOSS_PERSONAL_RAG_POSTGRES_CONTAINER_NAME:-boss-personal-rag-postgres}
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${BOSS_PERSONAL_RAG_POSTGRES_USER:-boss_personal_rag}
+      POSTGRES_PASSWORD: ${BOSS_PERSONAL_RAG_POSTGRES_PASSWORD:-boss_personal_rag}
+      POSTGRES_DB: ${BOSS_PERSONAL_RAG_POSTGRES_DB:-boss_personal_rag}
+    ports:
+      - "127.0.0.1:${BOSS_PERSONAL_RAG_POSTGRES_PORT:-15433}:5432"
+    volumes:
+      - boss_personal_rag_postgres_data:/var/lib/postgresql/data
+
+  personal-rag-qdrant:
+    profiles: ["personal-rag"]
+    image: qdrant/qdrant:latest
+    container_name: ${BOSS_PERSONAL_RAG_QDRANT_CONTAINER_NAME:-boss-personal-rag-qdrant}
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${BOSS_PERSONAL_RAG_QDRANT_HTTP_PORT:-16333}:6333"
+      - "127.0.0.1:${BOSS_PERSONAL_RAG_QDRANT_GRPC_PORT:-16334}:6334"
+    volumes:
+      - ./storage/personal-rag/qdrant:/qdrant/storage
+
+  personal-rag-redis:
+    profiles: ["personal-rag"]
+    image: redis:7-alpine
+    container_name: ${BOSS_PERSONAL_RAG_REDIS_CONTAINER_NAME:-boss-personal-rag-redis}
+    command: redis-server --appendonly yes
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${BOSS_PERSONAL_RAG_REDIS_PORT:-16380}:6379"
+    volumes:
+      - boss_personal_rag_redis_data:/data
+
+  personal-rag-api:
+    profiles: ["personal-rag"]
+    build:
+      context: ../Enterprise-grade_RAG
+      dockerfile: backend/Dockerfile
+      extra_hosts:
+        - "host.docker.internal:host-gateway"
+      args:
+        HTTP_PROXY: ${DOCKER_BUILD_HTTP_PROXY:-}
+        HTTPS_PROXY: ${DOCKER_BUILD_HTTPS_PROXY:-}
+        NO_PROXY: ${DOCKER_BUILD_NO_PROXY:-}
+        http_proxy: ${DOCKER_BUILD_HTTP_PROXY:-}
+        https_proxy: ${DOCKER_BUILD_HTTPS_PROXY:-}
+        no_proxy: ${DOCKER_BUILD_NO_PROXY:-}
+        OCR_REQUIREMENTS: /app/requirements/ocr-disabled.txt
+    container_name: ${BOSS_PERSONAL_RAG_API_CONTAINER_NAME:-boss-personal-rag-api}
+    user: "${RAG_RUNTIME_UID:-1000}:${RAG_RUNTIME_GID:-1000}"
+    command: sh -c 'umask 0002 && exec uvicorn backend.app.main:app --host 0.0.0.0 --port 8020 --reload --reload-dir /app/backend/app'
+    restart: unless-stopped
+    depends_on:
+      - personal-rag-postgres
+      - personal-rag-qdrant
+      - personal-rag-redis
+    environment:
+      HOME: ${RAG_RUNTIME_HOME:-/tmp}
+      RAG_APP_NAME: ${BOSS_PERSONAL_RAG_APP_NAME:-Boss Personal RAG API}
+      RAG_APP_ENV: ${BOSS_PERSONAL_RAG_APP_ENV:-development}
+      RAG_DEBUG: ${BOSS_PERSONAL_RAG_DEBUG:-true}
+      RAG_CORS_ORIGINS: ${BOSS_PERSONAL_RAG_CORS_ORIGINS:-["http://127.0.0.1:5173","http://localhost:5173"]}
+      RAG_AUTH_API_KEY: ${BOSS_PERSONAL_RAG_AUTH_API_KEY:-}
+      RAG_AUTH_API_KEY_USER_ID: ${BOSS_PERSONAL_RAG_AUTH_API_KEY_USER_ID:-}
+      RAG_QDRANT_URL: http://personal-rag-qdrant:6333
+      RAG_QDRANT_COLLECTION: ${BOSS_PERSONAL_RAG_QDRANT_COLLECTION:-boss_personal_rag_v1}
+      RAG_POSTGRES_METADATA_ENABLED: "true"
+      RAG_POSTGRES_METADATA_DSN: postgresql://${BOSS_PERSONAL_RAG_POSTGRES_USER:-boss_personal_rag}:${BOSS_PERSONAL_RAG_POSTGRES_PASSWORD:-boss_personal_rag}@personal-rag-postgres:5432/${BOSS_PERSONAL_RAG_POSTGRES_DB:-boss_personal_rag}?schema=public
+      DATABASE_URL: postgresql://${BOSS_PERSONAL_RAG_POSTGRES_USER:-boss_personal_rag}:${BOSS_PERSONAL_RAG_POSTGRES_PASSWORD:-boss_personal_rag}@personal-rag-postgres:5432/${BOSS_PERSONAL_RAG_POSTGRES_DB:-boss_personal_rag}?schema=public
+      RAG_CELERY_TASK_ALWAYS_EAGER: "true"
+      RAG_CELERY_TASK_EAGER_PROPAGATES: "true"
+      RAG_CELERY_BROKER_URL: redis://personal-rag-redis:6379/0
+      RAG_CELERY_RESULT_BACKEND: redis://personal-rag-redis:6379/1
+      RAG_DATA_DIR: /shared-data
+      RAG_UPLOAD_DIR: /shared-data/uploads
+      RAG_PREVIEW_DIR: /shared-data/previews
+      RAG_PARSED_DIR: /shared-data/parsed
+      RAG_CHUNK_DIR: /shared-data/chunks
+      RAG_OCR_ARTIFACT_DIR: /shared-data/ocr_artifacts
+      RAG_DOCUMENT_DIR: /shared-data/documents
+      RAG_JOB_DIR: /shared-data/jobs
+      RAG_EVENT_LOG_DIR: /shared-data/event_logs
+      RAG_REQUEST_TRACE_DIR: /shared-data/request_traces
+      RAG_REQUEST_SNAPSHOT_DIR: /shared-data/request_snapshots
+      RAG_CHAT_FEEDBACK_DIR: /shared-data/chat_feedback
+      RAG_CHAT_FAILURE_REVIEW_DIR: /shared-data/chat_failure_reviews
+      RAG_AGENT_LEARNING_DIR: /shared-data/agent_learning
+      RAG_RERANK_CANARY_DIR: /shared-data/rerank_canary
+      RAG_CHAT_MEMORY_DIR: /shared-data/chat_memory
+      RAG_CHAT_HISTORY_SESSION_DIR: /shared-data/chat_history_sessions
+      RAG_SOP_ASSET_DIR: /shared-data/sop_assets
+      RAG_SOP_RECORD_DIR: /shared-data/sops
+      RAG_SOP_VERSION_DIR: /shared-data/sop_versions
+      RAG_SYSTEM_CONFIG_PATH: /shared-data/system_config.json
+      RAG_SYSTEM_CONFIG_MIRROR_PATH: /app/data/system_config.json
+      RAG_ASSET_STORE_BACKEND: filesystem
+      RAG_DATA_ASSET_BINARY_MAX_BYTES: ${BOSS_PERSONAL_RAG_DATA_ASSET_BINARY_MAX_BYTES:-1048576}
+      RAG_OCR_PROVIDER: disabled
+      RAG_OCR_PADDLE_REQUIRE_CUDA: "false"
+      RAG_OCR_PADDLE_PRELOAD_ON_WORKER_START: "false"
+      RAG_STRUCTURED_DOCUMENT_PIPELINE_ENABLED: ${BOSS_PERSONAL_RAG_STRUCTURED_DOCUMENT_PIPELINE_ENABLED:-false}
+      RAG_EXTRACTION_POSTPROCESSOR_ENABLED: ${BOSS_PERSONAL_RAG_EXTRACTION_POSTPROCESSOR_ENABLED:-false}
+      RAG_DUAL_TABLE_CHUNKS_ENABLED: ${BOSS_PERSONAL_RAG_DUAL_TABLE_CHUNKS_ENABLED:-false}
+      RAG_ELASTICSEARCH_ENABLED: "false"
+      RAG_CHAT_INTERNAL_LAUNCH_SAFETY_GUARD_MODE: ${BOSS_PERSONAL_RAG_CHAT_INTERNAL_LAUNCH_SAFETY_GUARD_MODE:-strict}
+      RAG_CHAT_MEMORY_TOPIC_GATE_SEMANTIC_SIMILARITY_ENABLED: ${BOSS_PERSONAL_RAG_CHAT_MEMORY_TOPIC_GATE_SEMANTIC_SIMILARITY_ENABLED:-false}
+      RAG_CHAT_MEMORY_TOPIC_GATE_SEMANTIC_SIMILARITY_RESCUE_ENABLED: ${BOSS_PERSONAL_RAG_CHAT_MEMORY_TOPIC_GATE_SEMANTIC_SIMILARITY_RESCUE_ENABLED:-false}
+      RAG_LLM_PROVIDER: ${BOSS_PERSONAL_RAG_LLM_PROVIDER:-openai}
+      RAG_LLM_BASE_URL: ${BOSS_PERSONAL_RAG_LLM_BASE_URL:-${RAG_LLM_BASE_URL:-}}
+      RAG_LLM_API_KEY: ${BOSS_PERSONAL_RAG_LLM_API_KEY:-${RAG_LLM_API_KEY:-}}
+      RAG_LLM_MODEL: ${BOSS_PERSONAL_RAG_LLM_MODEL:-${RAG_LLM_MODEL:-Qwen/Qwen2.5-7B-Instruct}}
+      RAG_LLM_TIMEOUT_SECONDS: ${BOSS_PERSONAL_RAG_LLM_TIMEOUT_SECONDS:-180}
+      RAG_LLM_TEMPERATURE: ${BOSS_PERSONAL_RAG_LLM_TEMPERATURE:-0.1}
+      RAG_LLM_MAX_PROMPT_TOKENS: ${BOSS_PERSONAL_RAG_LLM_MAX_PROMPT_TOKENS:-2200}
+      RAG_LLM_RESERVED_COMPLETION_TOKENS: ${BOSS_PERSONAL_RAG_LLM_RESERVED_COMPLETION_TOKENS:-512}
+      RAG_EMBEDDING_PROVIDER: ${BOSS_PERSONAL_RAG_EMBEDDING_PROVIDER:-openai}
+      RAG_EMBEDDING_BASE_URL: ${BOSS_PERSONAL_RAG_EMBEDDING_BASE_URL:-${RAG_EMBEDDING_BASE_URL:-}}
+      RAG_EMBEDDING_API_KEY: ${BOSS_PERSONAL_RAG_EMBEDDING_API_KEY:-${RAG_EMBEDDING_API_KEY:-}}
+      RAG_EMBEDDING_MODEL: ${BOSS_PERSONAL_RAG_EMBEDDING_MODEL:-${RAG_EMBEDDING_MODEL:-BAAI/bge-m3}}
+      RAG_EMBEDDING_TIMEOUT_SECONDS: ${BOSS_PERSONAL_RAG_EMBEDDING_TIMEOUT_SECONDS:-120}
+      RAG_EMBEDDING_BATCH_SIZE: ${BOSS_PERSONAL_RAG_EMBEDDING_BATCH_SIZE:-16}
+      RAG_RERANKER_PROVIDER: ${BOSS_PERSONAL_RAG_RERANKER_PROVIDER:-heuristic}
+      RAG_RERANKER_BASE_URL: ${BOSS_PERSONAL_RAG_RERANKER_BASE_URL:-${RAG_RERANKER_BASE_URL:-}}
+      RAG_RERANKER_API_KEY: ${BOSS_PERSONAL_RAG_RERANKER_API_KEY:-${RAG_RERANKER_API_KEY:-}}
+      RAG_RERANKER_MODEL: ${BOSS_PERSONAL_RAG_RERANKER_MODEL:-${RAG_RERANKER_MODEL:-BAAI/bge-reranker-v2-m3}}
+      RAG_RERANKER_TIMEOUT_SECONDS: ${BOSS_PERSONAL_RAG_RERANKER_TIMEOUT_SECONDS:-12}
+      RAG_TOP_K_DEFAULT: ${BOSS_PERSONAL_RAG_TOP_K_DEFAULT:-5}
+      RAG_RERANK_TOP_N: ${BOSS_PERSONAL_RAG_RERANK_TOP_N:-3}
+      RAG_CHUNK_SIZE_CHARS: ${BOSS_PERSONAL_RAG_CHUNK_SIZE_CHARS:-400}
+      RAG_CHUNK_OVERLAP_CHARS: ${BOSS_PERSONAL_RAG_CHUNK_OVERLAP_CHARS:-120}
+      RAG_CHUNK_MIN_CHARS: ${BOSS_PERSONAL_RAG_CHUNK_MIN_CHARS:-200}
+    ports:
+      - "127.0.0.1:${BOSS_PERSONAL_RAG_API_PORT:-18020}:8020"
+    volumes:
+      - ../Enterprise-grade_RAG:/app
+      - ./storage/personal-rag/shared-data:/shared-data
+
+volumes:
+  boss_personal_rag_postgres_data:
+    name: ${BOSS_PERSONAL_RAG_POSTGRES_VOLUME_NAME:-boss_personal_rag_postgres_data}
+  boss_personal_rag_redis_data:
+    name: ${BOSS_PERSONAL_RAG_REDIS_VOLUME_NAME:-boss_personal_rag_redis_data}
