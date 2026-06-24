@@ -20,7 +20,6 @@ import {
   bossBridgeErrorCode,
   bossBridgeErrorFromPayload,
   bossBridgeErrorMessage,
-  bossWatcherRiskLockMessage,
   isBossAccountRiskMessage,
   watcherRiskHint,
 } from "./bossBridgeErrors.js";
@@ -442,12 +441,8 @@ export function App() {
   }, []);
 
   useEffect(() => {
-    const lockMessage = bossWatcherRiskLockMessage(watcherRiskStatusMessage);
-    if (!lockMessage) return;
-    setBossAutomationRiskLocked(true);
-    setBossAutomationError((current) =>
-      current && isBossAccountRiskMessage(current) ? current : lockMessage,
-    );
+    if (!watcherRiskStatusMessage) return;
+    setWatcherAutoPolling(false);
     setWatcherState((current) =>
       current.running ? { ...current, running: false } : current,
     );
@@ -655,15 +650,11 @@ export function App() {
     } catch (error) {
       setBossSearchJobs([]);
       const errorCode = bossBridgeErrorCode(error);
-      const watcherRiskOverride =
-        watcherRiskStatusMessage && (errorCode === "NETWORK_ERROR" || !errorCode)
-          ? bossWatcherRiskLockMessage(watcherRiskStatusMessage)
-          : "";
-      if (errorCode === bossAccountRiskCode || watcherRiskOverride) {
+      if (errorCode === bossAccountRiskCode) {
         setBossAutomationRiskLocked(true);
       }
       setBossAutomationError(
-        watcherRiskOverride || bossBridgeErrorMessage(error, "BOSS 搜索失败。"),
+        bossBridgeErrorMessage(error, "BOSS 搜索失败。"),
       );
     } finally {
       setIsBossSearching(false);
@@ -809,15 +800,11 @@ export function App() {
     } catch (error) {
       setBossAutomationProgress(null);
       const errorCode = bossBridgeErrorCode(error);
-      const watcherRiskOverride =
-        watcherRiskStatusMessage && (errorCode === "NETWORK_ERROR" || !errorCode)
-          ? bossWatcherRiskLockMessage(watcherRiskStatusMessage)
-          : "";
-      if (errorCode === bossAccountRiskCode || watcherRiskOverride) {
+      if (errorCode === bossAccountRiskCode) {
         setBossAutomationRiskLocked(true);
       }
       setBossAutomationError(
-        watcherRiskOverride || bossBridgeErrorMessage(error, "Agent 自动开聊失败。"),
+        bossBridgeErrorMessage(error, "Agent 自动开聊失败。"),
       );
     } finally {
       setIsBossAutoRunning(false);

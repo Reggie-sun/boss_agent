@@ -131,6 +131,8 @@ def test_interview_simulator_boss_risk_copy_is_page_scoped_and_clearable():
 	assert "setBossAutomationRiskClearedAtMs(Date.now())" in app
 	assert "setBossAutomationError(browserChannelRiskMessage)" not in app
 	assert "current : browserChannelRiskMessage" not in app
+	assert "bossWatcherRiskLockMessage" not in app
+	assert "watcherRiskOverride" not in app
 	assert "isBossAccountRiskMessage(current.errorMessage)" in app
 
 
