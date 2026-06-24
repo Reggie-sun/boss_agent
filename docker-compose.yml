@@ -37,8 +37,44 @@ services:
       - "${BOSS_AGENT_PORT:-8766}"
       - --reload
 
+  boss-frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile.boss-frontend
+      args:
+        HTTP_PROXY: ""
+        HTTPS_PROXY: ""
+        http_proxy: ""
+        https_proxy: ""
+        ALL_PROXY: ""
+        all_proxy: ""
+    container_name: ${BOSS_FRONTEND_CONTAINER_NAME:-boss-frontend}
+    restart: unless-stopped
+    depends_on:
+      - personal-rag-api
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      PYTHONPATH: /app/src
+      BOSS_RAG_DATA_DIR: /root/.boss-agent
+      BOSS_RAG_RAG_BASE_URL: http://personal-rag-api:8020
+      BOSS_RAG_RAG_AUTH_MODE: ${BOSS_PERSONAL_RAG_AUTH_MODE:-bearer}
+      BOSS_RAG_RAG_API_KEY: ${BOSS_PERSONAL_RAG_AUTH_API_KEY:-${RAG_AUTH_API_KEY:-}}
+      BOSS_RAG_RESUME_ATTACHMENT_PATH: /app/孙瑞杰的简历.pdf
+      BOSS_RAG_CDP_URL: ${BOSS_RAG_CDP_URL:-http://host.docker.internal:9229}
+      BOSS_CDP_URL: ${BOSS_CDP_URL:-http://host.docker.internal:9229}
+      BOSS_RAG_BRIDGE_URL: ${BOSS_RAG_BRIDGE_URL:-http://host.docker.internal:19826}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    ports:
+      - "127.0.0.1:${BOSS_FRONTEND_PORT:-3101}:5173"
+    volumes:
+      - ./:/app
+      - ${HOME}/.boss-agent:/root/.boss-agent
+    command: sh -c 'npm install && npm run dev -- --host 0.0.0.0 --port 5173'
+
   personal-rag-postgres:
-    profiles: ["personal-rag"]
     image: pgvector/pgvector:pg16
     container_name: ${BOSS_PERSONAL_RAG_POSTGRES_CONTAINER_NAME:-boss-personal-rag-postgres}
     restart: unless-stopped
@@ -52,7 +88,6 @@ services:
       - boss_personal_rag_postgres_data:/var/lib/postgresql/data
 
   personal-rag-qdrant:
-    profiles: ["personal-rag"]
     image: qdrant/qdrant:latest
     container_name: ${BOSS_PERSONAL_RAG_QDRANT_CONTAINER_NAME:-boss-personal-rag-qdrant}
     restart: unless-stopped
@@ -63,7 +98,6 @@ services:
       - ./storage/personal-rag/qdrant:/qdrant/storage
 
   personal-rag-redis:
-    profiles: ["personal-rag"]
     image: redis:7-alpine
     container_name: ${BOSS_PERSONAL_RAG_REDIS_CONTAINER_NAME:-boss-personal-rag-redis}
     command: redis-server --appendonly yes
@@ -74,7 +108,6 @@ services:
       - boss_personal_rag_redis_data:/data
 
   personal-rag-api:
-    profiles: ["personal-rag"]
     build:
       context: ../Enterprise-grade_RAG
       dockerfile: backend/Dockerfile
@@ -177,7 +210,6 @@ services:
       - ./storage/personal-rag/shared-data:/shared-data
 
   personal-rag-frontend:
-    profiles: ["personal-rag"]
     image: node:22-alpine
     container_name: ${BOSS_PERSONAL_RAG_FRONTEND_CONTAINER_NAME:-boss-personal-rag-frontend}
     working_dir: /app/frontend
