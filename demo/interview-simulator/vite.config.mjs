@@ -20,6 +20,14 @@ const MIN_COMMAND_TIMEOUT_SECONDS = 5;
 const MAX_BOSS_AUTO_GREET_COUNT = 150;
 const BOSS_AUTO_GREET_TIMEOUT_BASE_SECONDS = 180;
 const BOSS_AUTO_GREET_TIMEOUT_PER_ITEM_SECONDS = 10;
+const BOSS_AGENT_OUTREACH_STOP_CODES = new Set([
+  "ACCOUNT_RISK",
+  "AUTH_EXPIRED",
+  "GREET_LIMIT",
+  "NETWORK_ERROR",
+  "RATE_LIMITED",
+  "TOKEN_REFRESH_FAILED",
+]);
 let cachedDeliveryProbe = null;
 let pendingDeliveryProbe = null;
 
@@ -70,6 +78,30 @@ function appendTextOption(args, flag, value) {
   if (normalized) {
     args.push(flag, normalized);
   }
+}
+
+function buildAgentOutreachPlanArgs(body, attachments, { liveExecutionRequested = false } = {}) {
+  const args = ["agent", "plan-outreach"];
+  appendTextOption(args, "--query", body.query);
+  appendTextOption(args, "--profile-id", body.profile_id);
+  appendTextOption(args, "--target-title", body.targetTitle);
+  appendTextOption(args, "--city", body.city);
+  appendTextOption(args, "--salary", body.salary);
+  appendTextOption(args, "--experience", body.experience);
+  appendTextOption(args, "--education", body.education);
+  appendTextOption(args, "--industry", body.industry);
+  appendTextOption(args, "--scale", body.scale);
+  appendTextOption(args, "--stage", body.stage);
+  appendTextOption(args, "--job-type", body.jobType || body.job_type);
+  appendTextOption(args, "--welfare", body.welfare);
+  appendTextOption(args, "--count", body.count);
+  if (liveExecutionRequested || body.live_execution_requested === true) {
+    args.push("--live-execution-requested");
+  }
+  for (const attachmentPath of attachments) {
+    args.push("--attachment", attachmentPath);
+  }
+  return args;
 }
 
 function loadBridgeConfig() {
@@ -903,138 +935,160 @@ function writeNdjson(res, event) {
   res.write(`${JSON.stringify(event)}\n`);
 }
 
-function parseBossProgressLine(line) {
-  const trimmed = line.trim();
-  if (!trimmed.startsWith("{")) return null;
-  try {
-    const event = JSON.parse(trimmed);
-    return event?.type === "boss_auto_greet_progress" ? event : null;
-  } catch {
-    return null;
-  }
+function isPlannedGreetAction(action) {
+  return ["greet_only", "greet_with_attachments"].includes(String(action?.decision || ""));
 }
 
-function runBossJsonCommandStream(config, args, res, options = {}) {
-  return new Promise((resolve) => {
-    const child = spawn(
-      config.pythonBin,
-      buildBossCliArgs(config, args),
-      {
-        cwd: config.repoRoot,
-        env: {
-          ...process.env,
-          PYTHONPATH: process.env.PYTHONPATH
-            ? `${config.repoRoot}/src:${process.env.PYTHONPATH}`
-            : `${config.repoRoot}/src`,
-        },
-      },
+function plannedGreetArgs(action) {
+  const proposed = Array.isArray(action?.proposed_cli_args)
+    ? action.proposed_cli_args.map((item) => String(item || ""))
+    : [];
+  if (proposed[0] === "greet" && proposed[1] && proposed[2]) {
+    return proposed;
+  }
+  const candidate = action?.candidate && typeof action.candidate === "object"
+    ? action.candidate
+    : {};
+  const securityId = String(candidate.security_id || "");
+  const jobId = String(candidate.job_id || "");
+  if (!securityId || !jobId) return [];
+  const args = ["greet", securityId, jobId];
+  const draftMessage = String(action?.agent?.draft_message || "").trim();
+  if (draftMessage) args.push("--message", draftMessage);
+  return args;
+}
+
+function bossCommandErrorCode(error) {
+  return String(error?.commandPayload?.error?.code || "").trim();
+}
+
+async function runAgentOutreachPlanStream(config, body, attachmentPaths, res, { count, timeoutMs }) {
+  writeNdjson(res, {
+    type: "status",
+    status: "planning",
+    message: "正在生成 Agent 计划，还没有开始聊天。",
+  });
+
+  let planPayload;
+  try {
+    planPayload = await runBossJsonCommand(
+      config,
+      buildAgentOutreachPlanArgs(body, attachmentPaths, { liveExecutionRequested: true }),
+      { timeoutMs },
     );
-
-    let stdout = "";
-    let stderr = "";
-    let stderrBuffer = "";
-    let timedOut = false;
-    const timeoutMs = options.timeoutMs ?? config.commandTimeoutMs;
-    const timer = timeoutMs
-      ? setTimeout(() => {
-          timedOut = true;
-          child.kill("SIGTERM");
-        }, timeoutMs)
-      : null;
-
-    child.stdout.setEncoding("utf8");
-    child.stderr.setEncoding("utf8");
-    child.stdout.on("data", (chunk) => {
-      stdout += chunk;
+  } catch (error) {
+    writeNdjson(res, {
+      type: "error",
+      ok: false,
+      errorMessage: error instanceof Error ? error.message : "生成 Agent 计划失败",
+      error: error?.commandPayload?.error || null,
     });
-    child.stderr.on("data", (chunk) => {
-      stderr += chunk;
-      stderrBuffer += chunk;
-      const lines = stderrBuffer.split(/\r?\n/);
-      stderrBuffer = lines.pop() || "";
-      for (const line of lines) {
-        const progress = parseBossProgressLine(line);
-        if (progress) {
-          writeNdjson(res, { type: "progress", data: progress });
-        }
-      }
+    return;
+  }
+
+  const plan = planPayload?.data?.plan && typeof planPayload.data.plan === "object"
+    ? planPayload.data.plan
+    : {};
+  const actions = Array.isArray(plan.actions)
+    ? plan.actions.filter(isPlannedGreetAction).slice(0, count)
+    : [];
+  if (!actions.length) {
+    writeNdjson(res, {
+      type: "error",
+      ok: false,
+      errorMessage: plan.blocked_reason || "Agent 计划没有可执行的开聊动作。",
+      error: {
+        code: plan.blocked_reason || "NO_AGENT_OUTREACH_ACTIONS",
+        message: plan.blocked_reason || "Agent 计划没有可执行的开聊动作。",
+        recoverable: true,
+      },
     });
-    child.on("error", (error) => {
-      if (timer) clearTimeout(timer);
-      writeNdjson(res, {
-        type: "error",
-        ok: false,
-        errorMessage: error instanceof Error ? error.message : "自动开聊失败",
-        error: null,
+    return;
+  }
+
+  const result = {
+    dry_run: false,
+    agent_plan: {
+      status: String(plan.status || ""),
+      agent_connected: Boolean(plan.agent_connected),
+      agent_sources: Array.isArray(plan.agent_sources) ? plan.agent_sources : [],
+    },
+    greeted: [],
+    failed: [],
+    total_greeted: 0,
+    total_failed: 0,
+  };
+
+  for (let index = 0; index < actions.length; index += 1) {
+    const action = actions[index];
+    const candidate = action?.candidate && typeof action.candidate === "object"
+      ? action.candidate
+      : {};
+    writeNdjson(res, {
+      type: "progress",
+      data: {
+        status: "greeting",
+        current: index + 1,
+        total: actions.length,
+        title: candidate.title || "",
+        company: candidate.company || "",
+      },
+    });
+
+    const args = plannedGreetArgs(action);
+    if (!args.length) {
+      result.failed.push({
+        security_id: candidate.security_id || "",
+        job_id: candidate.job_id || "",
+        title: candidate.title || "",
+        company: candidate.company || "",
+        status: "failed",
+        error: "Agent 计划缺少 greet 参数。",
       });
-      resolve();
-    });
-    child.on("close", (status) => {
-      if (timer) clearTimeout(timer);
-      if (stderrBuffer.trim()) {
-        const progress = parseBossProgressLine(stderrBuffer);
-        if (progress) {
-          writeNdjson(res, { type: "progress", data: progress });
-        }
-      }
-      if (timedOut) {
-        const seconds = Math.round((timeoutMs || 0) / 1000);
-        writeNdjson(res, {
-          type: "error",
-          ok: false,
-          errorMessage: `boss-agent-cli 执行超过 ${seconds}s，已停止本次请求。请检查 CDP 发送链路或稍后重试。`,
-          error: null,
-        });
-        resolve();
-        return;
-      }
-      if (status !== 0 && !stdout.trim()) {
-        writeNdjson(res, {
-          type: "error",
-          ok: false,
-          errorMessage: stderr.trim() || `boss command failed with exit code ${status}`,
-          error: null,
-        });
-        resolve();
-        return;
-      }
+      continue;
+    }
 
-      let parsed = {};
-      try {
-        parsed = stdout.trim() ? JSON.parse(stdout) : {};
-      } catch (error) {
-        writeNdjson(res, {
-          type: "error",
-          ok: false,
-          errorMessage: `无法解析 boss-agent-cli 输出: ${stdout.trim() || stderr.trim() || String(error)}`,
-          error: null,
-        });
-        resolve();
-        return;
-      }
-
-      if (!parsed.ok) {
-        writeNdjson(res, {
-          type: "error",
-          ok: false,
-          errorMessage:
-            parsed.error?.message ||
-            parsed.errorMessage ||
-            stderr.trim() ||
-            "boss-agent-cli 返回错误。",
-          error: parsed.error || null,
-        });
-        resolve();
-        return;
-      }
-      writeNdjson(res, {
-        type: "result",
-        ok: true,
-        data: parsed.data,
-        hints: parsed.hints,
+    try {
+      const greetPayload = await runBossJsonCommand(config, args, { timeoutMs });
+      result.greeted.push({
+        security_id: candidate.security_id || greetPayload?.data?.security_id || "",
+        job_id: candidate.job_id || greetPayload?.data?.job_id || "",
+        title: candidate.title || "",
+        company: candidate.company || "",
+        status: "success",
+        agent_source: action?.agent?.source || "",
+        message: action?.agent?.draft_message || "",
+        attachments_sent: Array.isArray(greetPayload?.data?.attachments_sent)
+          ? greetPayload.data.attachments_sent
+          : [],
       });
-      resolve();
-    });
+    } catch (error) {
+      const code = bossCommandErrorCode(error);
+      const message = error instanceof Error ? error.message : "开聊失败";
+      result.failed.push({
+        security_id: candidate.security_id || "",
+        job_id: candidate.job_id || "",
+        title: candidate.title || "",
+        company: candidate.company || "",
+        status: "failed",
+        error: message,
+        code,
+      });
+      if (BOSS_AGENT_OUTREACH_STOP_CODES.has(code)) {
+        result.stopped_reason = code;
+        result.stopped_error = message;
+        break;
+      }
+    }
+  }
+
+  result.total_greeted = result.greeted.length;
+  result.total_failed = result.failed.length;
+  writeNdjson(res, {
+    type: "result",
+    ok: true,
+    data: result,
+    hints: planPayload?.hints,
   });
 }
 
@@ -1496,26 +1550,7 @@ function createRagBridgePlugin() {
         const attachments = normalizeAttachmentPaths(
           body.attachments || body.attachmentPaths || body.attachment_paths,
         );
-        const args = ["agent", "plan-outreach"];
-        appendTextOption(args, "--query", body.query);
-        appendTextOption(args, "--profile-id", body.profile_id);
-        appendTextOption(args, "--target-title", body.targetTitle);
-        appendTextOption(args, "--city", body.city);
-        appendTextOption(args, "--salary", body.salary);
-        appendTextOption(args, "--experience", body.experience);
-        appendTextOption(args, "--education", body.education);
-        appendTextOption(args, "--industry", body.industry);
-        appendTextOption(args, "--scale", body.scale);
-        appendTextOption(args, "--stage", body.stage);
-        appendTextOption(args, "--job-type", body.jobType || body.job_type);
-        appendTextOption(args, "--welfare", body.welfare);
-        appendTextOption(args, "--count", body.count);
-        if (body.live_execution_requested === true) {
-          args.push("--live-execution-requested");
-        }
-        for (const attachmentPath of attachments) {
-          args.push("--attachment", attachmentPath);
-        }
+        const args = buildAgentOutreachPlanArgs(body, attachments);
         const payload = await runBossJsonCommand(bridgeConfig, args);
         res.end(JSON.stringify({
           ok: Boolean(payload.ok),
@@ -1580,6 +1615,34 @@ function createRagBridgePlugin() {
           return true;
         }
 
+        const planBody = {
+          ...body,
+          query,
+          city,
+          salary,
+          experience,
+          education,
+          industry,
+          scale,
+          stage,
+          jobType,
+          welfare,
+          count: String(count),
+          profile_id: profileGate.profileId || body.profile_id,
+          targetTitle: body.targetTitle || "AI Agent 工程师",
+        };
+
+        if (stream) {
+          res.setHeader("Content-Type", "application/x-ndjson; charset=utf-8");
+          res.setHeader("Cache-Control", "no-cache");
+          await runAgentOutreachPlanStream(bridgeConfig, planBody, attachmentPaths, res, {
+            count,
+            timeoutMs: resolveBossAutoGreetCommandTimeoutMs(bridgeConfig.commandTimeoutMs, count),
+          });
+          res.end();
+          return true;
+        }
+
         const args = [
           "batch-greet",
           query,
@@ -1597,22 +1660,6 @@ function createRagBridgePlugin() {
         if (welfare) args.push("--welfare", welfare);
         for (const attachmentPath of attachmentPaths) {
           args.push("--attachment", attachmentPath);
-        }
-        if (stream) args.push("--progress-json");
-
-        if (stream) {
-          res.setHeader("Content-Type", "application/x-ndjson; charset=utf-8");
-          res.setHeader("Cache-Control", "no-cache");
-          writeNdjson(res, {
-            type: "status",
-            status: "searching",
-            message: "正在搜索可开聊候选，还没有开始聊天。",
-          });
-          await runBossJsonCommandStream(bridgeConfig, args, res, {
-            timeoutMs: resolveBossAutoGreetCommandTimeoutMs(bridgeConfig.commandTimeoutMs, count),
-          });
-          res.end();
-          return true;
         }
 
         const payload = await runBossJsonCommand(bridgeConfig, args, {

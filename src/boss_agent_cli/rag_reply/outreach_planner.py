@@ -89,6 +89,7 @@ class OutreachDecision:
     reasons: list[str]
     score: int
     proposed_cli_args: list[str]
+    agent: dict[str, Any] | None = None
 
     def to_payload(self) -> dict[str, Any]:
         return {
@@ -98,6 +99,7 @@ class OutreachDecision:
             "reasons": list(self.reasons),
             "score": self.score,
             "proposed_cli_args": list(self.proposed_cli_args),
+            "agent": dict(self.agent or _empty_agent_payload()),
         }
 
 
@@ -112,6 +114,13 @@ class OutreachPlan:
     blocked_reason: str = ""
 
     def to_payload(self) -> dict[str, Any]:
+        agent_sources = _unique(
+            [
+                str(action.agent.get("source") or "")
+                for action in self.actions
+                if action.agent and action.agent.get("connected")
+            ]
+        )
         return {
             "status": self.status,
             "query": self.query,
@@ -119,6 +128,8 @@ class OutreachPlan:
             "total": self.total,
             "send_ready": self.send_ready,
             "blocked_reason": self.blocked_reason,
+            "agent_connected": bool(agent_sources),
+            "agent_sources": agent_sources,
             "actions": [action.to_payload() for action in self.actions],
         }
 
@@ -132,13 +143,15 @@ class OutreachPlanner:
         candidates: Sequence[OutreachCandidate],
         *,
         attachments: Sequence[str],
+        agent_drafts: Mapping[str, Mapping[str, Any]] | None = None,
     ) -> OutreachPlan:
+        drafts = agent_drafts or {}
         if (
             self.config.live_execution_requested
             and not self.config.profile_outreach_enabled
         ):
             actions = [
-                self._blocked_decision(candidate, "profile_outreach_disabled")
+                self._blocked_decision(candidate, "profile_outreach_disabled", drafts)
                 for candidate in candidates
             ]
             return OutreachPlan(
@@ -151,7 +164,7 @@ class OutreachPlanner:
                 actions=actions,
             )
 
-        actions = [self._decision_for(candidate, attachments) for candidate in candidates]
+        actions = [self._decision_for(candidate, attachments, drafts) for candidate in candidates]
         send_ready = any(
             action.decision in {"greet_only", "greet_with_attachments"}
             for action in actions
@@ -166,8 +179,12 @@ class OutreachPlanner:
         )
 
     def _decision_for(
-        self, candidate: OutreachCandidate, attachments: Sequence[str]
+        self,
+        candidate: OutreachCandidate,
+        attachments: Sequence[str],
+        agent_drafts: Mapping[str, Mapping[str, Any]],
     ) -> OutreachDecision:
+        agent_payload = self._agent_payload(candidate, agent_drafts)
         score, reasons = self._score(candidate)
         if candidate.greeted:
             return OutreachDecision(
@@ -177,6 +194,7 @@ class OutreachPlanner:
                 reasons=["already_greeted"],
                 score=score,
                 proposed_cli_args=[],
+                agent=agent_payload,
             )
         if score < LOW_MATCH_THRESHOLD:
             return OutreachDecision(
@@ -186,6 +204,7 @@ class OutreachPlanner:
                 reasons=[*reasons, "low_match_score"],
                 score=score,
                 proposed_cli_args=[],
+                agent=agent_payload,
             )
         if attachments:
             decision = "greet_with_attachments"
@@ -198,11 +217,19 @@ class OutreachPlanner:
             risk="low",
             reasons=reasons,
             score=score,
-            proposed_cli_args=self._proposed_cli_args(candidate, attachments),
+            proposed_cli_args=self._proposed_cli_args(
+                candidate,
+                attachments,
+                draft_message=str(agent_payload.get("draft_message") or ""),
+            ),
+            agent=agent_payload,
         )
 
     def _blocked_decision(
-        self, candidate: OutreachCandidate, reason: str
+        self,
+        candidate: OutreachCandidate,
+        reason: str,
+        agent_drafts: Mapping[str, Mapping[str, Any]],
     ) -> OutreachDecision:
         score, reasons = self._score(candidate)
         return OutreachDecision(
@@ -212,6 +239,7 @@ class OutreachPlanner:
             reasons=[*reasons, reason],
             score=score,
             proposed_cli_args=[],
+            agent=self._agent_payload(candidate, agent_drafts),
         )
 
     def _score(self, candidate: OutreachCandidate) -> tuple[int, list[str]]:
@@ -246,14 +274,52 @@ class OutreachPlanner:
         return min(score, 100), _unique(reasons)
 
     def _proposed_cli_args(
-        self, candidate: OutreachCandidate, attachments: Sequence[str]
+        self,
+        candidate: OutreachCandidate,
+        attachments: Sequence[str],
+        *,
+        draft_message: str = "",
     ) -> list[str]:
-        args = ["batch-greet", self.config.query, "--count", "1"]
-        if candidate.city:
-            args.extend(["--city", candidate.city])
+        args = ["greet", candidate.security_id, candidate.job_id]
+        if draft_message.strip():
+            args.extend(["--message", draft_message.strip()])
         for attachment in attachments:
             args.extend(["--attachment", str(attachment)])
         return args
+
+    def _agent_payload(
+        self,
+        candidate: OutreachCandidate,
+        agent_drafts: Mapping[str, Mapping[str, Any]],
+    ) -> dict[str, Any]:
+        payload = agent_drafts.get(_candidate_key(candidate))
+        if not payload:
+            return _empty_agent_payload()
+        return {
+            "connected": bool(payload.get("connected")),
+            "source": str(payload.get("source") or ""),
+            "draft_message": str(payload.get("draft_message") or ""),
+            "error_message": str(payload.get("error_message") or ""),
+            "citations": list(payload.get("citations") or []),
+            "reasoning_summary": payload.get("reasoning_summary")
+            if isinstance(payload.get("reasoning_summary"), dict)
+            else None,
+        }
+
+
+def _candidate_key(candidate: OutreachCandidate) -> str:
+    return f"{candidate.security_id}:{candidate.job_id}"
+
+
+def _empty_agent_payload() -> dict[str, Any]:
+    return {
+        "connected": False,
+        "source": "",
+        "draft_message": "",
+        "error_message": "",
+        "citations": [],
+        "reasoning_summary": None,
+    }
 
 
 def _string_value(value: Mapping[str, Any], *keys: str) -> str:

@@ -59,6 +59,9 @@ from boss_agent_cli.search_filters import (
 )
 
 
+OUTREACH_AGENT_DRAFT_LIMIT = 10
+
+
 @dataclass(slots=True)
 class ResumeSendResult:
 	attempted: bool
@@ -689,6 +692,249 @@ def _profile_outreach_enabled(ctx: click.Context, profile_id: str) -> tuple[bool
 	if not config.outreach_auto_send_enabled:
 		return False, "profile_outreach_disabled"
 	return True, ""
+
+
+def _build_outreach_agent_drafts(
+	ctx: click.Context,
+	*,
+	profile_id: str,
+	query: str,
+	target_title: str,
+	actions: list[object],
+) -> dict[str, dict[str, object]]:
+	action_candidates = [
+		action.candidate
+		for action in actions
+		if getattr(action, "decision", "") in {"greet_only", "greet_with_attachments"}
+	]
+	if not action_candidates:
+		return {}
+
+	profile_service = _resolve_profile_service(ctx)
+	profile = profile_service.get_profile(profile_id)
+	if profile is None:
+		return {
+			_outreach_candidate_key(candidate): _local_outreach_agent_payload(
+				candidate,
+				profile_target_title=target_title,
+				error_message="profile_not_found",
+			)
+			for candidate in action_candidates[:OUTREACH_AGENT_DRAFT_LIMIT]
+		}
+
+	config = ctx.obj.get("config", {}) if ctx and ctx.obj else {}
+	rag_timeout_seconds = int(config.get("boss_rag_rag_timeout_seconds", 20))
+	profile_rag_connector = RagProfileConnector(
+		rag_auth_resolver=ProfileRagAuthResolver(
+			config=config,
+			default_base_url=config.get("boss_rag_rag_base_url"),
+			default_timeout_seconds=rag_timeout_seconds,
+			default_api_key=config.get("boss_rag_rag_api_key"),
+			default_auth_mode=str(config.get("boss_rag_rag_auth_mode", "none")),
+		)
+	)
+	rag_auth_binding = profile_service.get_profile_rag_auth_binding(profile.profile_id)
+	agent_adapter = _build_agent_answer_adapter(ctx)
+	drafts: dict[str, dict[str, object]] = {}
+	for candidate in action_candidates[:OUTREACH_AGENT_DRAFT_LIMIT]:
+		drafts[_outreach_candidate_key(candidate)] = _build_outreach_agent_payload(
+			profile_rag_connector=profile_rag_connector,
+			rag_auth_binding=rag_auth_binding,
+			agent_adapter=agent_adapter,
+			profile=profile,
+			candidate=candidate,
+			query=query,
+			target_title=target_title,
+		)
+	return drafts
+
+
+def _build_outreach_agent_payload(
+	*,
+	profile_rag_connector: RagProfileConnector,
+	rag_auth_binding: ProfileRagAuthBindingRecord | None,
+	agent_adapter: AgentAnswerAdapter,
+	profile: UserProfileRecord,
+	candidate: OutreachCandidate,
+	query: str,
+	target_title: str,
+) -> dict[str, object]:
+	job_summary = _outreach_job_summary(candidate)
+	rag_question = _outreach_rag_question(
+		profile=profile,
+		candidate=candidate,
+		query=query,
+		target_title=target_title,
+	)
+	rag_result = profile_rag_connector.ask_profile(
+		tenant_id=profile.tenant_id,
+		user_id=profile.user_id,
+		profile_id=profile.profile_id,
+		knowledge_base_id=profile.knowledge_base_id,
+		question=rag_question,
+		conversation_id=f"outreach:{candidate.security_id}:{candidate.job_id}",
+		rag_auth_binding=rag_auth_binding,
+	)
+	if rag_result.ok and rag_result.answer.strip():
+		agent_result = agent_adapter.answer(
+			message_text=_outreach_agent_instruction(candidate, query=query, target_title=target_title),
+			intent="outreach_greet",
+			job_summary=job_summary,
+			rag_answer=rag_result.answer,
+			citations=rag_result.citations,
+		)
+		if agent_result.ok and agent_result.answer.strip():
+			return {
+				"connected": True,
+				"source": "profile_rag+boss_agent_ai"
+				if getattr(agent_adapter, "ai_service", None) is not None
+				else "profile_rag+local_agent_rewrite",
+				"draft_message": _normalise_outreach_draft_message(agent_result.answer, candidate),
+				"error_message": "",
+				"citations": list(agent_result.citations or rag_result.citations or []),
+				"reasoning_summary": agent_result.reasoning_summary or rag_result.reasoning_summary,
+			}
+		return {
+			"connected": True,
+			"source": "profile_rag",
+			"draft_message": _normalise_outreach_draft_message(
+				_build_local_outreach_message(candidate, profile.target_title),
+				candidate,
+			),
+			"error_message": agent_result.error_message or "",
+			"citations": list(rag_result.citations or []),
+			"reasoning_summary": rag_result.reasoning_summary,
+		}
+
+	agent_result = agent_adapter.answer(
+		message_text=_outreach_agent_instruction(candidate, query=query, target_title=target_title),
+		intent="outreach_greet",
+		job_summary=job_summary,
+		rag_answer=_local_outreach_grounding(profile, candidate, query=query, target_title=target_title),
+		citations=[],
+	)
+	if (
+		getattr(agent_adapter, "ai_service", None) is not None
+		and agent_result.ok
+		and agent_result.answer.strip()
+	):
+		return {
+			"connected": True,
+			"source": "boss_agent_ai",
+			"draft_message": _normalise_outreach_draft_message(agent_result.answer, candidate),
+			"error_message": rag_result.error_message or "",
+			"citations": [],
+			"reasoning_summary": agent_result.reasoning_summary,
+		}
+	return _local_outreach_agent_payload(
+		candidate,
+		profile_target_title=profile.target_title,
+		error_message=rag_result.error_message or agent_result.error_message or "",
+	)
+
+
+def _outreach_candidate_key(candidate: OutreachCandidate) -> str:
+	return f"{candidate.security_id}:{candidate.job_id}"
+
+
+def _local_outreach_agent_payload(
+	candidate: OutreachCandidate,
+	*,
+	profile_target_title: str,
+	error_message: str = "",
+) -> dict[str, object]:
+	return {
+		"connected": False,
+		"source": "local_outreach_template",
+		"draft_message": _build_local_outreach_message(candidate, profile_target_title),
+		"error_message": error_message,
+		"citations": [],
+		"reasoning_summary": None,
+	}
+
+
+def _outreach_job_summary(candidate: OutreachCandidate) -> str:
+	parts = [
+		candidate.title,
+		candidate.company,
+		candidate.city,
+		candidate.salary,
+		candidate.experience,
+		candidate.education,
+		candidate.industry,
+		"、".join(candidate.skills or []),
+	]
+	return " / ".join(part for part in parts if part)
+
+
+def _outreach_rag_question(
+	*,
+	profile: UserProfileRecord,
+	candidate: OutreachCandidate,
+	query: str,
+	target_title: str,
+) -> str:
+	return (
+		"请基于候选人 profile/简历，判断是否能支撑下面这个 BOSS 开聊场景，"
+		"只给出可用于开场白的真实匹配点，不要编造经历、联系方式或薪资。\n"
+		f"候选人目标: {profile.target_title or target_title or query}\n"
+		f"搜索关键词: {query}\n"
+		f"岗位: {_outreach_job_summary(candidate)}\n"
+		"输出要求: 2-3 句中文，第一人称素材，适合改写成一条礼貌的打招呼消息。"
+	)
+
+
+def _outreach_agent_instruction(
+	candidate: OutreachCandidate,
+	*,
+	query: str,
+	target_title: str,
+) -> str:
+	return (
+		"请为 BOSS 直聘开聊生成一条候选人求职助理可发送的中文开场白。"
+		"必须礼貌、简短、真实，不要索要联系方式，不要承诺未验证经历，不要提知识库或 RAG。"
+		f"岗位: {_outreach_job_summary(candidate)}。搜索关键词: {query}。目标方向: {target_title}。"
+	)
+
+
+def _local_outreach_grounding(
+	profile: UserProfileRecord,
+	candidate: OutreachCandidate,
+	*,
+	query: str,
+	target_title: str,
+) -> str:
+	return (
+		f"候选人目标方向是 {profile.target_title or target_title or query}。"
+		f"当前岗位是 {_outreach_job_summary(candidate)}。"
+		"本地信息不足时只能表达兴趣和匹配方向，不能编造个人经历。"
+	)
+
+
+def _build_local_outreach_message(candidate: OutreachCandidate, profile_target_title: str) -> str:
+	title = candidate.title or profile_target_title or "这个岗位"
+	company = f"{candidate.company}的" if candidate.company else ""
+	return f"您好，我关注到{company}{title}，方向和我的求职目标比较匹配，希望能进一步沟通。"
+
+
+def _normalise_outreach_draft_message(message: str, candidate: OutreachCandidate) -> str:
+	text = " ".join(
+		line.strip(" -*\t")
+		for line in str(message or "").splitlines()
+		if line.strip()
+	).strip()
+	for prefix in (
+		"我是候选人的求职助理 Agent，",
+		"我是候选人的求职助理 Agent,",
+		"我是候选人的求职助理Agent，",
+	):
+		if text.startswith(prefix):
+			text = text[len(prefix):].strip()
+	if not text:
+		text = _build_local_outreach_message(candidate, "")
+	if len(text) > 180:
+		text = f"{text[:177].rstrip()}..."
+	return text
 
 
 def _collect_outreach_plan_candidates(
@@ -1622,6 +1868,7 @@ def rag_plan_outreach_cmd(
 		return
 
 	profile_enabled, profile_blocked_reason = _profile_outreach_enabled(ctx, profile_id)
+	candidates = [OutreachCandidate.from_mapping(item) for item in raw_candidates]
 	planner = OutreachPlanner(
 		OutreachPlannerConfig(
 			query=query,
@@ -1632,9 +1879,22 @@ def rag_plan_outreach_cmd(
 		)
 	)
 	plan = planner.build_plan(
-		[OutreachCandidate.from_mapping(item) for item in raw_candidates],
+		candidates,
 		attachments=attachment_paths,
 	)
+	agent_drafts = _build_outreach_agent_drafts(
+		ctx,
+		profile_id=profile_id,
+		query=query,
+		target_title=target_title,
+		actions=plan.actions,
+	)
+	if agent_drafts:
+		plan = planner.build_plan(
+			candidates,
+			attachments=attachment_paths,
+			agent_drafts=agent_drafts,
+		)
 	payload = plan.to_payload()
 	if profile_blocked_reason:
 		payload["blocked_reason"] = profile_blocked_reason

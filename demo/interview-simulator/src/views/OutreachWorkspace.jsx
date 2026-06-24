@@ -280,12 +280,16 @@ export function OutreachWorkspace({
                 <strong>Agent 计划</strong>
                 <span>
                   {bossAgentPlan.status} · {bossAgentPlan.total || 0} 个候选 ·{" "}
-                  {bossAgentPlan.send_ready ? "可执行" : "需确认"}
+                  {bossAgentPlan.send_ready ? "可执行" : "需确认"} ·{" "}
+                  {bossAgentPlan.agent_connected
+                    ? `已接入 ${(bossAgentPlan.agent_sources || []).join(" + ") || "Agent"}`
+                    : "本地模板"}
                 </span>
               </div>
               <div className="agent-plan-list">
                 {(bossAgentPlan.actions || []).slice(0, 5).map((action, index) => {
                   const candidate = action.candidate || {};
+                  const agent = action.agent || {};
                   const label =
                     [candidate.title, candidate.company].filter(Boolean).join(" @ ") ||
                     candidate.security_id ||
@@ -299,6 +303,15 @@ export function OutreachWorkspace({
                       <p>
                         score {action.score} · risk {action.risk}
                       </p>
+                      <p>
+                        {agent.connected ? `Agent source ${agent.source}` : `未接入 Agent：${agent.source || "none"}`}
+                      </p>
+                      {agent.draft_message ? (
+                        <p>{agent.draft_message}</p>
+                      ) : null}
+                      {agent.error_message ? (
+                        <p>{agent.error_message}</p>
+                      ) : null}
                       <div className="agent-plan-card__reasons">
                         {(action.reasons || []).map((reason) => (
                           <span key={reason}>{reason}</span>

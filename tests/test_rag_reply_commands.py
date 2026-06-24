@@ -874,6 +874,21 @@ def test_agent_plan_outreach_returns_explainable_actions(monkeypatch, tmp_path: 
 
 	monkeypatch.setattr(rag_commands, "_collect_outreach_plan_candidates", fake_collect)
 	monkeypatch.setattr(rag_commands, "_profile_outreach_enabled", lambda ctx, profile_id: (True, ""))
+
+	def fake_agent_drafts(ctx, *, profile_id, query, target_title, actions):
+		candidate = actions[0].candidate
+		return {
+			f"{candidate.security_id}:{candidate.job_id}": {
+				"connected": True,
+				"source": "profile_rag+boss_agent_ai",
+				"draft_message": "您好，我的 RAG 和 Agent 项目经验与岗位方向匹配，希望进一步沟通。",
+				"error_message": "",
+				"citations": [{"source": "profile"}],
+				"reasoning_summary": {"strategy": "profile grounded outreach"},
+			}
+		}
+
+	monkeypatch.setattr(rag_commands, "_build_outreach_agent_drafts", fake_agent_drafts)
 	runner = CliRunner()
 
 	result = runner.invoke(
@@ -904,8 +919,22 @@ def test_agent_plan_outreach_returns_explainable_actions(monkeypatch, tmp_path: 
 	assert payload["data"]["plan"]["status"] == "planned"
 	assert payload["data"]["plan"]["query"] == "RAG"
 	assert payload["data"]["plan"]["profile_id"] == "profile_001"
+	assert payload["data"]["plan"]["agent_connected"] is True
+	assert payload["data"]["plan"]["agent_sources"] == ["profile_rag+boss_agent_ai"]
 	assert payload["data"]["plan"]["actions"][0]["decision"] == "greet_with_attachments"
 	assert payload["data"]["plan"]["actions"][0]["reasons"]
+	assert payload["data"]["plan"]["actions"][0]["agent"]["connected"] is True
+	assert (
+		payload["data"]["plan"]["actions"][0]["agent"]["draft_message"]
+		== "您好，我的 RAG 和 Agent 项目经验与岗位方向匹配，希望进一步沟通。"
+	)
+	assert payload["data"]["plan"]["actions"][0]["proposed_cli_args"][:5] == [
+		"greet",
+		"sec_001",
+		"job_001",
+		"--message",
+		"您好，我的 RAG 和 Agent 项目经验与岗位方向匹配，希望进一步沟通。",
+	]
 	assert payload["data"]["dry_run"] is True
 
 
