@@ -455,10 +455,6 @@ export function App() {
 
   useEffect(() => {
     if (!browserChannelRiskMessage) return;
-    setBossAutomationRiskLocked(true);
-    setBossAutomationError((current) =>
-      current && isBossAccountRiskMessage(current) ? current : browserChannelRiskMessage,
-    );
     setWatcherState((current) =>
       current.running ? { ...current, running: false } : current,
     );
@@ -830,13 +826,8 @@ export function App() {
 
   async function handleClearBossAutomationRisk() {
     setBossAutomationRiskClearedAtMs(Date.now());
-    if (browserChannelRiskMessage) {
-      setBossAutomationRiskLocked(true);
-      setBossAutomationError(browserChannelRiskMessage);
-    } else {
-      setBossAutomationRiskLocked(false);
-      setBossAutomationError("");
-    }
+    setBossAutomationRiskLocked(false);
+    setBossAutomationError("");
     setWatcherState((current) => ({
       ...current,
       errorMessage: isBossAccountRiskMessage(current.errorMessage) ? "" : current.errorMessage,
