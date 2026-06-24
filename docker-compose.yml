@@ -176,6 +176,25 @@ services:
     volumes:
       - ./storage/personal-rag/shared-data:/shared-data
 
+  personal-rag-frontend:
+    profiles: ["personal-rag"]
+    image: node:22-alpine
+    container_name: ${BOSS_PERSONAL_RAG_FRONTEND_CONTAINER_NAME:-boss-personal-rag-frontend}
+    working_dir: /app/frontend
+    user: "${RAG_RUNTIME_UID:-1000}:${RAG_RUNTIME_GID:-1000}"
+    command: sh -c 'npm run dev -- --host 0.0.0.0'
+    restart: unless-stopped
+    depends_on:
+      - personal-rag-api
+    environment:
+      FE_PORT: "3100"
+      VITE_API_TARGET: http://personal-rag-api:8020
+      VITE_WATCH_USE_POLLING: ${BOSS_PERSONAL_RAG_FRONTEND_WATCH_USE_POLLING:-false}
+    ports:
+      - "127.0.0.1:3100:3100"
+    volumes:
+      - ../Enterprise-grade_RAG:/app
+
 volumes:
   boss_personal_rag_postgres_data:
     name: ${BOSS_PERSONAL_RAG_POSTGRES_VOLUME_NAME:-boss_personal_rag_postgres_data}
