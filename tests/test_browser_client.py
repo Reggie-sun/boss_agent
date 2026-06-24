@@ -745,25 +745,42 @@ def test_try_raw_cdp_stops_on_access_limited_without_opening_home():
 	mock_open.assert_not_called()
 
 
-def test_pick_zhipin_target_ws_opens_preferred_page_when_missing():
+def test_pick_zhipin_target_ws_opens_preferred_page_when_stale_risk_tab_coexists():
 	with (
 		patch(
 			"boss_agent_cli.api.browser_client._load_cdp_targets",
 			side_effect=[
 				[
 					{
+						"id": "chat-tab",
 						"type": "page",
 						"url": "https://www.zhipin.com/web/geek/chat",
 						"webSocketDebuggerUrl": "ws://chat",
+					},
+					{
+						"id": "stale-risk-tab",
+						"type": "page",
+						"url": "https://www.zhipin.com/?_security_check=1_1782263668779",
+						"title": "BOSS直聘-找工作BOSS直聘直接谈！招聘求职找工作！",
+						"webSocketDebuggerUrl": "ws://risk",
 					},
 				],
 				[
 					{
+						"id": "chat-tab",
 						"type": "page",
 						"url": "https://www.zhipin.com/web/geek/chat",
 						"webSocketDebuggerUrl": "ws://chat",
 					},
 					{
+						"id": "stale-risk-tab",
+						"type": "page",
+						"url": "https://www.zhipin.com/?_security_check=1_1782263668779",
+						"title": "BOSS直聘-找工作BOSS直聘直接谈！招聘求职找工作！",
+						"webSocketDebuggerUrl": "ws://risk",
+					},
+					{
+						"id": "jobs-tab",
 						"type": "page",
 						"url": CANDIDATE_JOBS_URL,
 						"webSocketDebuggerUrl": "ws://jobs",

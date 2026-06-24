@@ -240,6 +240,7 @@ def test_interview_simulator_renders_agent_outreach_plan_panel():
 	assert "bossAgentPlan" in app
 	assert "handleBossAgentPlan" in app
 	assert 'fetch("/api/agent/outreach-plan"' in app
+	assert "live_execution_requested: true" in app
 	assert "生成 Agent 计划" in outreach
 	assert "disabled={isBossAgentPlanning || bossSearchActionsDisabled || !selectedProfileId}" not in outreach
 	assert "disabled={isBossAgentPlanning || !bossSearchForm.query.trim() || !selectedProfileId}" in outreach

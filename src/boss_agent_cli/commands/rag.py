@@ -706,6 +706,7 @@ def _collect_outreach_plan_candidates(
 	welfare: str | None,
 	count: int,
 ) -> list[dict[str, object]]:
+	search_max_pages, search_limit = _outreach_plan_search_window(count)
 	welfare_conditions = [
 		(label, resolve_welfare_keywords(label))
 		for label in (part.strip() for part in (welfare or "").split(","))
@@ -732,12 +733,20 @@ def _collect_outreach_plan_candidates(
 				cache,
 				logger,
 				criteria=criteria,
-				max_pages=max(1, min(count, 5)),
-				limit=count,
+				max_pages=search_max_pages,
+				limit=search_limit,
 				welfare_conditions=welfare_conditions,
 				skip_greeted=True,
 			)
-	return list(result.items)
+	return list(result.items[:count])
+
+
+def _outreach_plan_search_window(count: int) -> tuple[int, int]:
+	safe_count = max(1, min(count, 150))
+	return (
+		max(1, min(max(safe_count, 3), 5)),
+		min(max(safe_count * 3, 5), 150),
+	)
 
 
 def _not_implemented(ctx: click.Context, command: str) -> None:

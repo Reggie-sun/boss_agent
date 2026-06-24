@@ -694,7 +694,7 @@ export function App() {
           attachments: bossSearchForm.attachments,
           profile_id: selectedProfileId,
           targetTitle: "AI Agent 工程师",
-          live_execution_requested: false,
+          live_execution_requested: true,
         }),
       });
       const payload = await response.json();

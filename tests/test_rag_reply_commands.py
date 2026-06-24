@@ -909,6 +909,13 @@ def test_agent_plan_outreach_returns_explainable_actions(monkeypatch, tmp_path: 
 	assert payload["data"]["dry_run"] is True
 
 
+def test_outreach_plan_search_window_scans_backup_candidates_for_small_counts():
+	assert rag_commands._outreach_plan_search_window(1) == (3, 5)
+	assert rag_commands._outreach_plan_search_window(3) == (3, 9)
+	assert rag_commands._outreach_plan_search_window(10) == (5, 30)
+	assert rag_commands._outreach_plan_search_window(200) == (5, 150)
+
+
 def test_agent_plan_outreach_blocks_when_profile_config_disables_outreach(monkeypatch, tmp_path: Path):
 	def fake_collect(ctx, *, query, city, salary, experience, education, industry, scale, stage, job_type, welfare, count):
 		return [

@@ -1052,12 +1052,14 @@ def _pick_zhipin_target_ws(cdp_http_url: str, *, preferred_page_url: str | None 
 		preferred_target = _find_zhipin_target_by_page_url(targets, preferred_page_url)
 		if preferred_target is None:
 			access_limited_target = _find_access_limited_target(targets)
-			if access_limited_target is not None:
+			if access_limited_target is not None and not _has_clean_zhipin_target(targets):
 				result = _access_limited_result_from_target(access_limited_target)
 				if result is not None:
 					raise BossAccessLimitedError(result)
+			opened_target_id = ""
 			try:
-				_open_cdp_tab(cdp_http_url, preferred_page_url)
+				opened_target = _open_cdp_tab(cdp_http_url, preferred_page_url)
+				opened_target_id = str(opened_target.get("id") or "")
 			except Exception:
 				preferred_target = None
 			else:
@@ -1067,7 +1069,14 @@ def _pick_zhipin_target_ws(cdp_http_url: str, *, preferred_page_url: str | None 
 					preferred_target = _find_zhipin_target_by_page_url(targets, preferred_page_url)
 					if preferred_target is not None:
 						break
-					access_limited_target = _find_access_limited_target(targets)
+					opened_target = _find_cdp_target_by_id(targets, opened_target_id)
+					access_limited_target = (
+						opened_target
+						if opened_target is not None and _access_limited_result_from_target(opened_target) is not None
+						else None
+					)
+					if access_limited_target is None and not _has_clean_zhipin_target(targets):
+						access_limited_target = _find_access_limited_target(targets)
 					if access_limited_target is not None:
 						result = _access_limited_result_from_target(access_limited_target)
 						if result is not None:
@@ -1173,6 +1182,25 @@ def _find_access_limited_target(targets: list[dict[str, Any]]) -> dict[str, Any]
 		if target.get("type") != "page":
 			continue
 		if _access_limited_result_from_target(target) is not None:
+			return target
+	return None
+
+
+def _has_clean_zhipin_target(targets: list[dict[str, Any]]) -> bool:
+	for target in targets:
+		if target.get("type") != "page":
+			continue
+		url = str(target.get("url") or "")
+		if "zhipin.com" in url and _access_limited_result_from_target(target) is None:
+			return True
+	return False
+
+
+def _find_cdp_target_by_id(targets: list[dict[str, Any]], target_id: str) -> dict[str, Any] | None:
+	if not target_id:
+		return None
+	for target in targets:
+		if str(target.get("id") or "") == target_id:
 			return target
 	return None
 

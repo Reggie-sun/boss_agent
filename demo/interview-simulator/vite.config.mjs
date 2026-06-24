@@ -495,29 +495,28 @@ async function detectBossDeliveryChannel(config) {
 
 async function runCdpDeliveryProbe(config, baseState, cacheKey) {
   const targets = await listCdpTargets(config.cdpUrl);
-  const accessLimitedTarget = findAccessLimitedTarget(targets);
-
-  if (accessLimitedTarget) {
-    const limited = {
-      ...baseState,
-      available: false,
-      chatPageReachable: false,
-      preflightStatus: "account_risk",
-      lastObservedUrl: String(accessLimitedTarget.url || ""),
-      lastObservedTitle: String(accessLimitedTarget.title || ""),
-      errorMessage: BOSS_ACCESS_LIMITED_MESSAGE,
-    };
-    cachedDeliveryProbe = {
-      key: cacheKey,
-      expiresAt: Date.now() + DELIVERY_PROBE_CACHE_TTL_MS,
-      value: limited,
-    };
-    return limited;
-  }
-
   const existingChatTarget = findCandidateChatTarget(targets);
 
   if (!existingChatTarget) {
+    const accessLimitedTarget = findAccessLimitedTarget(targets);
+    if (accessLimitedTarget) {
+      const limited = {
+        ...baseState,
+        available: false,
+        chatPageReachable: false,
+        preflightStatus: "account_risk",
+        lastObservedUrl: String(accessLimitedTarget.url || ""),
+        lastObservedTitle: String(accessLimitedTarget.title || ""),
+        errorMessage: BOSS_ACCESS_LIMITED_MESSAGE,
+      };
+      cachedDeliveryProbe = {
+        key: cacheKey,
+        expiresAt: Date.now() + DELIVERY_PROBE_CACHE_TTL_MS,
+        value: limited,
+      };
+      return limited;
+    }
+
     const missing = {
       ...baseState,
       available: false,

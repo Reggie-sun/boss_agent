@@ -313,7 +313,7 @@ test("detectBossDeliveryChannel reuses an in-flight missing-chat probe", async (
   }
 });
 
-test("detectBossDeliveryChannel reuses an existing candidate chat tab before opening a probe tab", async () => {
+test("detectBossDeliveryChannel reuses an existing chat tab before stale risk tabs", async () => {
   const originalFetch = globalThis.fetch;
   const originalWebSocket = globalThis.WebSocket;
   let createdTargets = 0;
@@ -375,6 +375,13 @@ test("detectBossDeliveryChannel reuses an existing candidate chat tab before ope
           webSocketDebuggerUrl: "ws://cdp.test/jobs-tab",
         },
         {
+          id: "risk-tab",
+          type: "page",
+          url: "https://www.zhipin.com/?_security_check=1_1782263668779",
+          title: "BOSS直聘-找工作BOSS直聘直接谈！招聘求职找工作！",
+          webSocketDebuggerUrl: "ws://cdp.test/risk-tab",
+        },
+        {
           id: "chat-tab",
           type: "page",
           url: "https://www.zhipin.com/web/geek/chat",
@@ -432,13 +439,6 @@ test("detectBossDeliveryChannel blocks when CDP already has an access-limited Bo
     }
     if (requestUrl === "http://cdp.test/json/list") {
       return Response.json([
-        {
-          id: "chat-tab",
-          type: "page",
-          url: "https://www.zhipin.com/web/geek/chat?ka=header-message",
-          title: "BOSS直聘",
-          webSocketDebuggerUrl: "ws://cdp.test/chat-tab",
-        },
         {
           id: "risk-tab",
           type: "page",
