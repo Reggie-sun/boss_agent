@@ -830,8 +830,13 @@ export function App() {
 
   async function handleClearBossAutomationRisk() {
     setBossAutomationRiskClearedAtMs(Date.now());
-    setBossAutomationRiskLocked(false);
-    setBossAutomationError("");
+    if (browserChannelRiskMessage) {
+      setBossAutomationRiskLocked(true);
+      setBossAutomationError(browserChannelRiskMessage);
+    } else {
+      setBossAutomationRiskLocked(false);
+      setBossAutomationError("");
+    }
     setWatcherState((current) => ({
       ...current,
       errorMessage: isBossAccountRiskMessage(current.errorMessage) ? "" : current.errorMessage,
