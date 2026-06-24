@@ -321,11 +321,13 @@ def test_client_fetch_json_get(mock_post):
 	"""fetch_json GET 请求应正确构造 JS。"""
 	mock_post.return_value = MagicMock(json=lambda: {"id": "x", "ok": True, "data": {"code": 0}})
 	client = BridgeClient()
-	result = client.fetch_json("https://api.example.com/data")
+	result = client.fetch_json("https://api.example.com/data", referer="https://www.zhipin.com/web/geek/job")
 	assert result == {"code": 0}
 	# 验证发送的 JS 包含 fetch 和 GET
 	call_args = mock_post.call_args[1]["json"]
 	assert "GET" in call_args["code"]
+	assert "referrer:" in call_args["code"]
+	assert "'Referer'" not in call_args["code"]
 
 
 @patch("boss_agent_cli.bridge.client.httpx.post")

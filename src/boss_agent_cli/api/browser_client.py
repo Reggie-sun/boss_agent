@@ -6,8 +6,8 @@ automation such as outreach, bulk actions, risk-control retries, and candidate
 personal-data workflows before they reach this client.
 
 Supports two modes:
-  1. CDP mode: connects to user's existing Chrome via DevTools Protocol
-  2. Bridge mode: delegates fetches to the user's Chrome extension channel
+  1. Bridge mode: delegates fetches to the user's Chrome extension channel
+  2. CDP mode: connects to user's existing Chrome via DevTools Protocol
 
 Headless patchright helpers still exist for isolated utility paths, but live
 BOSS platform requests fail closed instead of silently falling back to headless.
@@ -63,9 +63,9 @@ class BrowserChannelUnavailable(RuntimeError):
 
 	def __init__(self) -> None:
 		super().__init__(
-			"BOSS 浏览器通道不可用：无法通过 CDP 复用真实 Chrome。"
-			"为保护账号，live BOSS 请求已禁止降级到 Bridge 或 headless patchright。"
-			"请用 --remote-debugging-port=9229 打开真实 Chrome 后重试。"
+			"BOSS 浏览器通道不可用：无法通过 Bridge 或 CDP 复用真实 Chrome。"
+			"为保护账号，live BOSS 请求已禁止降级到 headless patchright。"
+			"请连接 BOSS Agent Bridge 扩展，或用 --remote-debugging-port=9229 打开真实 Chrome 后重试。"
 		)
 
 class BossAccessLimitedError(RuntimeError):
@@ -116,7 +116,7 @@ _CHROME_USER_DATA_CANDIDATES = [
 class BrowserSession:
 	"""Persistent browser session that makes API calls via page.evaluate(fetch).
 
-	Tries CDP against the user's Chrome, then Bridge. Real platform
+	Tries Bridge first, then CDP against the user's Chrome. Real platform
 	requests must not silently fall back to headless automation.
 	"""
 
@@ -155,24 +155,24 @@ class BrowserSession:
 				return
 			raise BrowserChannelUnavailable()
 
+		# 默认优先 Bridge：扩展通过 scripting 注入，不再主动 attach DevTools/CDP。
+		if self._try_bridge():
+			return
+
 		cdp_connected = False
 		try:
 			sync_playwright = _sync_playwright()
 			self._pw = sync_playwright().start()
 
-			# 优先：CDP 连接用户 Chrome（登录态兼容，避免 Bridge 调试扩展介入）
+			# Bridge 不可用时才尝试 CDP。CDP 会暴露 DevTools 会话，风险更高。
 			if not _is_patchright_runtime(sync_playwright) and self._try_cdp():
 				cdp_connected = True
 				return
 		except Exception as exc:
-			self._log(f"[boss] CDP 探测未完成，准备尝试 Bridge：{exc}")
+			self._log(f"[boss] CDP 探测未完成：{exc}")
 		finally:
 			if not cdp_connected:
 				self._stop_playwright_driver()
-
-		# 第二优先：Bridge 模式（Chrome 扩展 + daemon）。仅在 CDP 不可用时使用。
-		if self._try_bridge():
-			return
 
 		raise BrowserChannelUnavailable()
 

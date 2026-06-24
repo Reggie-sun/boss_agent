@@ -23,6 +23,17 @@ def test_bridge_extension_requires_chrome_with_websocket_service_worker_keepaliv
 	assert int(manifest["minimum_chrome_version"]) >= 116
 
 
+def test_bridge_extension_exec_uses_scripting_not_debugger():
+	repo_root = Path(__file__).resolve().parents[1]
+	manifest = json.loads((repo_root / "extension" / "manifest.json").read_text())
+	background = (repo_root / "extension" / "background.js").read_text()
+
+	assert "scripting" in manifest["permissions"]
+	assert "debugger" not in manifest["permissions"]
+	assert "chrome.scripting.executeScript" in background
+	assert "chrome.debugger" not in background
+
+
 def test_bridge_extension_boss_workspace_fallback_is_debuggable_https_page():
 	repo_root = Path(__file__).resolve().parents[1]
 	background = (repo_root / "extension" / "background.js").read_text()

@@ -2,7 +2,7 @@
  * BOSS Agent Bridge — Service Worker (background script).
  *
  * Connects to boss-agent-cli daemon via WebSocket, receives commands,
- * dispatches them to Chrome APIs (debugger/tabs/cookies), returns results.
+ * dispatches them to Chrome APIs (scripting/tabs/cookies), returns results.
  */
 
 const DAEMON_PORT = 19826;
@@ -17,7 +17,6 @@ let reconnectTimer = null;
 let reconnectAttempts = 0;
 let heartbeatTimer = null;
 const MAX_EAGER_ATTEMPTS = 6;
-const attached = new Set();
 
 // ── Automation window ────────────────────────────────────────────────
 
@@ -63,56 +62,25 @@ chrome.windows.onRemoved.addListener((windowId) => {
 	}
 });
 
-// ── CDP via chrome.debugger ──────────────────────────────────────────
-
-async function ensureAttached(tabId) {
+async function evaluate(tabId, code) {
 	const tab = await chrome.tabs.get(tabId);
 	if (!tab.url?.startsWith('http')) {
-		attached.delete(tabId);
-		throw new Error(`Cannot debug tab ${tabId}: URL is ${tab.url}`);
+		throw new Error(`Cannot execute script in tab ${tabId}: URL is ${tab.url}`);
 	}
 
-	if (attached.has(tabId)) {
-		try {
-			await chrome.debugger.sendCommand({ tabId }, 'Runtime.evaluate', {
-				expression: '1', returnByValue: true,
-			});
-			return;
-		} catch {
-			attached.delete(tabId);
-		}
-	}
-
-	try {
-		await chrome.debugger.attach({ tabId }, '1.3');
-	} catch (e) {
-		if (e.message?.includes('Another debugger')) {
-			try { await chrome.debugger.detach({ tabId }); } catch {}
-			await chrome.debugger.attach({ tabId }, '1.3');
-		} else {
-			throw new Error(`attach failed: ${e.message}`);
-		}
-	}
-	attached.add(tabId);
-
-	try { await chrome.debugger.sendCommand({ tabId }, 'Runtime.enable'); } catch {}
-	try {
-		await chrome.debugger.sendCommand({ tabId }, 'Debugger.enable');
-		await chrome.debugger.sendCommand({ tabId }, 'Debugger.setBreakpointsActive', { active: false });
-	} catch {}
-}
-
-async function evaluate(tabId, code) {
-	await ensureAttached(tabId);
-	const result = await chrome.debugger.sendCommand({ tabId }, 'Runtime.evaluate', {
-		expression: code,
-		returnByValue: true,
-		awaitPromise: true,
+	const results = await chrome.scripting.executeScript({
+		target: { tabId },
+		world: 'MAIN',
+		func: async (source) => {
+			const run = new Function(`return (${source})`);
+			return await run();
+		},
+		args: [code],
 	});
-	if (result.exceptionDetails) {
-		throw new Error(result.exceptionDetails.exception?.description || result.exceptionDetails.text || 'Eval error');
+	if (!results || !results.length) {
+		throw new Error('Script execution returned no result');
 	}
-	return result.result?.value;
+	return results[0]?.result;
 }
 
 // ── Tab management ───────────────────────────────────────────────────
@@ -125,7 +93,7 @@ async function waitForHttpTab(tabId, timeoutMs = 5000) {
 		await new Promise(r => setTimeout(r, 100));
 	}
 	const tab = await chrome.tabs.get(tabId);
-	throw new Error(`Cannot debug tab ${tabId}: URL is ${tab.url || ''}`);
+	throw new Error(`Cannot execute script in tab ${tabId}: URL is ${tab.url || ''}`);
 }
 
 async function resolveTabId(tabId, workspace, allowCreate = false, initialUrl = BOSS_WORKSPACE_URL) {
@@ -306,8 +274,6 @@ function initialize() {
 	if (initialized) return;
 	initialized = true;
 	chrome.alarms.create('keepalive', { periodInMinutes: 0.4 });
-	chrome.tabs.onRemoved.addListener((tabId) => attached.delete(tabId));
-	chrome.debugger.onDetach.addListener((source) => { if (source.tabId) attached.delete(source.tabId); });
 	connect();
 	console.log('[boss-bridge] Extension initialized');
 }

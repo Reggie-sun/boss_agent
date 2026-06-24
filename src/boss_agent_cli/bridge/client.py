@@ -285,8 +285,8 @@ class BridgeClient:
 						headers: {{
 							'Accept': 'application/json',
 							'X-Requested-With': 'XMLHttpRequest',
-							{f"'Referer': {json.dumps(referer)}," if referer else ""}
 						}},
+						{f"referrer: {json.dumps(referer)}," if referer else ""}
 					}});
 					return await resp.json();
 				}})()
@@ -307,8 +307,8 @@ class BridgeClient:
 							'Accept': 'application/json',
 							'Content-Type': 'application/x-www-form-urlencoded',
 							'X-Requested-With': 'XMLHttpRequest',
-							{f"'Referer': {json.dumps(referer)}," if referer else ""}
 						}},
+						{f"referrer: {json.dumps(referer)}," if referer else ""}
 						body: formData.toString(),
 					}});
 					return await resp.json();

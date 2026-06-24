@@ -5,7 +5,7 @@
   "minimum_chrome_version": "116",
   "description": "Browser Bridge for boss-agent-cli — executes commands in Chrome via local daemon.",
   "permissions": [
-    "debugger",
+    "scripting",
     "tabs",
     "cookies",
     "activeTab",
