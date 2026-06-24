@@ -246,8 +246,13 @@ def test_interview_simulator_renders_agent_outreach_plan_panel():
 def test_interview_simulator_outreach_locks_actions_when_browser_channel_is_blocked():
 	repo_root = Path(__file__).resolve().parents[1]
 	app = (repo_root / "demo" / "interview-simulator" / "src" / "App.jsx").read_text(encoding="utf-8")
+	outreach = (
+		repo_root / "demo" / "interview-simulator" / "src" / "views" / "OutreachWorkspace.jsx"
+	).read_text(encoding="utf-8")
 
 	assert 'preflightStatus === "account_risk"' in app
 	assert "setBossAutomationRiskLocked(true)" in app
 	assert "!bridgeState.browserChannel.available" in app
 	assert "browserChannelRiskMessage" in app
+	assert "` 未就绪：${bridgeState.browserChannel.errorMessage}`" in app
+	assert outreach.index("bossAutomationError ? (") < outreach.index("apply-search__inputs")

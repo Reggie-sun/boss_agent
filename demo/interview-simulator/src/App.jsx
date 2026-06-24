@@ -1210,7 +1210,7 @@ export function App() {
                 ? " 聊天页可达"
                 : " 通道可用"
               : bridgeState.browserChannel.errorMessage
-                ? " 未就绪"
+                ? ` 未就绪：${bridgeState.browserChannel.errorMessage}`
                 : " 未检查"}
           </p>
         </section>
