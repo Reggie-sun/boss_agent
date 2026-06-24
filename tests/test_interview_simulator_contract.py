@@ -222,8 +222,9 @@ def test_interview_simulator_exposes_read_only_outreach_plan_endpoint():
 	assert 'appendTextOption(args, "--target-title", body.targetTitle)' in vite
 	assert 'args.push("--attachment", attachmentPath)' in vite
 	route_block = vite.split('req.url === "/api/agent/outreach-plan"', 1)[1].split("return true;", 1)[0]
-	assert "detectBossDeliveryChannel" not in route_block
-	assert "buildBossDeliveryBlockPayload" not in route_block
+	assert "detectBossDeliveryChannel" in route_block
+	assert 'browserChannel.preflightStatus === "account_risk"' in route_block
+	assert "buildBossDeliveryBlockPayload" in route_block
 
 
 def test_interview_simulator_renders_agent_outreach_plan_panel():
@@ -240,3 +241,13 @@ def test_interview_simulator_renders_agent_outreach_plan_panel():
 	assert "生成 Agent 计划" in outreach
 	assert "agent-plan-card" in outreach
 	assert ".agent-plan-card" in styles
+
+
+def test_interview_simulator_outreach_locks_actions_when_browser_channel_is_blocked():
+	repo_root = Path(__file__).resolve().parents[1]
+	app = (repo_root / "demo" / "interview-simulator" / "src" / "App.jsx").read_text(encoding="utf-8")
+
+	assert 'preflightStatus === "account_risk"' in app
+	assert "setBossAutomationRiskLocked(true)" in app
+	assert "!bridgeState.browserChannel.available" in app
+	assert "browserChannelRiskMessage" in app

@@ -8,6 +8,8 @@ import { createProfileBridgeHandlers } from "./server/profileBridge.mjs";
 const BOSS_GEEK_CHAT_URL = "https://www.zhipin.com/web/geek/chat";
 const CDP_REQUIRED_FOR_BOSS_DELIVERY_MESSAGE =
   "Boss 自动开聊/发送需要 CDP 真实 Chrome（127.0.0.1:9229）。当前只检测到 Bridge 扩展；为保护账号，已停止本次自动触达。请用 --remote-debugging-port=9229 打开真实 Chrome 后刷新本页面。";
+const BOSS_ACCESS_LIMITED_MESSAGE =
+  "BOSS 页面访问受限：当前真实浏览器已出现安全检查或账号异常页面。为保护账号，已停止本次自动触达；请回到 BOSS 官方页面手动处理或等待恢复后重试。";
 const PROFILE_BINDING_REQUIRED_MESSAGE =
   "当前 Boss 对话还未绑定 profile。请先点击「绑定当前对话」，再让 Agent 回答。";
 const DELIVERY_PROBE_CACHE_TTL_MS = 10_000;
@@ -232,6 +234,21 @@ function findCandidateChatTarget(targets) {
     if (target?.type !== "page") return false;
     const url = String(target?.url || "");
     return url.includes("/web/geek/chat");
+  }) || null;
+}
+
+function findAccessLimitedTarget(targets) {
+  return targets.find((target) => {
+    if (target?.type !== "page") return false;
+    const url = String(target?.url || "");
+    const title = String(target?.title || "");
+    return (
+      url.includes("_security_check=") ||
+      url.includes("/security-check") ||
+      title.includes("访问受限") ||
+      title.includes("安全验证") ||
+      title.includes("异常行为")
+    );
   }) || null;
 }
 
@@ -477,7 +494,28 @@ async function detectBossDeliveryChannel(config) {
 }
 
 async function runCdpDeliveryProbe(config, baseState, cacheKey) {
-  const existingChatTarget = findCandidateChatTarget(await listCdpTargets(config.cdpUrl));
+  const targets = await listCdpTargets(config.cdpUrl);
+  const accessLimitedTarget = findAccessLimitedTarget(targets);
+
+  if (accessLimitedTarget) {
+    const limited = {
+      ...baseState,
+      available: false,
+      chatPageReachable: false,
+      preflightStatus: "account_risk",
+      lastObservedUrl: String(accessLimitedTarget.url || ""),
+      lastObservedTitle: String(accessLimitedTarget.title || ""),
+      errorMessage: BOSS_ACCESS_LIMITED_MESSAGE,
+    };
+    cachedDeliveryProbe = {
+      key: cacheKey,
+      expiresAt: Date.now() + DELIVERY_PROBE_CACHE_TTL_MS,
+      value: limited,
+    };
+    return limited;
+  }
+
+  const existingChatTarget = findCandidateChatTarget(targets);
 
   if (!existingChatTarget) {
     const missing = {
@@ -579,12 +617,14 @@ function buildBossDeliveryBlockPayload(browserChannel) {
   const errorMessage = String(
     browserChannel?.errorMessage || CDP_REQUIRED_FOR_BOSS_DELIVERY_MESSAGE,
   );
-  const code = browserChannel?.cdpAvailable
-    ? "BROWSER_CHANNEL_UNAVAILABLE"
-    : "BROWSER_CDP_REQUIRED";
+  const code = browserChannel?.preflightStatus === "account_risk"
+    ? "ACCOUNT_RISK"
+    : browserChannel?.cdpAvailable
+      ? "BROWSER_CHANNEL_UNAVAILABLE"
+      : "BROWSER_CDP_REQUIRED";
 
   return {
-    statusCode: 503,
+    statusCode: code === "ACCOUNT_RISK" ? 403 : 503,
     body: {
       ok: false,
       errorMessage,
@@ -1454,6 +1494,13 @@ function createRagBridgePlugin() {
       try {
         const rawBody = await readBody(req);
         const body = rawBody ? JSON.parse(rawBody) : {};
+        const browserChannel = await detectBossDeliveryChannel(bridgeConfig);
+        if (browserChannel.preflightStatus === "account_risk") {
+          const blocked = buildBossDeliveryBlockPayload(browserChannel);
+          res.statusCode = blocked.statusCode;
+          res.end(JSON.stringify(blocked.body));
+          return true;
+        }
         const attachments = normalizeAttachmentPaths(
           body.attachments || body.attachmentPaths || body.attachment_paths,
         );

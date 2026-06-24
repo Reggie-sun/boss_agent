@@ -407,6 +407,74 @@ test("detectBossDeliveryChannel reuses an existing candidate chat tab before ope
   }
 });
 
+test("detectBossDeliveryChannel blocks when CDP already has an access-limited Boss page", async () => {
+  const originalFetch = globalThis.fetch;
+  const originalWebSocket = globalThis.WebSocket;
+
+  globalThis.WebSocket = class {
+    constructor() {
+      throw new Error("access-limited preflight must stop before opening a probe socket");
+    }
+  };
+  globalThis.fetch = async (url) => {
+    const requestUrl = String(url);
+
+    if (requestUrl === "http://cdp.test/json/version") {
+      return Response.json({
+        webSocketDebuggerUrl: "ws://cdp.test/browser",
+      });
+    }
+    if (requestUrl === "http://bridge.test/status") {
+      return Response.json({
+        ok: true,
+        extensionConnected: false,
+      });
+    }
+    if (requestUrl === "http://cdp.test/json/list") {
+      return Response.json([
+        {
+          id: "chat-tab",
+          type: "page",
+          url: "https://www.zhipin.com/web/geek/chat?ka=header-message",
+          title: "BOSS直聘",
+          webSocketDebuggerUrl: "ws://cdp.test/chat-tab",
+        },
+        {
+          id: "risk-tab",
+          type: "page",
+          url: "https://www.zhipin.com/?_security_check=1_1782263668779",
+          title: "BOSS直聘-找工作BOSS直聘直接谈！招聘求职找工作！",
+          webSocketDebuggerUrl: "ws://cdp.test/risk-tab",
+        },
+      ]);
+    }
+    throw new Error(`unexpected fetch: ${requestUrl}`);
+  };
+
+  try {
+    resetDeliveryProbeCacheForTests();
+    const state = await detectBossDeliveryChannel({
+      cdpUrl: "http://cdp.test",
+      bridgeUrl: "http://bridge.test",
+    });
+
+    assert.equal(state.available, false);
+    assert.equal(state.cdpAvailable, true);
+    assert.equal(state.preflightStatus, "account_risk");
+    assert.equal(state.chatPageReachable, false);
+    assert.match(state.lastObservedUrl, /_security_check=/);
+    assert.match(state.errorMessage, /访问受限/);
+
+    const blocked = buildBossDeliveryBlockPayload(state);
+    assert.equal(blocked.statusCode, 403);
+    assert.equal(blocked.body.error.code, "ACCOUNT_RISK");
+  } finally {
+    resetDeliveryProbeCacheForTests();
+    globalThis.fetch = originalFetch;
+    globalThis.WebSocket = originalWebSocket;
+  }
+});
+
 test("detectBossDeliveryChannel fails fast when an in-flight CDP probe socket closes", async () => {
   const originalFetch = globalThis.fetch;
   const originalWebSocket = globalThis.WebSocket;

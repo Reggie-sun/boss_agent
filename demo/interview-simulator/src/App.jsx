@@ -408,7 +408,14 @@ export function App() {
       ? `第${bossAutomationProgressCurrent}${bossAutomationProgressTotal ? `/${bossAutomationProgressTotal}` : ""}个`
       : "搜索中..."
     : "Agent 全自动";
-  const bossSearchActionsDisabled = bossAutomationRiskLocked || !bossSearchForm.query.trim();
+  const browserChannelRiskMessage =
+    bridgeState.browserChannel.preflightStatus === "account_risk"
+      ? bridgeState.browserChannel.errorMessage
+      : "";
+  const bossSearchActionsDisabled =
+    bossAutomationRiskLocked ||
+    !bridgeState.browserChannel.available ||
+    !bossSearchForm.query.trim();
 
   useEffect(() => {
     selectedTargetValueRef.current = selectedTargetValue;
@@ -445,6 +452,17 @@ export function App() {
       current.running ? { ...current, running: false } : current,
     );
   }, [watcherRiskStatusMessage]);
+
+  useEffect(() => {
+    if (!browserChannelRiskMessage) return;
+    setBossAutomationRiskLocked(true);
+    setBossAutomationError((current) =>
+      current && isBossAccountRiskMessage(current) ? current : browserChannelRiskMessage,
+    );
+    setWatcherState((current) =>
+      current.running ? { ...current, running: false } : current,
+    );
+  }, [browserChannelRiskMessage]);
 
   function updateBossSearchForm(field, value) {
     setBossSearchForm((current) => ({
