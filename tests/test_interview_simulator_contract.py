@@ -200,6 +200,18 @@ def test_interview_simulator_target_refresh_preserves_current_selection():
 	assert "!applySecurityIdRef.current.trim()" in app
 
 
+def test_interview_simulator_targets_endpoint_treats_recoverable_errors_as_refresh_state():
+	repo_root = Path(__file__).resolve().parents[1]
+	vite = (repo_root / "demo" / "interview-simulator" / "vite.config.mjs").read_text(encoding="utf-8")
+
+	route_block = vite.split("req.method === \"GET\" && isAgentTargets", 1)[1].split("return true;", 1)[0]
+
+	assert "payload?.error?.recoverable" in route_block
+	assert 'source: "unavailable"' in route_block
+	assert "refreshError: errorMessage" in route_block
+	assert "error: payload?.error || null" in route_block
+
+
 def test_interview_simulator_exposes_read_only_outreach_plan_endpoint():
 	repo_root = Path(__file__).resolve().parents[1]
 	vite = (repo_root / "demo" / "interview-simulator" / "vite.config.mjs").read_text(encoding="utf-8")

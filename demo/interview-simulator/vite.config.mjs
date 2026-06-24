@@ -1122,17 +1122,32 @@ function createRagBridgePlugin() {
         );
       } catch (error) {
         const payload = error?.commandPayload;
+        const errorMessage =
+          error instanceof Error ? error.message : "读取 Boss 对话目标失败。";
+        if (payload?.error?.recoverable) {
+          res.end(
+            JSON.stringify({
+              ok: true,
+              targets: [],
+              count: 0,
+              source: "unavailable",
+              liveReadEnabled: false,
+              refreshed: false,
+              refreshError: errorMessage,
+              error: payload?.error || null,
+            }),
+          );
+          return true;
+        }
         res.statusCode =
           payload?.error?.code === "INVALID_PARAM"
             ? 400
-            : payload?.error?.recoverable
-              ? 502
-              : 500;
+            : 500;
         res.end(
           JSON.stringify({
             ok: false,
-            errorMessage:
-              error instanceof Error ? error.message : "读取 Boss 对话目标失败。",
+            errorMessage,
+            error: payload?.error || null,
             targets: [],
           }),
         );
