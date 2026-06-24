@@ -123,7 +123,7 @@ services:
         OCR_REQUIREMENTS: /app/requirements/ocr-disabled.txt
     container_name: ${BOSS_PERSONAL_RAG_API_CONTAINER_NAME:-boss-personal-rag-api}
     user: "${RAG_RUNTIME_UID:-1000}:${RAG_RUNTIME_GID:-1000}"
-    command: sh -c 'umask 0002 && exec uvicorn backend.app.main:app --host 0.0.0.0 --port 8020'
+    command: sh -c 'umask 0002 && exec uvicorn backend.app.main:app --host 0.0.0.0 --port 8020 --reload --reload-dir /app/backend/app'
     restart: unless-stopped
     depends_on:
       - personal-rag-postgres
@@ -207,6 +207,7 @@ services:
     ports:
       - "127.0.0.1:${BOSS_PERSONAL_RAG_API_PORT:-18020}:8020"
     volumes:
+      - ../Enterprise-grade_RAG:/app
       - ./storage/personal-rag/shared-data:/shared-data
 
   personal-rag-frontend:
