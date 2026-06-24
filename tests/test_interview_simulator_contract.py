@@ -224,9 +224,9 @@ def test_interview_simulator_exposes_read_only_outreach_plan_endpoint():
 	assert 'appendTextOption(args, "--target-title", body.targetTitle)' in vite
 	assert 'args.push("--attachment", attachmentPath)' in vite
 	route_block = vite.split('req.url === "/api/agent/outreach-plan"', 1)[1].split("return true;", 1)[0]
-	assert "detectBossDeliveryChannel" in route_block
-	assert 'browserChannel.preflightStatus === "account_risk"' in route_block
-	assert "buildBossDeliveryBlockPayload" in route_block
+	assert "detectBossDeliveryChannel" not in route_block
+	assert 'browserChannel.preflightStatus === "account_risk"' not in route_block
+	assert "buildBossDeliveryBlockPayload" not in route_block
 
 
 def test_interview_simulator_renders_agent_outreach_plan_panel():
@@ -241,6 +241,8 @@ def test_interview_simulator_renders_agent_outreach_plan_panel():
 	assert "handleBossAgentPlan" in app
 	assert 'fetch("/api/agent/outreach-plan"' in app
 	assert "生成 Agent 计划" in outreach
+	assert "disabled={isBossAgentPlanning || bossSearchActionsDisabled || !selectedProfileId}" not in outreach
+	assert "disabled={isBossAgentPlanning || !bossSearchForm.query.trim() || !selectedProfileId}" in outreach
 	assert "agent-plan-card" in outreach
 	assert ".agent-plan-card" in styles
 

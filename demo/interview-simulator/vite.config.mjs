@@ -1494,13 +1494,6 @@ function createRagBridgePlugin() {
       try {
         const rawBody = await readBody(req);
         const body = rawBody ? JSON.parse(rawBody) : {};
-        const browserChannel = await detectBossDeliveryChannel(bridgeConfig);
-        if (browserChannel.preflightStatus === "account_risk") {
-          const blocked = buildBossDeliveryBlockPayload(browserChannel);
-          res.statusCode = blocked.statusCode;
-          res.end(JSON.stringify(blocked.body));
-          return true;
-        }
         const attachments = normalizeAttachmentPaths(
           body.attachments || body.attachmentPaths || body.attachment_paths,
         );

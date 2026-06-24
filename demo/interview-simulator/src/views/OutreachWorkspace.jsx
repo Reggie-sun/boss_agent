@@ -230,7 +230,7 @@ export function OutreachWorkspace({
               type="button"
               className="apply-btn apply-btn--search"
               onClick={handleBossAgentPlan}
-              disabled={isBossAgentPlanning || bossSearchActionsDisabled || !selectedProfileId}
+              disabled={isBossAgentPlanning || !bossSearchForm.query.trim() || !selectedProfileId}
             >
               <Lightning size={16} weight="fill" />
               {isBossAgentPlanning ? "规划中..." : "生成 Agent 计划"}
